@@ -147,6 +147,11 @@ TEST(ExternalProtocols, RefusesUrlsACommandLineCouldSplit) {
                           "mailto:a@b.c\\..", "mailto:\xC3\xA9@b.c", "mailto:a@b.c`x`"}) {
     EXPECT_EQ(external_protocols::LaunchableScheme(url), "") << url;
   }
+  // Each refused character on its own, with nothing else wrong in the URL.
+  for (char c : std::string("\"'\\<>^`{|}")) {
+    const std::string url = std::string("mailto:a") + c + "b@example.com";
+    EXPECT_EQ(external_protocols::LaunchableScheme(url), "") << url;
+  }
   const std::string longest = "mailto:" + std::string(external_protocols::kMaxUrlLength - 7, 'a');
   EXPECT_EQ(external_protocols::LaunchableScheme(longest), "mailto");
   EXPECT_EQ(external_protocols::LaunchableScheme(longest + "a"), "");

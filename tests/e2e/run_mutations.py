@@ -312,7 +312,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          "  const int cookie_mode = 0;"),
     ], [PRIV + ".CookieTest.test_third_party_cookies_are_blocked"]),
     "popups-without-click-allowed": ([
-        (TAB, "  if (!user_gesture && (!privacy || privacy->block_popups())) {", "  if (false) {"),
+        (TAB, "  if (!user_gesture && (!privacy || privacy->block_popups())) {",
+         "  if (!user_gesture && privacy == nullptr) {"),
     ], [PRIV + ".PopupTest.test_popups_without_a_click_are_blocked"]),
     "camera-asked-by-default": ([
         (TAB, '      (camera && privacy->PermissionFor("permissions.camera") != PrivacyService::Permission::kAsk) ||',
@@ -339,7 +340,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], [EXT + ".test_mail_links_ask_before_opening_another_app",
         EXT + ".test_declined_mail_links_open_nothing"]),
     "mail-links-ask-without-a-click": ([
-        (TAB, '  if (!user_gesture) {\n    LogBlock("protocol_blocked"', '  if (false) {\n    LogBlock("protocol_blocked"'),
+        (TAB, '  if (!user_gesture) {\n    LogBlock("protocol_blocked"', '  if (!user_gesture && false) {\n    LogBlock("protocol_blocked"'),
     ], [EXT + ".test_mail_links_without_a_click_never_ask"]),
     "launchable-scheme-allows-quotes": ([
         ("src/core/privacy/external_protocols.cc", "    case '\"':\n", ""),
@@ -374,7 +375,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], [CLEAR + ".test_control_without_clearing_everything_is_kept"]),
     "history-clear-keeps-zoom": ([
         ("src/browser/bridge/bridge_handler.cc", "    if (contexts && !contexts->ClearSiteRecords(&error)) {",
-         "    if (false) {"),
+         "    if (contexts == nullptr && !error.empty()) {"),
     ], ["e2e:test_places.PlacesTest.test_clearing_history_forgets_zoomed_sites"]),
     "proxy-mode-not-written": ([
         (APP, "    const bool ok = chromium_profile::WriteProxyMode(normal_profile, mode);",

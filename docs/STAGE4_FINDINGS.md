@@ -10,7 +10,7 @@ only. None of the Stage 4 behaviour has been run on macOS, and its macOS code ha
 |---|---|
 | Unit tests (`torfox_unit_tests`) | 130 run: 129 passed, 1 skipped (`ClearData.NeverFollowsLinks` needs a privilege to create a symbolic link; `ClearData.NeverFollowsJunctions` covers the same rule without one) |
 | End-to-end tests (test build) | 174 run, 173 passed. The one failure was `test_settings_service_refusals`, which still used `privacy.httpsFirst` as its example of a planned setting; it now uses `permissions.location` and passes. No expected failures remain: both Stage 1–3 known gaps are closed (§3.5, §3.6) |
-| Mutation check (Stage 4 mutations) | Run separately; results in §5 |
+| Mutation check (Stage 4 mutations) | 25 of 25 detected, after one test was strengthened (§5) |
 
 ## 1. What was built
 All of it is in Settings > Privacy & Security, and every setting below is now active (it changes
@@ -189,7 +189,24 @@ Unit tests (`tests/unit/privacy_test.cc`, `chromium_profile_test.cc`, `settings_
 The quiet-startup test now requires that no context auto-detects a proxy (`test_quiet_startup.py`).
 
 ## 5. Mutation check
-Stage 4 adds 25 mutations to `tests/e2e/run_mutations.py`, one per protection above. The results are recorded in a follow-up commit.
+Stage 4 adds 25 mutations to `tests/e2e/run_mutations.py`, one per protection above. Each removes the
+protection from the source, rebuilds, and requires every listed test to fail.
+
+They cover:
+- HTTPS-first: skipped, falling back without asking, redirect loops, forgotten exceptions, local names
+  upgraded;
+- trackers: not blocked, or first parties blocked;
+- third-party cookies allowed, and pop-ups allowed without a click;
+- permissions: asking by default, granting without asking, clipboard asked by default, answers remembered;
+- email and phone links: opened without asking or without a click, quotes allowed, other schemes allowed;
+- clear-on-exit: skipped at exit or at start, for files or for history; links followed;
+- profile records: per-site scores kept, zoom levels kept after clearing history, and the proxy mode not
+  written before start-up.
+
+**Result: all 25 detected.** One needed a stronger test first. `launchable-scheme-allows-quotes`, which lets a
+`"` into a mail link handed to the OS, survived the first run. The unit test's only quote case also held a
+space, so the space check refused the URL on its own. The test now tries each refused character alone,
+and the mutation is detected.
 
 ## 6. Not verified, and known gaps
 - **Opening the mail or phone app.** Test builds log the decision instead of calling
