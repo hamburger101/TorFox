@@ -1,0 +1,32 @@
+# Build outputs
+/out/
+/build/
+/.deps/
+
+# Node / UI
+node_modules/
+/ui/dist/
+/tests/e2e/test-results/
+/tests/e2e/playwright-report/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# Never commit secrets or signing material
+*.key
+*.pem
+*.p12
+*.pfx
+*.minisign.key
+minisign.key
+secrets/

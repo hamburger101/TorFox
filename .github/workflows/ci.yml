@@ -1,0 +1,81 @@
+# Continuous integration. Windows builds on every push to main and on PRs.
+# macOS (10x minute cost on private repos) runs on PRs and manual dispatch only.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Cache verified dependencies
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-windows64-minimal-${{ hashFiles('deps.lock.json') }}
+
+      - name: Fetch CEF (hash-verified)
+        run: python -I scripts/fetch_deps.py cef windows64-minimal
+
+      - name: Configure
+        run: cmake -S . -B out/ci -G "Visual Studio 17 2022" -A x64 -DTORFOX_CEF_FLAVOR=minimal -DTORFOX_BUILD_SPIKES=ON
+
+      - name: Build
+        run: cmake --build out/ci --config Release --parallel
+
+  macos:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            cef: macosarm64-minimal
+            arch: arm64
+          - runner: macos-15-intel
+            cef: macosx64-minimal
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Cache verified dependencies
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-${{ matrix.cef }}-${{ hashFiles('deps.lock.json') }}
+
+      - name: Fetch CEF (hash-verified)
+        run: python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }}
+
+      - name: Ensure Ninja
+        run: command -v ninja || brew install ninja
+
+      - name: Configure
+        run: cmake -S . -B out/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DTORFOX_CEF_FLAVOR=minimal
+
+      - name: Build CEF wrapper
+        run: cmake --build out/ci --target libcef_dll_wrapper

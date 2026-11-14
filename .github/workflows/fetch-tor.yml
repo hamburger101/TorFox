@@ -1,0 +1,39 @@
+# Downloads the official Tor Expert Bundles, verifies their OpenPGP
+# signatures against the Tor Browser Developers key, and publishes them as a
+# workflow artifact together with a SHA-256 lock fragment. Maintainers pin the
+# hashes into deps.lock.json from that fragment.
+name: Fetch Tor Expert Bundles
+
+on:
+  workflow_dispatch:
+    inputs:
+      tor_browser_version:
+        description: "Tor Browser release whose expert bundles to fetch (e.g. 16.0.1)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Import the Tor Browser Developers signing key
+        run: |
+          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --fingerprint EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+
+      - name: Download and verify bundles
+        env:
+          TB_VERSION: ${{ inputs.tor_browser_version }}
+        run: python3 scripts/fetch_tor_bundles.py --version "$TB_VERSION" --out bundles
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: tor-expert-bundles-${{ inputs.tor_browser_version }}
+          path: bundles/
+          retention-days: 30
+          if-no-files-found: error

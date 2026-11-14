@@ -1,0 +1,35 @@
+{
+  "_comment": "Pinned third-party dependencies. Every artifact is verified by size, SHA-256 and (for CEF) the SHA-1 published in the official CEF build index before it is extracted. Update only via scripts/bump_cef.py / scripts/bump_tor.py.",
+  "cef": {
+    "version": "156.0.30+g6028375+chromium-156.0.8078.96",
+    "chromium_version": "156.0.8078.96",
+    "channel": "stable",
+    "base_url": "https://cef-builds.spotifycdn.com/",
+    "files": {
+      "windows64-standard": {
+        "name": "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_windows64.tar.bz2",
+        "size": 367382045,
+        "sha1": "2bb0a7a3309c82ac0281dc39ff35e6cf7d66a52f",
+        "sha256": "bf99b029fc76b2e9fc2c35a9ea7385cf54d0b7119f42e49ab04e0eac81edaaf0"
+      },
+      "windows64-minimal": {
+        "name": "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_windows64_minimal.tar.bz2",
+        "size": 175176258,
+        "sha1": "1fedfc8dd0274caec9183a709ad1ed7856867b91",
+        "sha256": "74fd321975e99703acd8fc7e3c1b0859292f61b388f4052a0cd7ef1fb3b29f6e"
+      },
+      "macosarm64-minimal": {
+        "name": "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_macosarm64_minimal.tar.bz2",
+        "size": 134874408,
+        "sha1": "6393d8a838d3b29f6b6939b970b5931dde2082aa",
+        "sha256": "731b599e78c71bf33530d65bfa18963f7d1d59902c1f381f5452188e5116b855"
+      },
+      "macosx64-minimal": {
+        "name": "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_macosx64_minimal.tar.bz2",
+        "size": 141703045,
+        "sha1": "d66ae063959536c86637c63560797713937f5116",
+        "sha256": "a9b2fadcd20e1144a6db571e8e457ca616002d858ab3671be295d9b0bcfc8bc8"
+      }
+    }
+  }
+}
