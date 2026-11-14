@@ -42,10 +42,10 @@ jobs:
           $line = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productLineVersion
           $ver = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
           Write-Host "Visual Studio product line: $line ($ver); CMake: $(cmake --version | Select-Object -First 1)"
-          switch ($line) {
-            '2026' { $gen = 'Visual Studio 18 2026' }
-            '2022' { $gen = 'Visual Studio 17 2022' }
-            default { throw "Unsupported or missing Visual Studio: '$line'" }
+          switch ("$ver".Split('.')[0]) {
+            '18' { $gen = 'Visual Studio 18 2026' }
+            '17' { $gen = 'Visual Studio 17 2022' }
+            default { throw "Unsupported or missing Visual Studio: '$line' ($ver)" }
           }
           cmake -S . -B out/ci -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal -DTORFOX_BUILD_SPIKES=ON
 
