@@ -65,7 +65,7 @@ constexpr Def String(std::string_view key,
 constexpr Status A = Status::kActive;
 constexpr Status P = Status::kPlanned;
 
-const std::array<Def, 25> kSettings = {
+const std::array<Def, 26> kSettings = {
     // General
     Enum("general.startupPage", "general", P, kStartupPages),
     // Search Engine
@@ -94,6 +94,7 @@ const std::array<Def, 25> kSettings = {
     String("tor.bridges.custom", "tor", P, 16384),
     // Appearance
     Enum("appearance.theme", "appearance", A, kThemes),
+    Bool("appearance.showBookmarksBar", "appearance", A, false),
     // Updates
     Bool("updates.autoCheck", "updates", P, true),
     Bool("updates.notify", "updates", P, true),

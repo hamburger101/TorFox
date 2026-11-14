@@ -234,8 +234,91 @@ class TorFox:
     def shell(self) -> Session:
         return self.page(lambda t: t["url"] == "torfox://shell/")
 
+    def new_shell(self, known: set[str], timeout: float = 15.0) -> Session:
+        """The shell of a window opened after the targets in |known| existed."""
+        # page() also calls the predicate without a targetId once attached.
+        return self.page(lambda t: t["url"] == "torfox://shell/" and t.get("targetId") not in known,
+                         timeout)
+
+    def shell_ids(self) -> set[str]:
+        return {t["targetId"] for t in self.browser.targets() if t["url"] == "torfox://shell/"}
+
     def page_at(self, url_prefix: str, timeout: float = 15.0) -> Session:
         return self.page(lambda t: t["url"].startswith(url_prefix), timeout)
+
+
+# ----- Input and shell state (Stage 2) ------------------------------------------
+
+# CDP modifier bits.
+ALT, CTRL, META, SHIFT = 1, 2, 4, 8
+
+# Windows virtual-key codes used by the shortcut tests.
+VK = {"tab": 0x09, "pageup": 0x21, "pagedown": 0x22, "home": 0x24, "left": 0x25, "right": 0x27,
+      "f3": 0x72, "f5": 0x74, "equals": 0xBB, "minus": 0xBD, "0": 0x30}
+
+
+def press(session: Session, key: str | int, modifiers: int = 0) -> None:
+    """Sends a key press to |session|'s widget, as the keyboard would.
+
+    TorFox handles its shortcuts in the browser process before the page sees
+    them (CefKeyboardHandler::OnPreKeyEvent), which CDP key events reach."""
+    code = key if isinstance(key, int) else VK.get(key.lower(), ord(key.upper()) if len(key) == 1 else 0)
+    for kind in ("rawKeyDown", "keyUp"):
+        session.send("Input.dispatchKeyEvent", {
+            "type": kind, "windowsVirtualKeyCode": code, "nativeVirtualKeyCode": code,
+            "modifiers": modifiers,
+        })
+
+
+def element_center(session: Session, selector: str) -> tuple[float, float]:
+    rect = session.evaluate(
+        "(() => { const r = document.querySelector(%s).getBoundingClientRect();"
+        " return [r.left + r.width / 2, r.top + r.height / 2]; })()" % json.dumps(selector))
+    return rect[0], rect[1]
+
+
+def click(session: Session, x: float, y: float, button: str = "left", modifiers: int = 0) -> None:
+    """A real (trusted, user-gesture) mouse click inside |session|'s page."""
+    session.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+    for kind in ("mousePressed", "mouseReleased"):
+        session.send("Input.dispatchMouseEvent", {
+            "type": kind, "x": x, "y": y, "button": button, "clickCount": 1,
+            "modifiers": modifiers,
+        })
+
+
+def click_element(session: Session, selector: str, button: str = "left", modifiers: int = 0) -> None:
+    x, y = element_center(session, selector)
+    click(session, x, y, button, modifiers)
+
+
+SHELL_STATE = """(() => {
+  const s = document.querySelector('tf-shell');
+  return JSON.parse(JSON.stringify({
+    tabs: s.tabs, activeId: s.activeId, nav: s.nav, private: s.isPrivate,
+    findOpen: s.findOpen, findCount: s.findCount, findActive: s.findActive,
+    barVisible: s.barVisible, barItems: s.barItems, notice: s.notice,
+  }));
+})()"""
+
+
+def shell_state(shell: Session) -> dict:
+    return shell.evaluate(SHELL_STATE)
+
+
+def wait_state(shell: Session, predicate: Callable[[dict], object], what: str,
+               timeout: float = 15.0) -> dict:
+    last: dict = {}
+
+    def check():
+        nonlocal last
+        last = shell_state(shell)
+        return last if predicate(last) else None
+
+    try:
+        return wait_for(check, timeout, what)
+    except TimeoutError as e:
+        raise TimeoutError(f"{e}; last shell state: {json.dumps(last)[:2000]}") from None
 
 
 def bridge_call(session: Session, cmd: str, args: dict | None = None, *,

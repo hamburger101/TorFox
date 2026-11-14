@@ -16,16 +16,87 @@ namespace {
 
 // ----- Command tables -------------------------------------------------------
 
+constexpr long long kMaxJsInt = (1LL << 53) - 1;  // Largest exact JavaScript integer.
+constexpr long long kMaxScreen = 100000;          // DIP coordinates in a page.
+
 constexpr std::array<ArgSpec, 0> kNoArgs = {};
 constexpr std::array<ArgSpec, 1> kTabIdArgs = {
     ArgSpec{"id", ArgType::kInt, true, 0, 1, INT_MAX},
 };
+constexpr std::array<ArgSpec, 2> kTabMoveArgs = {
+    ArgSpec{"id", ArgType::kInt, true, 0, 1, INT_MAX},
+    ArgSpec{"index", ArgType::kInt, true, 0, 0, 10000},
+};
 constexpr std::array<ArgSpec, 1> kNavGoArgs = {
     ArgSpec{"input", ArgType::kString, true, kMaxNavInputLength, 0, 0},
+};
+// Opens a stored http(s) URL (bookmark or history entry); the browser
+// classifies it again exactly like typed input.
+constexpr std::array<ArgSpec, 2> kNavOpenArgs = {
+    ArgSpec{"url", ArgType::kString, true, kMaxNavInputLength, 0, 0},
+    ArgSpec{"newTab", ArgType::kBool, false, 0, 0, 0},
+};
+constexpr std::array<ArgSpec, 3> kFindArgs = {
+    ArgSpec{"text", ArgType::kString, true, 1024, 0, 0},
+    ArgSpec{"forward", ArgType::kBool, false, 0, 0, 0},
+    ArgSpec{"matchCase", ArgType::kBool, false, 0, 0, 0},
+};
+constexpr std::array<ArgSpec, 1> kZoomArgs = {
+    ArgSpec{"step", ArgType::kInt, true, 0, -1, 1},  // -1 out, 0 reset, 1 in.
+};
+constexpr std::array<ArgSpec, 2> kMenuArgs = {
+    ArgSpec{"x", ArgType::kInt, true, 0, 0, kMaxScreen},
+    ArgSpec{"y", ArgType::kInt, true, 0, 0, kMaxScreen},
+};
+constexpr std::array<ArgSpec, 3> kFolderMenuArgs = {
+    ArgSpec{"id", ArgType::kInt, true, 0, 1, kMaxJsInt},
+    ArgSpec{"x", ArgType::kInt, true, 0, 0, kMaxScreen},
+    ArgSpec{"y", ArgType::kInt, true, 0, 0, kMaxScreen},
 };
 constexpr std::array<ArgSpec, 2> kSettingsSetArgs = {
     ArgSpec{"key", ArgType::kString, true, 128, 0, 0},
     ArgSpec{"value", ArgType::kAny, true, 0, 0, 0},
+};
+
+// Bookmarks. Titles longer than the store keeps are cut by the store; the
+// limit here only bounds the message.
+constexpr std::size_t kMaxTitleArg = 4096;
+constexpr std::array<ArgSpec, 1> kBookmarkIdArgs = {
+    ArgSpec{"id", ArgType::kInt, true, 0, 1, kMaxJsInt},
+};
+constexpr std::array<ArgSpec, 1> kBookmarkSearchArgs = {
+    ArgSpec{"query", ArgType::kString, true, 256, 0, 0},
+};
+constexpr std::array<ArgSpec, 4> kBookmarkAddArgs = {
+    ArgSpec{"parent", ArgType::kInt, true, 0, 1, kMaxJsInt},
+    ArgSpec{"title", ArgType::kString, true, kMaxTitleArg, 0, 0},
+    ArgSpec{"url", ArgType::kString, true, kMaxNavInputLength, 0, 0},
+    ArgSpec{"index", ArgType::kInt, false, 0, -1, 100000},
+};
+constexpr std::array<ArgSpec, 3> kFolderAddArgs = {
+    ArgSpec{"parent", ArgType::kInt, true, 0, 1, kMaxJsInt},
+    ArgSpec{"title", ArgType::kString, true, kMaxTitleArg, 0, 0},
+    ArgSpec{"index", ArgType::kInt, false, 0, -1, 100000},
+};
+constexpr std::array<ArgSpec, 3> kBookmarkUpdateArgs = {
+    ArgSpec{"id", ArgType::kInt, true, 0, 1, kMaxJsInt},
+    ArgSpec{"title", ArgType::kString, true, kMaxTitleArg, 0, 0},
+    ArgSpec{"url", ArgType::kString, false, kMaxNavInputLength, 0, 0},
+};
+constexpr std::array<ArgSpec, 3> kBookmarkMoveArgs = {
+    ArgSpec{"id", ArgType::kInt, true, 0, 1, kMaxJsInt},
+    ArgSpec{"parent", ArgType::kInt, true, 0, 1, kMaxJsInt},
+    ArgSpec{"index", ArgType::kInt, true, 0, -1, 100000},
+};
+
+// History.
+constexpr std::array<ArgSpec, 3> kHistoryListArgs = {
+    ArgSpec{"query", ArgType::kString, false, 256, 0, 0},
+    ArgSpec{"before", ArgType::kInt, false, 0, 0, kMaxJsInt},
+    ArgSpec{"limit", ArgType::kInt, false, 0, 1, 500},
+};
+constexpr std::array<ArgSpec, 1> kHistoryRemoveArgs = {
+    ArgSpec{"url", ArgType::kString, true, kMaxNavInputLength, 0, 0},
 };
 
 constexpr CommandSpec Cmd(std::string_view name, std::span<const ArgSpec> args,
@@ -33,18 +104,33 @@ constexpr CommandSpec Cmd(std::string_view name, std::span<const ArgSpec> args,
   return CommandSpec{name, args, persistent};
 }
 
-const std::array<CommandSpec, 11> kShellCommands = {
+const std::array<CommandSpec, 26> kShellCommands = {
     Cmd("state.subscribe", kNoArgs, true),
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("tab.new", kNoArgs),
     Cmd("tab.close", kTabIdArgs),
     Cmd("tab.select", kTabIdArgs),
+    Cmd("tab.move", kTabMoveArgs),
+    Cmd("tab.reopen", kNoArgs),
+    Cmd("window.new", kNoArgs),
+    Cmd("window.newPrivate", kNoArgs),
     Cmd("nav.go", kNavGoArgs),
+    Cmd("nav.open", kNavOpenArgs),
     Cmd("nav.back", kNoArgs),
     Cmd("nav.forward", kNoArgs),
     Cmd("nav.reload", kNoArgs),
     Cmd("nav.stop", kNoArgs),
+    Cmd("nav.home", kNoArgs),
+    Cmd("find.query", kFindArgs),
+    Cmd("find.stop", kNoArgs),
+    Cmd("zoom.change", kZoomArgs),
+    Cmd("bookmarks.star", kMenuArgs),
+    Cmd("bookmarks.folderMenu", kFolderMenuArgs),
+    Cmd("app.menu", kMenuArgs),
     Cmd("app.openSettings", kNoArgs),
+    Cmd("app.openBookmarks", kNoArgs),
+    Cmd("app.openHistory", kNoArgs),
+    Cmd("app.focusContent", kNoArgs),
 };
 
 const std::array<CommandSpec, 2> kNewTabCommands = {
@@ -59,10 +145,35 @@ const std::array<CommandSpec, 4> kSettingsCommands = {
     Cmd("app.info", kNoArgs),
 };
 
-const std::array<PageSpec, 3> kPages = {
+const std::array<CommandSpec, 11> kBookmarksCommands = {
+    Cmd("appearance.subscribe", kNoArgs, true),
+    Cmd("bookmarks.subscribe", kNoArgs, true),
+    Cmd("bookmarks.children", kBookmarkIdArgs),
+    Cmd("bookmarks.folders", kNoArgs),
+    Cmd("bookmarks.search", kBookmarkSearchArgs),
+    Cmd("bookmarks.add", kBookmarkAddArgs),
+    Cmd("bookmarks.addFolder", kFolderAddArgs),
+    Cmd("bookmarks.update", kBookmarkUpdateArgs),
+    Cmd("bookmarks.move", kBookmarkMoveArgs),
+    Cmd("bookmarks.remove", kBookmarkIdArgs),
+    Cmd("nav.open", kNavOpenArgs),
+};
+
+const std::array<CommandSpec, 6> kHistoryCommands = {
+    Cmd("appearance.subscribe", kNoArgs, true),
+    Cmd("history.subscribe", kNoArgs, true),
+    Cmd("history.list", kHistoryListArgs),
+    Cmd("history.removeUrl", kHistoryRemoveArgs),
+    Cmd("history.clear", kNoArgs),
+    Cmd("nav.open", kNavOpenArgs),
+};
+
+const std::array<PageSpec, 5> kPages = {
     PageSpec{"shell", kShellCommands},
     PageSpec{"newtab", kNewTabCommands},
     PageSpec{"settings", kSettingsCommands},
+    PageSpec{"bookmarks", kBookmarksCommands},
+    PageSpec{"history", kHistoryCommands},
 };
 
 // ----- Validation -----------------------------------------------------------

@@ -33,6 +33,9 @@ void ApplyWindowTheme(CefRefPtr<CefWindow> window, bool dark);
 // True if the OS is set to a dark app theme.
 bool SystemPrefersDark();
 
+// Puts |utf8| on the system clipboard as plain text. Returns false on failure.
+bool CopyTextToClipboard(const std::string& utf8);
+
 // UTF-8 <-> native path helpers.
 std::filesystem::path PathFromUtf8(const std::string& utf8);
 std::string PathToUtf8(const std::filesystem::path& path);

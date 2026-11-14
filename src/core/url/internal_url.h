@@ -18,6 +18,8 @@ inline constexpr std::string_view kInternalScheme = "torfox";
 //   shell    - the window's tab strip and toolbar
 //   newtab   - the new tab page
 //   settings - the settings page
+//   bookmarks - the bookmarks manager
+//   history  - the history page
 std::span<const std::string_view> InternalPages();
 bool IsInternalPage(std::string_view host);
 

@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { LitElement, css, html, nothing } from "lit";
+// CSSOM, not a style attribute: the strict CSP forbids inline styles.
+import { styleMap } from "lit/directives/style-map.js";
 
 import { base } from "../base.js";
 import { call, subscribe, BridgeError } from "../bridge.js";
@@ -22,13 +24,38 @@ interface NavState {
   loading?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  bookmarkable?: boolean;
+  bookmarked?: boolean;
+  zoom?: number;
+}
+
+interface BarItem {
+  id: number;
+  title: string;
+  url: string;
+  folder: boolean;
 }
 
 type ShellEvent =
-  | { type: "state"; tabs: TabState[]; activeId: number; nav: NavState }
-  | { type: "focusAddress" };
+  | {
+      type: "state";
+      private: boolean;
+      tabs: TabState[];
+      activeId: number;
+      nav: NavState;
+      findOpen: boolean;
+      bookmarksBar: boolean;
+    }
+  | { type: "bookmarksBar"; visible: boolean; items: BarItem[] }
+  | { type: "find"; count: number; active: number; final: boolean }
+  | { type: "focusAddress" }
+  | { type: "focusFind" }
+  | { type: "star" }
+  | { type: "notice"; text: string };
 
 const NEW_TAB_URL = "torfox://newtab/";
+// Pointer travel before a press on a tab becomes a drag.
+const DRAG_THRESHOLD = 5;
 
 function displayUrl(nav: NavState): string {
   if (!nav.url || nav.url === NEW_TAB_URL) {
@@ -53,22 +80,56 @@ function securityOf(nav: NavState): Security {
   return "none";
 }
 
+/** Bottom-right (or bottom-left) corner of |el| in shell coordinates, for native menus. */
+function anchor(el: Element, side: "left" | "right"): { x: number; y: number } {
+  const r = el.getBoundingClientRect();
+  return { x: Math.max(0, Math.round(side === "right" ? r.right : r.left)),
+           y: Math.max(0, Math.round(r.bottom)) };
+}
+
+interface Drag {
+  id: number;
+  pointerId: number;
+  startX: number;
+  dx: number;
+  active: boolean;
+  target: number;
+}
+
 export class TorFoxShell extends LitElement {
   static override properties = {
     tabs: { state: true },
     activeId: { state: true },
     nav: { state: true },
+    isPrivate: { state: true },
     editing: { state: true },
     draft: { state: true },
     notice: { state: true },
+    noticeKind: { state: true },
+    findOpen: { state: true },
+    findCount: { state: true },
+    findActive: { state: true },
+    findText: { state: true },
+    barVisible: { state: true },
+    barItems: { state: true },
+    drag: { state: true },
   };
 
   declare tabs: TabState[];
   declare activeId: number;
   declare nav: NavState;
+  declare isPrivate: boolean;
   declare editing: boolean;
   declare draft: string;
   declare notice: string;
+  declare noticeKind: "error" | "info";
+  declare findOpen: boolean;
+  declare findCount: number;
+  declare findActive: number;
+  declare findText: string;
+  declare barVisible: boolean;
+  declare barItems: BarItem[];
+  declare drag: Drag | null;
   private noticeTimer = 0;
 
   constructor() {
@@ -76,9 +137,18 @@ export class TorFoxShell extends LitElement {
     this.tabs = [];
     this.activeId = 0;
     this.nav = {};
+    this.isPrivate = false;
     this.editing = false;
     this.draft = "";
     this.notice = "";
+    this.noticeKind = "error";
+    this.findOpen = false;
+    this.findCount = -1;
+    this.findActive = 0;
+    this.findText = "";
+    this.barVisible = false;
+    this.barItems = [];
+    this.drag = null;
   }
 
   override connectedCallback(): void {
@@ -88,22 +158,54 @@ export class TorFoxShell extends LitElement {
   }
 
   private onEvent(e: ShellEvent): void {
-    if (e.type === "focusAddress") {
-      this.focusAddress();
-      return;
-    }
-    const activeChanged = e.activeId !== this.activeId;
-    this.tabs = e.tabs;
-    this.activeId = e.activeId;
-    this.nav = e.nav;
-    if (activeChanged) {
-      this.editing = false;
-      this.notice = "";
+    switch (e.type) {
+      case "focusAddress":
+        this.focusAddress();
+        return;
+      case "focusFind":
+        this.focusFind();
+        return;
+      case "star":
+        void this.star();
+        return;
+      case "notice":
+        this.showNotice(e.text, "info");
+        return;
+      case "find":
+        this.findCount = e.count;
+        this.findActive = e.active;
+        return;
+      case "bookmarksBar":
+        this.barVisible = e.visible;
+        this.barItems = e.items;
+        return;
+      case "state": {
+        const activeChanged = e.activeId !== this.activeId;
+        this.tabs = e.tabs;
+        this.activeId = e.activeId;
+        this.nav = e.nav;
+        this.isPrivate = e.private;
+        this.barVisible = e.bookmarksBar;
+        if (!e.findOpen && this.findOpen) {
+          this.findText = "";
+          this.findCount = -1;
+        }
+        this.findOpen = e.findOpen;
+        if (activeChanged) {
+          this.editing = false;
+          this.notice = "";
+        }
+        return;
+      }
     }
   }
 
+  private el<T extends Element>(selector: string): T | null {
+    return this.renderRoot.querySelector<T>(selector);
+  }
+
   private get input(): HTMLInputElement | null {
-    return this.renderRoot.querySelector<HTMLInputElement>("#address");
+    return this.el<HTMLInputElement>("#address");
   }
 
   private focusAddress(): void {
@@ -116,11 +218,32 @@ export class TorFoxShell extends LitElement {
     });
   }
 
-  private showNotice(message: string): void {
-    this.notice = message;
-    window.clearTimeout(this.noticeTimer);
-    this.noticeTimer = window.setTimeout(() => (this.notice = ""), 6000);
+  private focusFind(): void {
+    void this.updateComplete.then(() => {
+      const input = this.el<HTMLInputElement>("#find");
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    });
   }
+
+  private showNotice(message: string, kind: "error" | "info" = "error"): void {
+    this.notice = message;
+    this.noticeKind = kind;
+    window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => (this.notice = ""), kind === "info" ? 3000 : 6000);
+  }
+
+  private async run(cmd: string, args?: Record<string, unknown>): Promise<void> {
+    try {
+      await call(cmd, args);
+    } catch (err) {
+      this.showNotice(err instanceof BridgeError ? err.message : String(err));
+    }
+  }
+
+  // ----- Address bar -----
 
   private async go(e: Event): Promise<void> {
     e.preventDefault();
@@ -155,9 +278,67 @@ export class TorFoxShell extends LitElement {
     }
   }
 
+  private async star(): Promise<void> {
+    if (!this.nav.bookmarkable) {
+      this.showNotice("Only web pages can be bookmarked.", "info");
+      return;
+    }
+    await this.updateComplete;
+    const button = this.el<HTMLElement>("#star");
+    const at = button ? anchor(button, "right") : { x: 0, y: 0 };
+    await this.run("bookmarks.star", at);
+  }
+
+  // ----- Tabs -----
+
   private closeTab(e: Event, id: number): void {
     e.stopPropagation();
     void call("tab.close", { id });
+  }
+
+  private onTabPointerDown(e: PointerEvent, id: number): void {
+    if (e.button !== 0 || (e.target as Element).closest(".tab-close")) {
+      return;
+    }
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    this.drag = { id, pointerId: e.pointerId, startX: e.clientX, dx: 0, active: false,
+                  target: this.tabs.findIndex((t) => t.id === id) };
+  }
+
+  private onTabPointerMove(e: PointerEvent): void {
+    const drag = this.drag;
+    if (!drag || e.pointerId !== drag.pointerId) {
+      return;
+    }
+    const dx = e.clientX - drag.startX;
+    const active = drag.active || Math.abs(dx) > DRAG_THRESHOLD;
+    // The slot under the pointer: compare with the other tabs' centres.
+    let target = 0;
+    const others = Array.from(this.renderRoot.querySelectorAll<HTMLElement>(".tab"))
+      .filter((el) => Number(el.dataset["id"]) !== drag.id);
+    for (const el of others) {
+      const r = el.getBoundingClientRect();
+      if (e.clientX > r.left + r.width / 2) {
+        target++;
+      }
+    }
+    this.drag = { ...drag, dx, active, target };
+  }
+
+  private onTabPointerUp(e: PointerEvent, id: number): void {
+    const drag = this.drag;
+    if (!drag || e.pointerId !== drag.pointerId) {
+      return;
+    }
+    this.drag = null;
+    if (!drag.active) {
+      void call("tab.select", { id });
+      return;
+    }
+    const from = this.tabs.findIndex((t) => t.id === drag.id);
+    if (from >= 0 && drag.target !== from) {
+      void this.run("tab.move", { id: drag.id, index: drag.target });
+    }
   }
 
   private onTabAuxClick(e: MouseEvent, id: number): void {
@@ -170,12 +351,18 @@ export class TorFoxShell extends LitElement {
   private renderTab(t: TabState) {
     const active = t.id === this.activeId;
     const title = t.title || (t.internal ? "New Tab" : t.url);
+    const dragging = this.drag?.active && this.drag.id === t.id;
     return html`<div
-      class="tab ${active ? "active" : ""}"
+      class="tab ${active ? "active" : ""} ${dragging ? "dragging" : ""}"
       role="tab"
+      data-id=${t.id}
       aria-selected=${active ? "true" : "false"}
       title=${title}
-      @click=${() => call("tab.select", { id: t.id })}
+      style=${styleMap(dragging ? { transform: `translateX(${this.drag?.dx ?? 0}px)` } : {})}
+      @pointerdown=${(e: PointerEvent) => this.onTabPointerDown(e, t.id)}
+      @pointermove=${(e: PointerEvent) => this.onTabPointerMove(e)}
+      @pointerup=${(e: PointerEvent) => this.onTabPointerUp(e, t.id)}
+      @pointercancel=${() => (this.drag = null)}
       @auxclick=${(e: MouseEvent) => this.onTabAuxClick(e, t.id)}
     >
       ${t.loading ? html`<span class="spinner" aria-label="Loading"></span>` : nothing}
@@ -184,6 +371,80 @@ export class TorFoxShell extends LitElement {
         @click=${(e: Event) => this.closeTab(e, t.id)}>${icons.close}</button>
     </div>`;
   }
+
+  // ----- Bookmarks bar -----
+
+  private openBarItem(e: MouseEvent, item: BarItem): void {
+    if (item.folder) {
+      void this.run("bookmarks.folderMenu", { id: item.id, ...anchor(e.currentTarget as Element, "left") });
+      return;
+    }
+    void this.run("nav.open", { url: item.url, newTab: e.button === 1 || e.ctrlKey || e.metaKey });
+  }
+
+  private renderBar() {
+    return html`<div class="bar" role="toolbar" aria-label="Bookmarks bar">
+      ${this.barItems.length === 0
+        ? html`<span class="bar-empty">Bookmarks you add to the Bookmarks bar appear here.</span>`
+        : this.barItems.map((item) => html`<button class="bar-item" title=${item.folder ? item.title : `${item.title}\n${item.url}`}
+            @click=${(e: MouseEvent) => this.openBarItem(e, item)}
+            @auxclick=${(e: MouseEvent) => { if (e.button === 1 && !item.folder) { e.preventDefault(); this.openBarItem(e, item); } }}>
+            ${item.folder ? icons.folder : icons.globe}<span>${item.title || item.url}</span>
+          </button>`)}
+      <span class="bar-spacer"></span>
+      <button class="bar-item" @click=${() => this.run("app.openBookmarks")}>${icons.star}<span>All bookmarks</span></button>
+    </div>`;
+  }
+
+  // ----- Find bar -----
+
+  private find(forward: boolean): void {
+    void this.run("find.query", { text: this.findText, forward });
+  }
+
+  private onFindInput(e: InputEvent): void {
+    this.findText = (e.target as HTMLInputElement).value;
+    if (!this.findText) {
+      this.findCount = -1;
+    }
+    this.find(true);
+  }
+
+  private onFindKeyDown(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (this.findText) {
+        this.find(!e.shiftKey);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      void this.run("find.stop");
+    }
+  }
+
+  private renderFind() {
+    const status = !this.findText || this.findCount < 0
+      ? ""
+      : this.findCount === 0 ? "No results" : `${this.findActive} of ${this.findCount}`;
+    return html`<div class="findbar" role="search">
+      <div class="find-field">
+        ${icons.search}
+        <input id="find" type="text" spellcheck="false" autocomplete="off" aria-label="Find in page"
+          placeholder="Find in page" .value=${this.findText}
+          @input=${this.onFindInput} @keydown=${this.onFindKeyDown} />
+        <span class="find-status ${this.findCount === 0 && this.findText ? "none" : ""}"
+          aria-live="polite">${status}</span>
+      </div>
+      <button class="icon" title="Previous match" aria-label="Previous match"
+        ?disabled=${!this.findText} @click=${() => this.find(false)}>${icons.chevronUp}</button>
+      <button class="icon" title="Next match" aria-label="Next match"
+        ?disabled=${!this.findText} @click=${() => this.find(true)}>${icons.chevronDown}</button>
+      <button class="icon" title="Close find bar" aria-label="Close find bar"
+        @click=${() => this.run("find.stop")}>${icons.close}</button>
+    </div>`;
+  }
+
+  // ----- Toolbar -----
 
   private renderSecurity() {
     switch (securityOf(this.nav)) {
@@ -201,11 +462,15 @@ export class TorFoxShell extends LitElement {
   override render() {
     const nav = this.nav;
     const value = this.editing ? this.draft : displayUrl(nav);
+    const zoom = nav.zoom ?? 100;
     return html`
-      <div class="strip" role="tablist" aria-label="Tabs">
+      <div class="strip ${this.isPrivate ? "private" : ""}" role="tablist" aria-label="Tabs">
         ${this.tabs.map((t) => this.renderTab(t))}
-        <button class="icon new-tab" title="New tab (Ctrl+T)" aria-label="New tab"
+        <button class="icon new-tab" title="New tab" aria-label="New tab"
           @click=${() => call("tab.new")}>${icons.plus}</button>
+        ${this.isPrivate
+          ? html`<span class="private-badge" title="Private window: no history, and cookies and site data are forgotten when it closes">${icons.mask}<span>Private</span></span>`
+          : nothing}
       </div>
       <div class="toolbar">
         <button class="icon" title="Back" aria-label="Back" ?disabled=${!nav.canGoBack}
@@ -215,9 +480,11 @@ export class TorFoxShell extends LitElement {
         ${nav.loading
           ? html`<button class="icon" title="Stop" aria-label="Stop"
               @click=${() => call("nav.stop")}>${icons.stop}</button>`
-          : html`<button class="icon" title="Reload (F5)" aria-label="Reload"
+          : html`<button class="icon" title="Reload" aria-label="Reload"
               @click=${() => call("nav.reload")}>${icons.reload}</button>`}
-        <form class="address ${this.notice ? "has-notice" : ""}" @submit=${this.go}>
+        <button class="icon" title="Home" aria-label="Home"
+          @click=${() => this.run("nav.home")}>${icons.home}</button>
+        <form class="address ${this.notice && this.noticeKind === "error" ? "has-notice" : ""}" @submit=${this.go}>
           ${this.renderSecurity()}
           <input id="address" type="text" spellcheck="false" autocomplete="off"
             aria-label="Address and search bar"
@@ -227,15 +494,29 @@ export class TorFoxShell extends LitElement {
             @keydown=${this.onKeyDown}
             @focus=${(e: FocusEvent) => (e.target as HTMLInputElement).select()} />
           ${this.notice
-            ? html`<div class="notice" role="alert" title=${this.notice}>${this.notice}</div>`
+            ? html`<div class="notice ${this.noticeKind}" role=${this.noticeKind === "error" ? "alert" : "status"} title=${this.notice}>${this.notice}</div>`
+            : nothing}
+          ${zoom !== 100
+            ? html`<button type="button" class="zoom" title="Reset zoom" aria-label="Zoom ${zoom}%, reset"
+                @click=${() => this.run("zoom.change", { step: 0 })}>${zoom}%</button>`
+            : nothing}
+          ${nav.bookmarkable
+            ? html`<button type="button" id="star" class="star ${nav.bookmarked ? "on" : ""}"
+                title=${nav.bookmarked ? "Edit bookmark" : "Bookmark this page"}
+                aria-label=${nav.bookmarked ? "Edit bookmark" : "Bookmark this page"}
+                aria-pressed=${nav.bookmarked ? "true" : "false"}
+                @click=${() => this.star()}>${nav.bookmarked ? icons.starFilled : icons.star}</button>`
             : nothing}
         </form>
-        <button class="icon" title="Settings" aria-label="Settings"
-          @click=${() => call("app.openSettings")}>${icons.settings}</button>
+        <button class="icon" id="menu" title="Menu" aria-label="Menu"
+          @click=${(e: MouseEvent) => this.run("app.menu", anchor(e.currentTarget as Element, "right"))}>${icons.menu}</button>
       </div>
+      ${this.barVisible ? this.renderBar() : nothing}
+      ${this.findOpen ? this.renderFind() : nothing}
     `;
   }
 
+  // Row heights must match BrowserWindow (src/browser/shell/browser_window.cc).
   static override styles = [base, css`
     :host {
       display: flex;
@@ -253,10 +534,28 @@ export class TorFoxShell extends LitElement {
       display: flex;
       align-items: flex-end;
       gap: 2px;
+      flex: none;
       height: 38px;
       padding: 0 8px;
       background: var(--strip);
       overflow: hidden;
+    }
+    .strip.private {
+      background: var(--strip-private);
+    }
+    .private-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      align-self: center;
+      margin-left: auto;
+      padding: 3px 10px;
+      border-radius: 12px;
+      background: var(--private-soft);
+      color: var(--private);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
     }
     .tab {
       position: relative;
@@ -270,6 +569,7 @@ export class TorFoxShell extends LitElement {
       border-radius: var(--radius-m) var(--radius-m) 0 0;
       color: var(--fg-muted);
       cursor: default;
+      touch-action: none;
       transition: background-color 120ms ease, color 120ms ease;
     }
     .tab:hover {
@@ -279,6 +579,11 @@ export class TorFoxShell extends LitElement {
     .tab.active {
       background: var(--toolbar);
       color: var(--fg);
+    }
+    .tab.dragging {
+      z-index: 1;
+      transition: none;
+      box-shadow: var(--shadow);
     }
     .tab:not(.active) + .tab:not(.active)::before {
       content: "";
@@ -334,6 +639,7 @@ export class TorFoxShell extends LitElement {
       display: flex;
       align-items: center;
       gap: 4px;
+      flex: none;
       height: 44px;
       padding: 0 8px;
       border-bottom: 1px solid var(--border);
@@ -357,7 +663,10 @@ export class TorFoxShell extends LitElement {
       color: var(--fg-faint);
     }
     .icon:focus-visible,
-    .tab-close:focus-visible {
+    .tab-close:focus-visible,
+    .bar-item:focus-visible,
+    .star:focus-visible,
+    .zoom:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
@@ -375,7 +684,7 @@ export class TorFoxShell extends LitElement {
       gap: 6px;
       height: 34px;
       margin: 0 6px;
-      padding: 0 12px 0 8px;
+      padding: 0 4px 0 8px;
       border-radius: 17px;
       background: var(--field);
       border: 1px solid transparent;
@@ -431,7 +740,40 @@ export class TorFoxShell extends LitElement {
       width: 14px;
       height: 14px;
     }
-    /* The shell view is a fixed 82 DIP strip, so messages stay inside the field. */
+    .zoom {
+      flex: none;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      background: transparent;
+      font-size: 12px;
+      color: var(--fg-muted);
+    }
+    .zoom:hover {
+      background: var(--field-hover);
+      color: var(--fg);
+    }
+    .star {
+      display: grid;
+      place-items: center;
+      flex: none;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 14px;
+      background: transparent;
+      color: var(--fg-muted);
+    }
+    .star:hover {
+      background: var(--field-hover);
+      color: var(--fg);
+    }
+    .star.on {
+      color: var(--accent);
+    }
+    /* The shell view is a fixed-height strip, so messages stay inside the field. */
     .notice {
       flex: 0 1 auto;
       max-width: 60%;
@@ -443,6 +785,104 @@ export class TorFoxShell extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .notice.info {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex: none;
+      height: 32px;
+      padding: 0 8px;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .bar-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 200px;
+      height: 26px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: var(--radius-s);
+      background: transparent;
+      font-size: 12.5px;
+      color: var(--fg-muted);
+    }
+    .bar-item:hover {
+      background: var(--field-hover);
+      color: var(--fg);
+    }
+    .bar-item svg {
+      flex: none;
+      width: 14px;
+      height: 14px;
+    }
+    .bar-item span {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .bar-empty {
+      padding: 0 8px;
+      font-size: 12px;
+      color: var(--fg-faint);
+      white-space: nowrap;
+    }
+    .bar-spacer {
+      flex: 1;
+    }
+    .findbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      flex: none;
+      height: 40px;
+      padding: 0 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .find-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: min(420px, 60%);
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 15px;
+      background: var(--field);
+      border: 1px solid transparent;
+      color: var(--fg-muted);
+    }
+    .find-field:focus-within {
+      background: var(--field-focus);
+      border-color: var(--accent);
+    }
+    #find {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-size: 13px;
+      user-select: text;
+    }
+    .find-status {
+      flex: none;
+      font-size: 12px;
+      color: var(--fg-muted);
+    }
+    .find-status.none {
+      color: var(--danger);
     }
   `];
 }

@@ -83,5 +83,18 @@
         "install_as": "json-3.12.0/nlohmann/json.hpp"
       }
     }
+  },
+  "sqlite": {
+    "_comment": "SQLite amalgamation (public domain), from the autoconf release tarball. The SHA3-256 is the one published on https://www.sqlite.org/download.html; SHA-256 pinned after checking it.",
+    "version": "3.54.1",
+    "base_url": "https://www.sqlite.org/2026/",
+    "files": {
+      "source": {
+        "name": "sqlite-autoconf-3540100.tar.gz",
+        "size": 3332984,
+        "sha3_256": "b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4",
+        "sha256": "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e"
+      }
+    }
   }
 }

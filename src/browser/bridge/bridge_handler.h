@@ -46,6 +46,12 @@ class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
                 int64_t query_id,
                 CefRefPtr<Callback> callback);
   void PushAppearance();
+  // History and bookmarks commands. Returns false if |msg| is not one.
+  bool DispatchPlaces(const bridge::Validated& msg,
+                      int browser_id,
+                      int64_t query_id,
+                      CefRefPtr<Callback> callback);
+  void NotifyPlaces(bool bookmarks);
 
   struct Subscriber {
     int browser_id;
@@ -53,7 +59,10 @@ class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
     CefRefPtr<Callback> callback;
   };
   std::vector<Subscriber> appearance_subscribers_;
+  std::vector<Subscriber> bookmarks_subscribers_;
+  std::vector<Subscriber> history_subscribers_;
   int settings_observer_ = 0;
+  int places_observer_ = 0;
 };
 
 }  // namespace torfox

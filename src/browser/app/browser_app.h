@@ -18,6 +18,7 @@ namespace torfox {
 class BridgeHandler;
 class BrowserWindow;
 class ContextManager;
+class PlacesService;
 class SettingsService;
 
 struct StartupOptions {
@@ -51,6 +52,7 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
 
   StartupOptions options_;
   std::unique_ptr<SettingsService> settings_;
+  std::unique_ptr<PlacesService> places_;
   std::unique_ptr<ContextManager> contexts_;
   std::unique_ptr<BridgeHandler> bridge_;
   CefRefPtr<CefMessageRouterBrowserSide> router_;

@@ -15,11 +15,13 @@
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/fault_injection.h"
+#include "src/browser/app/places_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/bridge/bridge_handler.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/scheme/internal_scheme.h"
 #include "src/browser/shell/browser_window.h"
+#include "src/browser/shell/menus.h"
 #include "src/core/cmdline/policy.h"
 
 namespace torfox {
@@ -57,6 +59,12 @@ CefRefPtr<CefValue> IntValue(int v) {
 CefRefPtr<CefValue> StringValue(const std::string& v) {
   CefRefPtr<CefValue> value = CefValue::Create();
   value->SetString(v);
+  return value;
+}
+
+CefRefPtr<CefValue> BoolValue(bool v) {
+  CefRefPtr<CefValue> value = CefValue::Create();
+  value->SetBool(v);
   return value;
 }
 
@@ -134,6 +142,7 @@ bool BrowserApp::ApplyGlobalPrefs(std::string* error) {
          SetPrefVerified(global, "global", "profile.cookie_controls_mode", IntValue(1), error) &&
          SetPrefVerified(global, "global", "webrtc.ip_handling_policy",
                          StringValue("disable_non_proxied_udp"), error) &&
+         SetPrefVerified(global, "global", "history.saving_disabled", BoolValue(true), error) &&
          SetPrefVerified(global, "global", "proxy", DirectProxy(), error) &&
          SetPrefVerified(local_state, "local_state", "proxy", DirectProxy(), error);
 }
@@ -152,6 +161,12 @@ void BrowserApp::OnContextInitialized() {
   settings_->Load();
 
   g_services.settings = settings_.get();
+
+  // History and bookmarks (Normal windows' history only). Not a security
+  // dependency: if it cannot be opened, TorFox runs without it and says so.
+  places_ = std::make_unique<PlacesService>(options_.user_data_dir / "places.db");
+  places_->Open();
+  g_services.places = places_.get();
   g_services.window_opened = [this](BrowserWindow* w) { windows_.insert(w); };
   g_services.window_destroyed = [this](BrowserWindow* w) {
     windows_.erase(w);
@@ -224,6 +239,7 @@ void BrowserApp::Shutdown() {
   }
   contexts_.reset();
   g_services = Services();
+  places_.reset();
   settings_.reset();
   windows_.clear();
   test_log::Event("shutdown");
@@ -249,6 +265,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
       test_log::Open(raw->GetSwitchValue("torfox-test-log").ToString());
       test_log::InstallCrashTrace();
       fault_injection::Configure(raw->GetSwitchValue("torfox-test-skip-guards").ToString());
+      menus::ConfigureTestChoice(raw->GetSwitchValue("torfox-test-menu-choice").ToString());
       const std::string start = raw->GetSwitchValue("torfox-test-start-url").ToString();
       if (cmdline::IsAbsoluteHttpUrl(start)) {
         options.start_url = start;

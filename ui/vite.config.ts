@@ -29,6 +29,8 @@ export default defineConfig({
         shell: `${root}pages/shell/index.html`,
         newtab: `${root}pages/newtab/index.html`,
         settings: `${root}pages/settings/index.html`,
+        bookmarks: `${root}pages/bookmarks/index.html`,
+        history: `${root}pages/history/index.html`,
       },
     },
   },

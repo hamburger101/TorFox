@@ -37,8 +37,22 @@ CefRefPtr<CefValue> DirectProxyValue() {
   return value;
 }
 
+CefRefPtr<CefValue> BoolValue(bool v) {
+  CefRefPtr<CefValue> value = CefValue::Create();
+  value->SetBool(v);
+  return value;
+}
+
 const char* KindName(ContextManager::Kind kind) {
-  return kind == ContextManager::Kind::kInternal ? "internal" : "normal";
+  switch (kind) {
+    case ContextManager::Kind::kInternal:
+      return "internal";
+    case ContextManager::Kind::kNormal:
+      return "normal";
+    case ContextManager::Kind::kPrivate:
+      return "private";
+  }
+  return "unknown";
 }
 
 }  // namespace
@@ -78,6 +92,67 @@ class ContextManager::Handler : public CefRequestContextHandler {
   Kind kind_;
   IMPLEMENT_REFCOUNTING(Handler);
 };
+
+class ContextManager::PrivateHandler : public CefRequestContextHandler {
+ public:
+  PrivateHandler(ContextManager* owner, PrivateCallback done)
+      : owner_(owner), done_(std::move(done)) {}
+
+  void OnRequestContextInitialized(CefRefPtr<CefRequestContext> context) override {
+    CEF_REQUIRE_UI_THREAD();
+    if (owner_) {
+      ContextManager* owner = owner_;
+      owner_ = nullptr;
+      owner->OnPrivateInitialized(this, context);
+    }
+  }
+
+  // Shutdown(): the owner is gone and |done_| must never run.
+  void Detach() {
+    owner_ = nullptr;
+    done_ = nullptr;
+  }
+
+  PrivateCallback TakeCallback() { return std::move(done_); }
+
+ private:
+  ContextManager* owner_;
+  PrivateCallback done_;
+  IMPLEMENT_REFCOUNTING(PrivateHandler);
+};
+
+void ContextManager::CreatePrivate(PrivateCallback done) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!internal_ || !normal_) {
+    done(nullptr, "TorFox is not ready to open a private window.");
+    return;
+  }
+  // An empty cache_path gives a new, unique off-the-record profile: nothing
+  // on disk, and no storage shared with any other context.
+  CefRequestContextSettings settings;
+  settings.persist_session_cookies = false;
+  CefRefPtr<PrivateHandler> handler = new PrivateHandler(this, std::move(done));
+  pending_private_[handler.get()] = CefRequestContext::CreateContext(settings, handler);
+}
+
+void ContextManager::OnPrivateInitialized(PrivateHandler* handler,
+                                          CefRefPtr<CefRequestContext> context) {
+  pending_private_.erase(handler);
+  PrivateCallback done = handler->TakeCallback();
+  std::string error;
+  if (!CheckStorage(Kind::kPrivate, context, &error) ||
+      !ApplyPrefs(Kind::kPrivate, context, &error)) {
+    test_log::Event("private_context_failed", {{"error", error}});
+    if (done) {
+      done(nullptr, error);
+    }
+    return;
+  }
+  test_log::Event("context_ready", {{"kind", "private"}});
+  if (done) {
+    done(context, std::string());
+  }
+}
 
 void ContextManager::Initialize(const std::filesystem::path& root_cache_path,
                                 CefRefPtr<CefSchemeHandlerFactory> internal_scheme_factory,
@@ -134,7 +209,7 @@ bool ContextManager::CheckStorage(Kind kind,
   // for could not be created. Confirm each context is the one requested.
   const std::string actual = context->GetCachePath().ToString();
   bool ok = !context->IsGlobal();
-  if (kind == Kind::kInternal) {
+  if (kind == Kind::kInternal || kind == Kind::kPrivate) {
     ok = ok && actual.empty();  // Off the record: nothing on disk.
   } else {
     std::error_code ec;
@@ -167,6 +242,12 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
   if (!SetPrefVerified(context, name, "webrtc.ip_handling_policy", StringValue(webrtc), error)) {
     return false;
   }
+  // TorFox keeps its own history (places.db, Normal windows only). Chrome's
+  // history service would otherwise record every visit in <profile>/History,
+  // which TorFox's history page could neither show nor clear.
+  if (!SetPrefVerified(context, name, "history.saving_disabled", BoolValue(true), error)) {
+    return false;
+  }
   // Internal pages never use the network, so their context must not even
   // look for a proxy ("wpad" lookups; see BrowserApp::ApplyGlobalPrefs).
   if (kind == Kind::kInternal &&
@@ -185,7 +266,15 @@ void ContextManager::Finish(bool ok, const std::string& error) {
 }
 
 CefRefPtr<CefRequestContext> ContextManager::Get(Kind kind) const {
-  return kind == Kind::kInternal ? internal_ : normal_;
+  switch (kind) {
+    case Kind::kInternal:
+      return internal_;
+    case Kind::kNormal:
+      return normal_;
+    case Kind::kPrivate:
+      break;  // Owned by each private window.
+  }
+  return nullptr;
 }
 
 void ContextManager::Shutdown() {
@@ -194,6 +283,10 @@ void ContextManager::Shutdown() {
   }
   internal_ = nullptr;
   normal_ = nullptr;
+  for (auto& [handler, context] : pending_private_) {
+    handler->Detach();
+  }
+  pending_private_.clear();
   scheme_factory_ = nullptr;
   done_ = nullptr;
 }

@@ -22,9 +22,58 @@ TEST(NavInput, UrlsAndHosts) {
   EXPECT_EQ(C("HTTP://Example.org").kind, NavKind::kWebUrl);
   EXPECT_EQ(C("example.com").url, "https://example.com");
   EXPECT_EQ(C("  example.com/path  ").url, "https://example.com/path");
-  EXPECT_EQ(C("localhost:8080").url, "https://localhost:8080");
-  EXPECT_EQ(C("127.0.0.1").url, "https://127.0.0.1");
   EXPECT_EQ(C("sub.example.co.uk/x?y").kind, NavKind::kWebUrl);
+  EXPECT_EQ(C("example.com.").url, "https://example.com.");
+  EXPECT_EQ(C("example.com:8443/x").url, "https://example.com:8443/x");
+  EXPECT_EQ(C("http://[::1]:8080/").kind, NavKind::kWebUrl);
+}
+
+TEST(NavInput, OnlyKnownTopLevelDomainsAreHosts) {
+  // Public Suffix List TLDs, in ASCII or Unicode form.
+  EXPECT_EQ(C("example.org").kind, NavKind::kWebUrl);
+  EXPECT_EQ(C("readme.md").kind, NavKind::kWebUrl);  // .md is Moldova.
+  // "\u043f\u0440\u0438\u043c\u0435\u0440.\u0440\u0444" (a Cyrillic name), as UTF-8 bytes.
+  EXPECT_EQ(C("\xD0\xBF\xD1\x80\xD0\xB8\xD0\xBC\xD0\xB5\xD1\x80.\xD1\x80\xD1\x84").kind,
+            NavKind::kWebUrl);
+  // Unknown TLDs are searches...
+  EXPECT_EQ(C("node.js").kind, NavKind::kSearch);
+  EXPECT_EQ(C("index.html").kind, NavKind::kSearch);
+  EXPECT_EQ(C("nas.lan").kind, NavKind::kSearch);
+  // ...unless a port or path says the user means a host.
+  EXPECT_EQ(C("nas.lan:8080").url, "https://nas.lan:8080");
+  EXPECT_EQ(C("nas.lan/").url, "https://nas.lan/");
+  EXPECT_EQ(C("nas:8080").url, "https://nas:8080");
+  EXPECT_EQ(C("nas").kind, NavKind::kSearch);
+  EXPECT_EQ(C("nas/").kind, NavKind::kSearch);
+  // Numbers are not addresses.
+  EXPECT_EQ(C("1.5").kind, NavKind::kSearch);
+  EXPECT_EQ(C("3.14.15").kind, NavKind::kSearch);
+  EXPECT_EQ(C("1.2.3.4.5").kind, NavKind::kSearch);
+  EXPECT_EQ(C("256.1.1.1").kind, NavKind::kSearch);
+  // Malformed hosts and ports.
+  EXPECT_EQ(C("example..com").kind, NavKind::kSearch);
+  EXPECT_EQ(C(".example.com").kind, NavKind::kSearch);
+  EXPECT_EQ(C("example.com:99999").kind, NavKind::kSearch);
+  EXPECT_EQ(C("example.com:http").kind, NavKind::kSearch);
+}
+
+TEST(NavInput, LocalHostsUseHttpEverythingElseHttps) {
+  EXPECT_EQ(C("localhost:8080").url, "http://localhost:8080");
+  EXPECT_EQ(C("localhost").url, "http://localhost");
+  EXPECT_EQ(C("app.localhost:3000/x").url, "http://app.localhost:3000/x");
+  EXPECT_EQ(C("127.0.0.1").url, "http://127.0.0.1");
+  EXPECT_EQ(C("192.168.1.1").url, "http://192.168.1.1");
+  EXPECT_EQ(C("10.0.0.8:8006").url, "http://10.0.0.8:8006");
+  EXPECT_EQ(C("172.20.0.1").url, "http://172.20.0.1");
+  EXPECT_EQ(C("169.254.1.1").url, "http://169.254.1.1");
+  EXPECT_EQ(C("[::1]:8080").url, "http://[::1]:8080");
+  EXPECT_EQ(C("[fe80::1]").url, "http://[fe80::1]");
+  // Public addresses and names never get a plain-text default.
+  EXPECT_EQ(C("8.8.8.8").url, "https://8.8.8.8");
+  EXPECT_EQ(C("172.32.0.1").url, "https://172.32.0.1");
+  EXPECT_EQ(C("[2001:db8::1]").url, "https://[2001:db8::1]");
+  EXPECT_EQ(C("localhost.example.com").url, "https://localhost.example.com");
+  EXPECT_EQ(C("nas.lan:8080").url, "https://nas.lan:8080");
 }
 
 TEST(NavInput, SearchGoesToDuckDuckGo) {

@@ -10,6 +10,7 @@
 #include "include/cef_version.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/browser_registry.h"
+#include "src/browser/app/places_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
@@ -36,6 +37,11 @@ std::string ChromiumVersion() {
 
 BridgeHandler::BridgeHandler() {
   Services& services = GetServices();
+  if (services.places) {
+    places_observer_ = services.places->AddObserver([this](PlacesService::Change change) {
+      NotifyPlaces(change == PlacesService::Change::kBookmarks);
+    });
+  }
   if (services.settings) {
     settings_observer_ = services.settings->AddObserver([this](const std::string& key) {
       if (key == "appearance.theme") {
@@ -53,7 +59,20 @@ void BridgeHandler::Shutdown() {
     services.settings->RemoveObserver(settings_observer_);
   }
   settings_observer_ = 0;
+  if (services.places && places_observer_) {
+    services.places->RemoveObserver(places_observer_);
+  }
+  places_observer_ = 0;
   appearance_subscribers_.clear();
+  bookmarks_subscribers_.clear();
+  history_subscribers_.clear();
+}
+
+void BridgeHandler::NotifyPlaces(bool bookmarks) {
+  const std::string payload = DumpJson({{"changed", bookmarks ? "bookmarks" : "history"}});
+  for (Subscriber& s : bookmarks ? bookmarks_subscribers_ : history_subscribers_) {
+    s.callback->Success(payload);
+  }
 }
 
 bool BridgeHandler::OnQuery(CefRefPtr<CefBrowser> browser,
@@ -110,12 +129,14 @@ void BridgeHandler::OnQueryCanceled(CefRefPtr<CefBrowser> browser,
                                     CefRefPtr<CefFrame> frame,
                                     int64_t query_id) {
   const int browser_id = browser->GetIdentifier();
-  appearance_subscribers_.erase(
-      std::remove_if(appearance_subscribers_.begin(), appearance_subscribers_.end(),
-                     [&](const Subscriber& s) {
-                       return s.browser_id == browser_id && s.query_id == query_id;
-                     }),
-      appearance_subscribers_.end());
+  for (std::vector<Subscriber>* list :
+       {&appearance_subscribers_, &bookmarks_subscribers_, &history_subscribers_}) {
+    list->erase(std::remove_if(list->begin(), list->end(),
+                               [&](const Subscriber& s) {
+                                 return s.browser_id == browser_id && s.query_id == query_id;
+                               }),
+                list->end());
+  }
   if (auto entry = Registry().Find(browser_id); entry && entry->window) {
     entry->window->RemoveStateSubscriber(browser_id, query_id);
   }
@@ -183,11 +204,17 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     return;
   }
 
+  if (DispatchPlaces(msg, browser_id, query_id, callback)) {
+    return;
+  }
+
   // Everything below acts on the sender's window.
   if (!window) {
     callback->Failure(kFailed, "no window");
     return;
   }
+  // From the shell: the active tab. From an internal tab: that tab.
+  const int sender_tab = entry->role == BrowserRole::kShell ? 0 : entry->tab_id;
   if (cmd == "state.subscribe") {
     window->AddStateSubscriber(browser_id, query_id, callback);
   } else if (cmd == "tab.new") {
@@ -197,10 +224,56 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     window_result(window->CloseTab(static_cast<int>(GetInt(msg.args, "id").value_or(0))));
   } else if (cmd == "tab.select") {
     window_result(window->SelectTab(static_cast<int>(GetInt(msg.args, "id").value_or(0))));
+  } else if (cmd == "tab.move") {
+    window_result(window->MoveTab(static_cast<int>(GetInt(msg.args, "id").value_or(0)),
+                                  static_cast<int>(GetInt(msg.args, "index").value_or(0))));
+  } else if (cmd == "tab.reopen") {
+    window->ReopenClosedTab();
+    Reply(callback, Json::object());
+  } else if (cmd == "window.new" || cmd == "window.newPrivate") {
+    window->HandleCommand({cmd == "window.new" ? browsing::Command::kNewWindow
+                                               : browsing::Command::kNewPrivateWindow});
+    Reply(callback, Json::object());
   } else if (cmd == "nav.go") {
-    // From the shell: the active tab. From an internal tab: that tab.
-    const int tab_id = entry->role == BrowserRole::kShell ? 0 : entry->tab_id;
-    window_result(window->Navigate(tab_id, GetString(msg.args, "input").value_or("")));
+    window_result(window->Navigate(sender_tab, GetString(msg.args, "input").value_or("")));
+  } else if (cmd == "nav.open") {
+    const bool new_tab = GetMember(msg.args, "newTab") && msg.args["newTab"].get<bool>();
+    window_result(window->OpenUrl(sender_tab, GetString(msg.args, "url").value_or(""), new_tab));
+  } else if (cmd == "nav.home") {
+    window->Home();
+    Reply(callback, Json::object());
+  } else if (cmd == "find.query") {
+    const Json* forward = GetMember(msg.args, "forward");
+    const Json* match_case = GetMember(msg.args, "matchCase");
+    window->Find(GetString(msg.args, "text").value_or(""), !forward || forward->get<bool>(),
+                 match_case && match_case->get<bool>());
+    Reply(callback, Json::object());
+  } else if (cmd == "find.stop") {
+    window->StopFind();
+    Reply(callback, Json::object());
+  } else if (cmd == "zoom.change") {
+    window->ChangeZoom(static_cast<int>(GetInt(msg.args, "step").value_or(0)));
+    Reply(callback, Json::object());
+  } else if (cmd == "bookmarks.star") {
+    window_result(window->StarActivePage(static_cast<int>(GetInt(msg.args, "x").value_or(0)),
+                                         static_cast<int>(GetInt(msg.args, "y").value_or(0))));
+  } else if (cmd == "bookmarks.folderMenu") {
+    window_result(window->ShowBookmarkFolderMenu(
+        GetInt(msg.args, "id").value_or(0), static_cast<int>(GetInt(msg.args, "x").value_or(0)),
+        static_cast<int>(GetInt(msg.args, "y").value_or(0))));
+  } else if (cmd == "app.menu") {
+    window->ShowAppMenu(static_cast<int>(GetInt(msg.args, "x").value_or(0)),
+                        static_cast<int>(GetInt(msg.args, "y").value_or(0)));
+    Reply(callback, Json::object());
+  } else if (cmd == "app.openBookmarks") {
+    window->OpenInternalPage("bookmarks");
+    Reply(callback, Json::object());
+  } else if (cmd == "app.openHistory") {
+    window->OpenInternalPage("history");
+    Reply(callback, Json::object());
+  } else if (cmd == "app.focusContent") {
+    window->FocusActiveContent();
+    Reply(callback, Json::object());
   } else if (cmd == "nav.back") {
     window->GoBack();
     Reply(callback, Json::object());
@@ -208,7 +281,7 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     window->GoForward();
     Reply(callback, Json::object());
   } else if (cmd == "nav.reload") {
-    window->Reload();
+    window->Reload(false);
     Reply(callback, Json::object());
   } else if (cmd == "nav.stop") {
     window->Stop();
@@ -220,6 +293,173 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     // Unreachable: the validator only admits commands listed above.
     callback->Failure(kRejected, "rejected");
   }
+}
+
+bool BridgeHandler::DispatchPlaces(const bridge::Validated& msg,
+                                   int browser_id,
+                                   int64_t query_id,
+                                   CefRefPtr<Callback> callback) {
+  const std::string& cmd = msg.command;
+  if (cmd.rfind("bookmarks.", 0) != 0 && cmd.rfind("history.", 0) != 0) {
+    return false;
+  }
+  // The shell's star and folder menus act on its window.
+  if (cmd == "bookmarks.star" || cmd == "bookmarks.folderMenu") {
+    return false;
+  }
+  PlacesService* service = GetServices().places;
+  browsing::Places* places = service ? service->places() : nullptr;
+  if (cmd == "bookmarks.subscribe" || cmd == "history.subscribe") {
+    (cmd == "bookmarks.subscribe" ? bookmarks_subscribers_ : history_subscribers_)
+        .push_back(Subscriber{browser_id, query_id, callback});
+    Reply(callback, {{"changed", ""},
+                     {"available", places != nullptr},
+                     {"notice", service ? service->notice() : std::string()}});
+    return true;
+  }
+  if (!places) {
+    callback->Failure(kFailed, service && !service->notice().empty()
+                                   ? service->notice()
+                                   : std::string("History and bookmarks are unavailable."));
+    return true;
+  }
+  const int64_t now = PlacesService::NowMs();
+  auto id_arg = [&msg](const char* name) { return GetInt(msg.args, name).value_or(0); };
+  auto str_arg = [&msg](const char* name) { return GetString(msg.args, name).value_or(""); };
+  auto changed = [service](bool bookmarks) {
+    service->Notify(bookmarks ? PlacesService::Change::kBookmarks
+                              : PlacesService::Change::kHistory);
+  };
+  auto list = [](const std::vector<browsing::Bookmark>& items) {
+    Json out = Json::array();
+    for (const browsing::Bookmark& b : items) {
+      out.push_back(PlacesService::BookmarkJson(b));
+    }
+    return out;
+  };
+
+  if (cmd == "bookmarks.children") {
+    auto folder = places->GetBookmark(id_arg("id"));
+    if (!folder || folder->kind != browsing::BookmarkKind::kFolder) {
+      callback->Failure(kFailed, "That folder no longer exists.");
+      return true;
+    }
+    Reply(callback, {{"folder", PlacesService::BookmarkJson(*folder)},
+                     {"items", list(places->Children(folder->id))}});
+  } else if (cmd == "bookmarks.folders") {
+    // Every folder, depth first, with its depth for indentation.
+    Json out = Json::array();
+    std::vector<std::pair<int64_t, int>> stack = {{browsing::kOtherBookmarksId, 0},
+                                                  {browsing::kBookmarksBarId, 0}};
+    while (!stack.empty() && out.size() < 5000) {
+      auto [id, depth] = stack.back();
+      stack.pop_back();
+      auto folder = places->GetBookmark(id);
+      if (!folder) {
+        continue;
+      }
+      Json f = PlacesService::BookmarkJson(*folder);
+      f["depth"] = depth;
+      out.push_back(std::move(f));
+      std::vector<browsing::Bookmark> children = places->Children(id);
+      for (auto it = children.rbegin(); it != children.rend(); ++it) {
+        if (it->kind == browsing::BookmarkKind::kFolder && depth < 32) {
+          stack.push_back({it->id, depth + 1});
+        }
+      }
+    }
+    Reply(callback, {{"folders", out}});
+  } else if (cmd == "bookmarks.search") {
+    Reply(callback, {{"items", list(places->SearchBookmarks(str_arg("query"), 500))}});
+  } else if (cmd == "bookmarks.add") {
+    const std::string url = str_arg("url");
+    if (!browsing::IsStorableUrl(url)) {
+      callback->Failure(kFailed, "Only http and https addresses can be bookmarked.");
+      return true;
+    }
+    auto id = places->AddBookmark(id_arg("parent"), str_arg("title"), url,
+                                  static_cast<int>(GetInt(msg.args, "index").value_or(-1)), now);
+    if (!id) {
+      callback->Failure(kFailed, "The bookmark could not be added.");
+      return true;
+    }
+    changed(true);
+    Reply(callback, {{"id", *id}});
+  } else if (cmd == "bookmarks.addFolder") {
+    auto id = places->AddFolder(id_arg("parent"), str_arg("title"),
+                                static_cast<int>(GetInt(msg.args, "index").value_or(-1)), now);
+    if (!id) {
+      callback->Failure(kFailed, "The folder could not be added.");
+      return true;
+    }
+    changed(true);
+    Reply(callback, {{"id", *id}});
+  } else if (cmd == "bookmarks.update") {
+    auto existing = places->GetBookmark(id_arg("id"));
+    if (!existing) {
+      callback->Failure(kFailed, "That bookmark no longer exists.");
+      return true;
+    }
+    std::string url = existing->url;
+    if (existing->kind == browsing::BookmarkKind::kUrl && GetMember(msg.args, "url")) {
+      url = str_arg("url");
+      if (!browsing::IsStorableUrl(url)) {
+        callback->Failure(kFailed, "Only http and https addresses can be bookmarked.");
+        return true;
+      }
+    }
+    if (!places->UpdateBookmark(existing->id, str_arg("title"), url)) {
+      callback->Failure(kFailed, "The bookmark could not be changed.");
+      return true;
+    }
+    changed(true);
+    Reply(callback, Json::object());
+  } else if (cmd == "bookmarks.move") {
+    if (!places->MoveBookmark(id_arg("id"), id_arg("parent"),
+                              static_cast<int>(GetInt(msg.args, "index").value_or(-1)))) {
+      callback->Failure(kFailed, "The bookmark could not be moved there.");
+      return true;
+    }
+    changed(true);
+    Reply(callback, Json::object());
+  } else if (cmd == "bookmarks.remove") {
+    if (!places->RemoveBookmark(id_arg("id"))) {
+      callback->Failure(kFailed, "The bookmark could not be removed.");
+      return true;
+    }
+    changed(true);
+    Reply(callback, Json::object());
+  } else if (cmd == "history.list") {
+    const std::string query = str_arg("query");
+    const std::size_t limit = static_cast<std::size_t>(GetInt(msg.args, "limit").value_or(100));
+    std::vector<browsing::HistoryEntry> entries =
+        query.empty() ? places->RecentHistory(limit, GetInt(msg.args, "before").value_or(0))
+                      : places->SearchHistory(query, limit);
+    Json out = Json::array();
+    for (const browsing::HistoryEntry& e : entries) {
+      out.push_back(PlacesService::HistoryJson(e));
+    }
+    Reply(callback, {{"entries", out}, {"more", entries.size() == limit && query.empty()}});
+  } else if (cmd == "history.removeUrl") {
+    if (!places->DeleteHistoryUrl(str_arg("url"))) {
+      callback->Failure(kFailed, "The entry could not be removed.");
+      return true;
+    }
+    test_log::Event("history_removed", {{"what", "url"}});
+    changed(false);
+    Reply(callback, Json::object());
+  } else if (cmd == "history.clear") {
+    if (!places->ClearHistory()) {
+      callback->Failure(kFailed, "History could not be cleared.");
+      return true;
+    }
+    test_log::Event("history_removed", {{"what", "all"}});
+    changed(false);
+    Reply(callback, Json::object());
+  } else {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace torfox

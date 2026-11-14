@@ -5,6 +5,7 @@
 #include "src/core/url/nav_input.h"
 
 #include "src/core/url/internal_url.h"
+#include "src/core/url/public_suffix.h"
 
 namespace torfox {
 
@@ -37,12 +38,45 @@ std::string_view Trim(std::string_view s) {
 }
 
 bool IsHostChar(char c) {
+  // ASCII letters, digits, '-', '_' and '.', plus any non-ASCII byte (IDN
+  // labels typed in Unicode; Chromium converts them to punycode).
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-         c == '-' || c == '.' || c == '_';
+         c == '-' || c == '.' || c == '_' || static_cast<unsigned char>(c) >= 0x80;
 }
 
-// Extracts the host from "[scheme://][userinfo@]host[:port][/path]".
-std::string HostOf(std::string_view token) {
+bool AllDigits(std::string_view s) {
+  if (s.empty()) {
+    return false;
+  }
+  for (char c : s) {
+    if (c < '0' || c > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Value of a string of at most 5 decimal digits (checked by the caller).
+int SmallNumber(std::string_view digits) {
+  int value = 0;
+  for (char c : digits) {
+    value = value * 10 + (c - '0');
+  }
+  return value;
+}
+
+// Splits "[scheme://][userinfo@]host[:port][/path]" into host and port.
+// |bracketed| is set for "[...]" IPv6 literals (|host| excludes brackets).
+struct Authority {
+  std::string host;  // Lower-case ASCII; non-ASCII bytes kept as is.
+  std::string_view port;
+  bool has_port = false;
+  bool bracketed = false;
+  bool valid = true;
+};
+
+Authority AuthorityOf(std::string_view token) {
+  Authority a;
   std::size_t scheme = token.find("://");
   if (scheme != std::string_view::npos) {
     token.remove_prefix(scheme + 3);
@@ -53,11 +87,35 @@ std::string HostOf(std::string_view token) {
   if (at != std::string_view::npos) {
     authority.remove_prefix(at + 1);
   }
+  std::string_view rest;
   if (!authority.empty() && authority.front() == '[') {
-    return std::string();  // IPv6 literal; never an onion.
+    std::size_t close = authority.find(']');
+    if (close == std::string_view::npos) {
+      a.valid = false;
+      return a;
+    }
+    a.bracketed = true;
+    a.host = ToLower(authority.substr(1, close - 1));
+    rest = authority.substr(close + 1);
+    if (!rest.empty() && rest.front() != ':') {
+      a.valid = false;
+      return a;
+    }
+  } else {
+    std::size_t colon = authority.find(':');
+    a.host = ToLower(authority.substr(0, colon));
+    rest = colon == std::string_view::npos ? std::string_view() : authority.substr(colon);
   }
-  std::size_t colon = authority.find(':');
-  return ToLower(authority.substr(0, colon));
+  if (!rest.empty()) {
+    a.has_port = true;
+    a.port = rest.substr(1);
+  }
+  return a;
+}
+
+std::string HostOf(std::string_view token) {
+  Authority a = AuthorityOf(token);
+  return a.bracketed || !a.valid ? std::string() : a.host;
 }
 
 bool HostIsOnion(std::string host) {
@@ -69,46 +127,113 @@ bool HostIsOnion(std::string host) {
          host.compare(host.size() - kOnion.size(), kOnion.size(), kOnion) == 0;
 }
 
-bool LooksLikeHost(std::string_view input) {
-  // "user@example.com" is far more likely an e-mail address than a URL with
-  // credentials; never turn it into a navigation.
-  if (input.substr(0, input.find_first_of("/?#")).find('@') != std::string_view::npos) {
-    return false;
-  }
-  std::string host = HostOf(input);
-  if (host.empty()) {
-    return false;
-  }
-  for (char c : host) {
-    if (!IsHostChar(c)) {
+// "a.b.c.d" with exactly four decimal octets 0-255.
+bool ParseIpv4(std::string_view host, int octets[4]) {
+  int count = 0;
+  std::size_t start = 0;
+  while (true) {
+    std::size_t dot = host.find('.', start);
+    std::string_view part = host.substr(start, dot == std::string_view::npos ? dot : dot - start);
+    if (count == 4 || !AllDigits(part) || part.size() > 3) {
       return false;
     }
+    const int value = SmallNumber(part);
+    if (value > 255) {
+      return false;
+    }
+    octets[count++] = value;
+    if (dot == std::string_view::npos) {
+      return count == 4;
+    }
+    start = dot + 1;
   }
-  if (host == "localhost") {
-    return true;
-  }
-  std::size_t dot = host.rfind('.');
-  if (dot == std::string::npos || dot == 0 || dot + 1 >= host.size()) {
+}
+
+bool LooksLikeIpv6(std::string_view host) {
+  if (host.find(':') == std::string_view::npos) {
     return false;
   }
-  // The last label must be alphabetic (a TLD) or the host must be all digits
-  // and dots (an IPv4 address).
-  bool tld_alpha = true;
-  for (std::size_t i = dot + 1; i < host.size(); ++i) {
-    char c = host[i];
-    if (!(c >= 'a' && c <= 'z')) {
-      tld_alpha = false;
-    }
-  }
-  if (tld_alpha && host.size() - dot - 1 >= 2) {
-    return true;
-  }
   for (char c : host) {
-    if (!((c >= '0' && c <= '9') || c == '.')) {
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == ':' || c == '.')) {
       return false;
     }
   }
   return true;
+}
+
+bool IsLocalhostName(std::string_view host) {
+  constexpr std::string_view kLocal = ".localhost";
+  return host == "localhost" ||
+         (host.size() > kLocal.size() && host.substr(host.size() - kLocal.size()) == kLocal);
+}
+
+// Hosts that normally have no TLS certificate: loopback, private and
+// link-local addresses, and localhost names. Typed input for these gets
+// http://; everything else gets https://.
+bool IsLocalHost(const Authority& a) {
+  if (a.bracketed) {
+    const std::string& h = a.host;
+    return h == "::1" || h.rfind("fc", 0) == 0 || h.rfind("fd", 0) == 0 || h.rfind("fe8", 0) == 0 ||
+           h.rfind("fe9", 0) == 0 || h.rfind("fea", 0) == 0 || h.rfind("feb", 0) == 0;
+  }
+  if (IsLocalhostName(a.host)) {
+    return true;
+  }
+  int o[4];
+  if (!ParseIpv4(a.host, o)) {
+    return false;
+  }
+  return o[0] == 127 || o[0] == 10 || (o[0] == 172 && o[1] >= 16 && o[1] <= 31) ||
+         (o[0] == 192 && o[1] == 168) || (o[0] == 169 && o[1] == 254);
+}
+
+// Decides whether scheme-less, space-free |input| names a host to visit.
+bool LooksLikeHost(std::string_view input, Authority* out) {
+  // "user@example.com" is far more likely an e-mail address than a URL with
+  // credentials; never turn it into a navigation.
+  const std::string_view before_path = input.substr(0, input.find_first_of("/?#"));
+  if (before_path.find('@') != std::string_view::npos) {
+    return false;
+  }
+  Authority a = AuthorityOf(input);
+  if (!a.valid || a.host.empty()) {
+    return false;
+  }
+  if (a.has_port && (!AllDigits(a.port) || a.port.size() > 5 || SmallNumber(a.port) > 65535)) {
+    return false;
+  }
+  *out = a;
+  if (a.bracketed) {
+    return LooksLikeIpv6(a.host);
+  }
+  for (char c : a.host) {
+    if (!IsHostChar(c)) {
+      return false;
+    }
+  }
+  std::string_view host = a.host;
+  if (host.back() == '.') {
+    host.remove_suffix(1);  // "example.com." is fully qualified.
+  }
+  if (host.empty() || host.front() == '.' || host.find("..") != std::string_view::npos) {
+    return false;
+  }
+  int octets[4];
+  if (IsLocalhostName(host) || ParseIpv4(host, octets)) {
+    return true;
+  }
+  const std::size_t dot = host.rfind('.');
+  if (dot == std::string_view::npos) {
+    // A single label ("nas") is a host only with an explicit port.
+    return a.has_port;
+  }
+  const std::string_view tld = host.substr(dot + 1);
+  if (AllDigits(tld)) {
+    return false;  // "1.5", "3.14.15": numbers, not hosts.
+  }
+  // A known top-level domain, or an explicit port or path ("nas.lan:8080",
+  // "nas.lan/") for local names the public list does not know.
+  return psl::IsKnownTld(tld) || a.has_port || before_path.size() < input.size();
 }
 
 }  // namespace
@@ -209,7 +334,7 @@ NavDecision ClassifyNavInput(std::string_view raw) {
     }
     if (scheme_like && input.substr(colon, 3) == "://") {
       if (scheme == "http" || scheme == "https") {
-        if (HostOf(input).empty()) {
+        if (Authority a = AuthorityOf(input); !a.valid || a.host.empty()) {
           d.reason = "URL has no host";
           return d;
         }
@@ -237,9 +362,10 @@ NavDecision ClassifyNavInput(std::string_view raw) {
       return d;
     }
     // Rule 4: host-like input.
-    if (LooksLikeHost(input)) {
+    Authority authority;
+    if (LooksLikeHost(input, &authority)) {
       d.kind = NavKind::kWebUrl;
-      d.url = "https://" + std::string(input);
+      d.url = (IsLocalHost(authority) ? "http://" : "https://") + std::string(input);
       return d;
     }
   }

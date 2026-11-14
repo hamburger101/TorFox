@@ -55,6 +55,7 @@ set(TORFOX_BROWSER_SOURCES
   app/context_manager.cc app/context_manager.h
   app/renderer_app.cc app/renderer_app.h
   app/services.h
+  app/places_service.cc app/places_service.h
   app/settings_service.cc app/settings_service.h
   app/test_log.cc app/test_log.h
   bridge/bridge_handler.cc bridge/bridge_handler.h
@@ -62,6 +63,7 @@ set(TORFOX_BROWSER_SOURCES
   scheme/internal_scheme.cc scheme/internal_scheme.h
   scheme/resources.h
   shell/browser_window.cc shell/browser_window.h
+  shell/menus.cc shell/menus.h
   shell/tab_client.cc shell/tab_client.h
   "${TORFOX_GEN_DIR}/resources.cc"
 )

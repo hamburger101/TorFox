@@ -23,6 +23,7 @@ const std::vector<std::string> kTestHookSwitches = {
     "torfox-test-host-rules",
     "torfox-test-start-url",
     "torfox-test-skip-guards",
+    "torfox-test-menu-choice",  // File naming the menu item to pick (tests/e2e).
 };
 
 // Evidence for each entry is in docs/STAGE0_FINDINGS.md and the quiet-startup

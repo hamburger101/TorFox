@@ -12,6 +12,7 @@
 namespace torfox {
 
 class ContextManager;
+class PlacesService;
 class SettingsService;
 class BrowserWindow;
 
@@ -21,6 +22,7 @@ class BrowserWindow;
 struct Services {
   SettingsService* settings = nullptr;
   ContextManager* contexts = nullptr;
+  PlacesService* places = nullptr;  // History and bookmarks.
   CefRefPtr<CefMessageRouterBrowserSide> router;
   std::function<void(BrowserWindow*)> window_opened;
   std::function<void(BrowserWindow*)> window_destroyed;

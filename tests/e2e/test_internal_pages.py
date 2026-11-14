@@ -157,9 +157,12 @@ class SettingsPageTest(unittest.TestCase):
             unlabelled = self.root("[...r.querySelectorAll('.row.planned')].filter(row => !row.querySelector('.badge')).length")
             self.assertEqual(unlabelled, 0, section)
 
-    def test_only_theme_is_active(self) -> None:
+    def test_only_implemented_settings_are_active(self) -> None:
+        # Settings become active only once the behaviour behind them is built
+        # and tested (the bookmarks bar toggle: tests/e2e/test_places.py).
         data = json.loads(bridge_call(self.page, "settings.get")["response"])
-        self.assertEqual([s["key"] for s in data["settings"] if s["status"] == "active"], ["appearance.theme"])
+        self.assertEqual([s["key"] for s in data["settings"] if s["status"] == "active"],
+                         ["appearance.theme", "appearance.showBookmarksBar"])
 
     def test_about_is_honest(self) -> None:
         self.page.evaluate("document.querySelector('tf-settings').section = 'about'; document.querySelector('tf-settings').updateComplete")

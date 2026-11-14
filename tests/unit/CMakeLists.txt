@@ -19,7 +19,11 @@ add_executable(torfox_unit_tests
   internal_url_test.cc
   json_test.cc
   nav_input_test.cc
+  places_test.cc
+  public_suffix_test.cc
   settings_test.cc
+  shortcuts_menu_test.cc
+  tabs_zoom_test.cc
   test_util.h
 )
 SET_EXECUTABLE_TARGET_PROPERTIES(torfox_unit_tests)

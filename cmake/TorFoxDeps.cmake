@@ -40,11 +40,17 @@ function(torfox_verified_dep out_var kind key)
 endfunction()
 
 # Applies CEF's compiler settings (runtime library, no exceptions, no RTTI,
-# C++20) to a third-party target without CEF's warnings-as-errors.
+# C++20) to a third-party target without CEF's warnings-as-errors. Covers C
+# sources too (SQLite), so every object uses the same runtime library.
 function(torfox_third_party_flags target)
   set(_flags ${CEF_COMPILER_FLAGS})
   list(REMOVE_ITEM _flags /WX /W4 -Werror -Wall -Wextra)
+  set(_cflags ${CEF_C_COMPILER_FLAGS})
+  list(REMOVE_ITEM _cflags /WX /W4 -Werror -Wall -Wextra)
   target_compile_options(${target} PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:${_flags} ${_cflags}>
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<CONFIG:Debug>>:${CEF_COMPILER_FLAGS_DEBUG} ${CEF_C_COMPILER_FLAGS_DEBUG}>
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<CONFIG:Release>>:${CEF_COMPILER_FLAGS_RELEASE} ${CEF_C_COMPILER_FLAGS_RELEASE}>
     $<$<COMPILE_LANGUAGE:CXX>:${_flags} ${CEF_CXX_COMPILER_FLAGS}>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:${CEF_COMPILER_FLAGS_DEBUG} ${CEF_CXX_COMPILER_FLAGS_DEBUG}>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:${CEF_COMPILER_FLAGS_RELEASE} ${CEF_CXX_COMPILER_FLAGS_RELEASE}>)

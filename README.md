@@ -38,6 +38,7 @@ CMake bundled with Visual Studio.
 python scripts/fetch_deps.py cef windows64-standard
 python scripts/fetch_deps.py nlohmann_json header
 python scripts/fetch_deps.py googletest source
+python scripts/fetch_deps.py sqlite source
 npm --prefix ui ci
 cmake -S . -B out/dev -G "Visual Studio 18 2026" -A x64
 cmake --build out/dev --config Release --parallel

@@ -10,7 +10,8 @@ namespace torfox {
 
 namespace {
 
-constexpr std::array<std::string_view, 3> kPages = {"shell", "newtab", "settings"};
+constexpr std::array<std::string_view, 5> kPages = {"shell", "newtab", "settings", "bookmarks",
+                                                    "history"};
 
 char ToLowerAscii(char c) {
   return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;

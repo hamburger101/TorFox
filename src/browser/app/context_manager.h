@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -20,33 +21,47 @@ namespace torfox {
 //   Internal: off-the-record; the only context with a torfox:// handler;
 //             hosts the shell and internal pages; no web access.
 //   Normal:   persistent profile at <root cache>/Normal; web tabs.
-// (Private and Tor contexts arrive in later stages.)
+//   Private:  one new off-the-record context per private window, created on
+//             demand; nothing is written to disk and two private windows
+//             share nothing. Owned by its window.
+// (The Tor context arrives in Stage 5.)
 //
 // No browser may be created until Initialize() reports success: privacy
 // preferences are applied and read back on every context first, and any
 // failure is fatal (fail closed).
 class ContextManager {
  public:
-  enum class Kind { kInternal, kNormal };
+  enum class Kind { kInternal, kNormal, kPrivate };
 
   using DoneCallback = std::function<void(bool ok, const std::string& error)>;
+  // |context| is null on failure, with |error| set.
+  using PrivateCallback =
+      std::function<void(CefRefPtr<CefRequestContext> context, const std::string& error)>;
 
   // |root_cache_path| must equal CefSettings.root_cache_path.
   void Initialize(const std::filesystem::path& root_cache_path,
                   CefRefPtr<CefSchemeHandlerFactory> internal_scheme_factory,
                   DoneCallback done);
 
+  // kInternal or kNormal.
   CefRefPtr<CefRequestContext> Get(Kind kind) const;
+
+  // Creates a new private context. |done| runs on the UI thread once the
+  // context's storage and privacy preferences have been checked; it never
+  // runs after Shutdown().
+  void CreatePrivate(PrivateCallback done);
 
   // Drops every reference; required before CefShutdown().
   void Shutdown();
 
  private:
   class Handler;
+  class PrivateHandler;
   void OnInitialized(Kind kind, CefRefPtr<CefRequestContext> context);
   bool CheckStorage(Kind kind, CefRefPtr<CefRequestContext> context, std::string* error);
   bool ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context, std::string* error);
   void Finish(bool ok, const std::string& error);
+  void OnPrivateInitialized(PrivateHandler* handler, CefRefPtr<CefRequestContext> context);
 
   CefRefPtr<CefRequestContext> internal_;
   CefRefPtr<CefRequestContext> normal_;
@@ -55,6 +70,8 @@ class ContextManager {
   DoneCallback done_;
   int pending_ = 0;
   bool failed_ = false;
+  // Private contexts still initializing, kept alive until they are ready.
+  std::map<PrivateHandler*, CefRefPtr<CefRequestContext>> pending_private_;
 };
 
 // Sets |name| to |value| on |context| (a request context, or the global

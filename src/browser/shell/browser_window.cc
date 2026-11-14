@@ -6,18 +6,22 @@
 
 #include <algorithm>
 
+#include "include/base/cef_callback.h"
 #include "include/views/cef_box_layout.h"
 #include "include/views/cef_fill_layout.h"
-#include "include/base/cef_callback.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/app_common.h"
 #include "src/browser/app/context_manager.h"
+#include "src/browser/app/places_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/platform/platform.h"
+#include "src/browser/shell/menus.h"
 #include "src/browser/shell/tab_client.h"
+#include "src/core/browsing/context_menu.h"
+#include "src/core/browsing/zoom.h"
 #include "src/core/url/internal_url.h"
 #include "src/core/url/nav_input.h"
 
@@ -25,44 +29,120 @@ namespace torfox {
 
 namespace {
 
-constexpr int kShellHeight = 82;  // DIP: tab strip + toolbar.
+// DIP heights of the shell's rows; must match ui/src/shell/shell.ts.
+constexpr int kStripHeight = 38;
+constexpr int kToolbarHeight = 44;
+constexpr int kBookmarksBarHeight = 32;
+constexpr int kFindBarHeight = 40;
+
 constexpr cef_color_t kDarkBackground = 0xFF1C1B22;
 constexpr cef_color_t kLightBackground = 0xFFF6F5F9;
 
+constexpr char kBookmarksBarSetting[] = "appearance.showBookmarksBar";
+constexpr char kOnionRefused[] =
+    "Onion sites open only in Tor tabs, and Tor support is not available yet.";
+
+// Native menu command ids.
+constexpr int kAppMenuBase = 1000;  // + browsing::Command
+constexpr int kStarRemove = 1;
+constexpr int kStarEdit = 2;
+constexpr int kBookmarkMenuEmpty = 90000;
+constexpr int kBookmarkSubmenuBase = 100000;
+constexpr std::size_t kMaxBookmarkMenuItems = 500;
+constexpr int kMaxBookmarkMenuDepth = 6;
+constexpr std::size_t kMaxBookmarksBarItems = 200;
+
 class ViewDelegate : public CefBrowserViewDelegate {
  public:
-  explicit ViewDelegate(BrowserRole role) : role_(role) {}
+  ViewDelegate(BrowserRole role, std::shared_ptr<int> shell_height)
+      : role_(role), shell_height_(std::move(shell_height)) {}
 
-  // The shell has a fixed height; the BoxLayout stretches it horizontally.
-  // CEF treats a size with any zero dimension as "use the default", so the
-  // width must be non-zero. Tab views keep the defaults and are sized by the
-  // content panel's FillLayout.
+  // The shell's height follows its rows (bookmarks bar, find bar); the
+  // BoxLayout stretches it horizontally. CEF treats a size with any zero
+  // dimension as "use the default", so the width must be non-zero. Tab views
+  // keep the defaults and are sized by the content panel's FillLayout.
   CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
-    return role_ == BrowserRole::kShell ? CefSize(1, kShellHeight) : CefSize();
+    return IsShell() ? CefSize(1, *shell_height_) : CefSize();
   }
   CefSize GetMinimumSize(CefRefPtr<CefView> view) override {
-    return role_ == BrowserRole::kShell ? CefSize(1, kShellHeight) : CefSize();
+    return IsShell() ? CefSize(1, *shell_height_) : CefSize();
   }
   int GetHeightForWidth(CefRefPtr<CefView> view, int width) override {
-    return role_ == BrowserRole::kShell ? kShellHeight : 0;
+    return IsShell() ? *shell_height_ : 0;
   }
   cef_runtime_style_t GetBrowserRuntimeStyle() override { return CEF_RUNTIME_STYLE_ALLOY; }
 
  private:
+  bool IsShell() const { return role_ == BrowserRole::kShell && shell_height_; }
+
   const BrowserRole role_;
+  std::shared_ptr<int> shell_height_;
   IMPLEMENT_REFCOUNTING(ViewDelegate);
 };
+
+bool IsInternalTabUrl(const std::string& url) {
+  auto parsed = ParseInternalUrl(url);
+  return parsed && IsInternalPage(parsed->host) && parsed->host != "shell";
+}
+
+// Menu labels: no mnemonics from page-controlled text, and kept short.
+std::string MenuLabel(const std::string& text) {
+  std::string excerpt = browsing::MenuExcerpt(text, 60);
+  std::string out;
+  for (char c : excerpt) {
+    out += c;
+    if (c == '&') {
+      out += '&';
+    }
+  }
+  return out;
+}
+
+PlacesService* Places() {
+  return GetServices().places;
+}
+
+browsing::Places* PlacesDb() {
+  PlacesService* ps = Places();
+  return ps ? ps->places() : nullptr;
+}
 
 }  // namespace
 
 // ----- Creation --------------------------------------------------------------
 
-void BrowserWindow::Open(const std::string& first_url) {
+void BrowserWindow::Open(const std::string& first_url, bool private_window,
+                         CefRefPtr<BrowserWindow> requester) {
   CEF_REQUIRE_UI_THREAD();
-  CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url));
+  Services& services = GetServices();
+  if (!services.contexts) {
+    return;
+  }
+  if (!private_window) {
+    CefWindow::CreateTopLevelWindow(new BrowserWindow(
+        first_url, false, services.contexts->Get(ContextManager::Kind::kNormal)));
+    return;
+  }
+  // A private window may only exist once its own context is verified.
+  services.contexts->CreatePrivate(
+      [first_url, requester](CefRefPtr<CefRequestContext> context, const std::string& error) {
+        if (!context) {
+          test_log::Event("private_window_failed", {{"error", error}});
+          if (requester) {
+            requester->ShowNotice("TorFox could not open a private window: " + error);
+          }
+          return;
+        }
+        CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url, true, context));
+      });
 }
 
-BrowserWindow::BrowserWindow(std::string first_url) : first_url_(std::move(first_url)) {}
+BrowserWindow::BrowserWindow(std::string first_url, bool private_window,
+                             CefRefPtr<CefRequestContext> web_context)
+    : first_url_(std::move(first_url)),
+      private_(private_window),
+      web_context_(std::move(web_context)),
+      shell_height_(std::make_shared<int>(kStripHeight + kToolbarHeight)) {}
 
 CefRefPtr<CefBrowserView> BrowserWindow::CreateView(BrowserRole role,
                                                     int tab_id,
@@ -90,12 +170,13 @@ CefRefPtr<CefBrowserView> BrowserWindow::CreateView(BrowserRole role,
     settings.webgl = STATE_DISABLED;
     settings.remote_fonts = STATE_DISABLED;
   }
-  CefRefPtr<CefRequestContext> context = services.contexts->Get(
-      internal ? ContextManager::Kind::kInternal : ContextManager::Kind::kNormal);
+  CefRefPtr<CefRequestContext> context =
+      internal ? services.contexts->Get(ContextManager::Kind::kInternal) : web_context_;
   // Created without a URL: TabClient loads |url| once the browser is in the
   // registry, so the very first request is already subject to policy.
   CefRefPtr<CefBrowserView> view = CefBrowserView::CreateBrowserView(
-      client, "", settings, extra, context, new ViewDelegate(role));
+      client, "", settings, extra, context,
+      new ViewDelegate(role, role == BrowserRole::kShell ? shell_height_ : nullptr));
   *client_out = client;
   return view;
 }
@@ -107,6 +188,7 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   if (services.window_opened) {
     services.window_opened(this);
   }
+  *shell_height_ = kStripHeight + kToolbarHeight + (BookmarksBarVisible() ? kBookmarksBarHeight : 0);
 
   CefBoxLayoutSettings box;
   box.horizontal = false;
@@ -127,11 +209,23 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
     AddTab(BrowserRole::kWebTab, first_url_, true);
   }
 
+  CefRefPtr<BrowserWindow> self = this;
   if (services.settings) {
-    CefRefPtr<BrowserWindow> self = this;
     settings_observer_ = services.settings->AddObserver([self](const std::string& key) {
       if (key == "appearance.theme") {
         self->ApplyTheme();
+      } else if (key == kBookmarksBarSetting) {
+        self->RelayoutShell();
+        self->PushBookmarksBar();
+        self->PushState();
+      }
+    });
+  }
+  if (services.places) {
+    places_observer_ = services.places->AddObserver([self](PlacesService::Change change) {
+      if (change == PlacesService::Change::kBookmarks) {
+        self->PushState();  // The star.
+        self->PushBookmarksBar();
       }
     });
   }
@@ -148,11 +242,12 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
                                       {"content", b(content_)},
                                       {"tab", b(t ? CefRefPtr<CefView>(t->view) : nullptr)},
                                       {"tab_visible", t && t->view->IsVisible()},
-                                      {"content_children", content_->GetChildViewCount()}});
+                                      {"content_children", content_->GetChildViewCount()},
+                                      {"private", private_}});
   }
   window->Show();
   ApplyTheme();
-  test_log::Event("window_created");
+  test_log::Event("window_created", {{"private", private_}});
 }
 
 void BrowserWindow::ApplyTheme() {
@@ -180,18 +275,46 @@ cef_runtime_style_t BrowserWindow::GetWindowRuntimeStyle() {
   return CEF_RUNTIME_STYLE_ALLOY;
 }
 
+bool BrowserWindow::BookmarksBarVisible() const {
+  Services& services = GetServices();
+  return services.settings && services.settings->store().GetBool(kBookmarksBarSetting);
+}
+
+void BrowserWindow::RelayoutShell() {
+  const int height = kStripHeight + kToolbarHeight +
+                     (BookmarksBarVisible() ? kBookmarksBarHeight : 0) +
+                     (find_open_ ? kFindBarHeight : 0);
+  if (*shell_height_ == height || !window_) {
+    return;
+  }
+  *shell_height_ = height;
+  if (shell_view_) {
+    shell_view_->InvalidateLayout();
+  }
+  window_->Layout();
+  CefRect shell = shell_view_ ? shell_view_->GetBounds() : CefRect();
+  CefRect content = content_ ? content_->GetBounds() : CefRect();
+  test_log::Event("shell_layout", {{"height", height},
+                                   {"shell", Json::array({shell.y, shell.height})},
+                                   {"content", Json::array({content.y, content.height})}});
+}
+
 // ----- Tabs ------------------------------------------------------------------
 
-int BrowserWindow::AddTab(BrowserRole role, const std::string& url, bool select) {
+int BrowserWindow::AddTab(BrowserRole role, const std::string& url, bool select, int index,
+                          int opener) {
   Tab tab;
   tab.id = next_tab_id_++;
+  tab.opener = opener;
   tab.url = url;
   tab.title = role == BrowserRole::kWebTab ? url : "New Tab";
   tab.view = CreateView(role, tab.id, url, &tab.client);
   content_->AddChildView(tab.view);
   tab.view->SetVisible(false);
   const int id = tab.id;
-  tabs_.push_back(std::move(tab));
+  const std::size_t pos =
+      index < 0 ? tabs_.size() : std::min(static_cast<std::size_t>(index), tabs_.size());
+  tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(pos), std::move(tab));
   if (select || active_tab_id_ == 0) {
     Activate(id);
   } else {
@@ -205,24 +328,48 @@ void BrowserWindow::NewTab() {
     return;
   }
   AddTab(BrowserRole::kInternalTab, InternalPageUrl("newtab"), true);
-  HandleShortcut(Shortcut::kFocusAddress);
+  HandleCommand({browsing::Command::kFocusAddress});
 }
 
-void BrowserWindow::OpenWebUrlInNewTab(const std::string& url, bool foreground) {
+void BrowserWindow::OpenWebUrlInNewTab(std::string url, bool foreground, int opener_tab_id) {
   if (closing_window_ || !content_) {
     return;
   }
-  AddTab(BrowserRole::kWebTab, url, foreground);
+  std::vector<browsing::TabRef> refs;
+  for (const Tab& t : tabs_) {
+    refs.push_back({t.id, t.opener});
+  }
+  const std::size_t index = browsing::ChildInsertIndex(refs, opener_tab_id);
+  AddTab(BrowserRole::kWebTab, url, foreground, static_cast<int>(index), opener_tab_id);
+}
+
+int BrowserWindow::IndexOf(int tab_id) const {
+  for (std::size_t i = 0; i < tabs_.size(); ++i) {
+    if (tabs_[i].id == tab_id) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
 }
 
 BrowserWindow::Result BrowserWindow::CloseTab(int tab_id) {
-  auto it = std::find_if(tabs_.begin(), tabs_.end(), [tab_id](const Tab& t) { return t.id == tab_id; });
-  if (it == tabs_.end()) {
+  const int pos = IndexOf(tab_id);
+  if (pos < 0) {
     return {false, "no such tab"};
   }
-  const std::size_t index = static_cast<std::size_t>(it - tabs_.begin());
-  Tab tab = std::move(*it);
-  tabs_.erase(it);
+  const std::size_t index = static_cast<std::size_t>(pos);
+  Tab tab = std::move(tabs_[index]);
+  tabs_.erase(tabs_.begin() + pos);
+  if (find_open_ && find_tab_id_ == tab_id) {
+    find_open_ = false;
+    find_text_.clear();
+    RelayoutShell();
+  }
+  // Remembered for "Reopen closed tab" while this window lives (in memory
+  // only; private windows' lists die with the window).
+  if (browsing::IsStorableUrl(tab.url) || IsInternalTabUrl(tab.url)) {
+    closed_tabs_.Push({tab.url, tab.title, index});
+  }
   StartClose(tab.client, tab.view, content_);
 
   if (tabs_.empty()) {
@@ -234,13 +381,28 @@ BrowserWindow::Result BrowserWindow::CloseTab(int tab_id) {
     return {};
   }
   if (active_tab_id_ == tab_id) {
-    const std::size_t next = std::min(index, tabs_.size() - 1);
     active_tab_id_ = 0;
-    Activate(tabs_[next].id);
+    Activate(tabs_[browsing::NextActiveIndex(index, tabs_.size())].id);
   } else {
     PushState();
   }
   return {};
+}
+
+void BrowserWindow::ReopenClosedTab() {
+  if (closing_window_ || !content_) {
+    return;
+  }
+  auto entry = closed_tabs_.Pop();
+  if (!entry) {
+    return;
+  }
+  const BrowserRole role =
+      IsInternalTabUrl(entry->url) ? BrowserRole::kInternalTab : BrowserRole::kWebTab;
+  const std::size_t index = browsing::ClampIndex(static_cast<long long>(entry->index),
+                                                 tabs_.size() + 1);
+  AddTab(role, entry->url, true, static_cast<int>(index));
+  test_log::Event("tab_reopened", {{"index", index}});
 }
 
 BrowserWindow::Result BrowserWindow::SelectTab(int tab_id) {
@@ -251,7 +413,51 @@ BrowserWindow::Result BrowserWindow::SelectTab(int tab_id) {
   return {};
 }
 
+BrowserWindow::Result BrowserWindow::MoveTab(int tab_id, int index) {
+  const int from = IndexOf(tab_id);
+  if (from < 0) {
+    return {false, "no such tab"};
+  }
+  const int to = static_cast<int>(browsing::ClampIndex(index, tabs_.size()));
+  if (from != to) {
+    Tab tab = std::move(tabs_[static_cast<std::size_t>(from)]);
+    tabs_.erase(tabs_.begin() + from);
+    tabs_.insert(tabs_.begin() + to, std::move(tab));
+    // A moved tab is no longer grouped with its opener.
+    tabs_[static_cast<std::size_t>(to)].opener = 0;
+    PushState();
+  }
+  return {};
+}
+
+void BrowserWindow::MoveActiveTab(int delta) {
+  const int from = IndexOf(active_tab_id_);
+  const int to = from + delta;
+  if (from >= 0 && to >= 0 && to < static_cast<int>(tabs_.size())) {
+    MoveTab(active_tab_id_, to);
+  }
+}
+
+void BrowserWindow::SelectTabNumber(int number) {
+  if (tabs_.empty() || number < 1 || number > 9) {
+    return;
+  }
+  const std::size_t index = number == 9 ? tabs_.size() - 1 : static_cast<std::size_t>(number - 1);
+  if (index < tabs_.size()) {
+    Activate(tabs_[index].id);
+  }
+}
+
 void BrowserWindow::Activate(int tab_id) {
+  if (find_open_ && find_tab_id_ != tab_id) {
+    // The find bar belongs to the tab it was opened in.
+    if (Tab* old = FindTab(find_tab_id_); old && old->client && old->client->browser()) {
+      old->client->browser()->GetHost()->StopFinding(true);
+    }
+    find_open_ = false;
+    find_text_.clear();
+    RelayoutShell();
+  }
   for (Tab& t : tabs_) {
     t.view->SetVisible(t.id == tab_id);
   }
@@ -299,7 +505,7 @@ BrowserWindow::Result BrowserWindow::Navigate(int tab_id, const std::string& inp
       return {false, d.reason};
     case NavKind::kOnion:
       // Never searched, never loaded outside Tor. Tor tabs arrive in Stage 5.
-      return {false, "Onion sites open only in Tor tabs, and Tor support is not available yet."};
+      return {false, kOnionRefused};
     case NavKind::kInternal:
       LoadInTab(*tab, BrowserRole::kInternalTab, d.url);
       return {};
@@ -309,6 +515,28 @@ BrowserWindow::Result BrowserWindow::Navigate(int tab_id, const std::string& inp
       return {};
   }
   return {false, "unsupported input"};
+}
+
+BrowserWindow::Result BrowserWindow::OpenUrl(int tab_id, const std::string& url, bool new_tab) {
+  // Only stored web URLs; then the same classification as typed input, so an
+  // onion URL can never be opened outside Tor this way either.
+  if (!browsing::IsStorableUrl(url)) {
+    return {false, "This address cannot be opened."};
+  }
+  NavDecision d = ClassifyNavInput(url);
+  if (d.kind == NavKind::kOnion) {
+    return {false, kOnionRefused};
+  }
+  if (d.kind != NavKind::kWebUrl) {
+    return {false, "This address cannot be opened."};
+  }
+  Tab* tab = tab_id == 0 ? ActiveTab() : FindTab(tab_id);
+  if (new_tab || !tab) {
+    OpenWebUrlInNewTab(d.url, true, tab ? tab->id : 0);
+    return {};
+  }
+  LoadInTab(*tab, BrowserRole::kWebTab, d.url);
+  return {};
 }
 
 void BrowserWindow::LoadInTab(Tab& tab, BrowserRole role, const std::string& url) {
@@ -347,9 +575,13 @@ void BrowserWindow::GoForward() {
   }
 }
 
-void BrowserWindow::Reload() {
+void BrowserWindow::Reload(bool bypass_cache) {
   if (auto b = ActiveBrowser()) {
-    b->Reload();
+    if (bypass_cache) {
+      b->ReloadIgnoreCache();
+    } else {
+      b->Reload();
+    }
   }
 }
 
@@ -359,10 +591,25 @@ void BrowserWindow::Stop() {
   }
 }
 
+void BrowserWindow::Home() {
+  if (Tab* t = ActiveTab()) {
+    LoadInTab(*t, BrowserRole::kInternalTab, InternalPageUrl("newtab"));
+  }
+}
+
 void BrowserWindow::OpenSettings() {
-  const std::string url = InternalPageUrl("settings");
+  OpenInternalPage("settings");
+}
+
+void BrowserWindow::OpenInternalPage(std::string_view page) {
+  if (closing_window_ || !content_ || !IsInternalPage(page) || page == "shell") {
+    return;
+  }
+  const std::string url = InternalPageUrl(page);
   for (Tab& t : tabs_) {
-    if (t.client && t.client->role() == BrowserRole::kInternalTab && t.url == url) {
+    auto parsed = ParseInternalUrl(t.url);
+    if (t.client && t.client->role() == BrowserRole::kInternalTab && parsed &&
+        parsed->host == page) {
       Activate(t.id);
       return;
     }
@@ -370,48 +617,373 @@ void BrowserWindow::OpenSettings() {
   AddTab(BrowserRole::kInternalTab, url, true);
 }
 
-void BrowserWindow::HandleShortcut(Shortcut shortcut) {
+// ----- Find ------------------------------------------------------------------
+
+void BrowserWindow::Find(const std::string& text, bool forward, bool match_case) {
+  Tab* t = ActiveTab();
+  if (!find_open_ || !t || !t->client || !t->client->browser()) {
+    return;
+  }
+  CefRefPtr<CefBrowserHost> host = t->client->browser()->GetHost();
+  if (text.empty()) {
+    host->StopFinding(true);
+    find_text_.clear();
+    PushEvent({{"type", "find"}, {"count", 0}, {"active", 0}, {"final", true}});
+    return;
+  }
+  find_tab_id_ = t->id;
+  find_text_ = text;
+  find_match_case_ = match_case;
+  // Always a "follow-up": CEF restarts the search itself when the text or
+  // case changes, and only a follow-up selects a match (with findNext=false
+  // every match is highlighted but none becomes active, so Enter would skip
+  // the first one).
+  host->Find(text, forward, match_case, true);
+}
+
+void BrowserWindow::StopFind() {
+  if (!find_open_) {
+    return;
+  }
+  if (Tab* t = FindTab(find_tab_id_); t && t->client && t->client->browser()) {
+    t->client->browser()->GetHost()->StopFinding(true);
+  }
+  find_open_ = false;
+  find_text_.clear();
+  RelayoutShell();
+  PushState();
+  FocusActiveContent();
+}
+
+void BrowserWindow::OnFindResult(int tab_id, int count, int active, bool final_update) {
+  if (!find_open_ || tab_id != find_tab_id_) {
+    return;
+  }
+  if (final_update) {
+    test_log::Event("find_result", {{"count", count}, {"active", active}});
+  }
+  PushEvent({{"type", "find"}, {"count", count}, {"active", active}, {"final", final_update}});
+}
+
+// ----- Zoom ------------------------------------------------------------------
+
+void BrowserWindow::ChangeZoom(int step) {
+  CefRefPtr<CefBrowser> b = ActiveBrowser();
+  if (!b) {
+    return;
+  }
+  CefRefPtr<CefBrowserHost> host = b->GetHost();
+  const double level = step == 0 ? 0.0 : browsing::StepZoomLevel(host->GetZoomLevel(), step);
+  host->SetZoomLevel(level);
+  test_log::Event("zoom", {{"percent", browsing::ZoomPercentForLevel(host->GetZoomLevel())}});
+  PushState();
+}
+
+// ----- Bookmarks and menus ---------------------------------------------------
+
+CefPoint BrowserWindow::ShellToScreen(int x, int y) {
+  CefPoint point(x, y);
+  if (shell_view_) {
+    shell_view_->ConvertPointToScreen(point);
+  }
+  return point;
+}
+
+BrowserWindow::Result BrowserWindow::StarActivePage(int x, int y) {
+  browsing::Places* places = PlacesDb();
+  if (!places) {
+    return {false, Places() ? Places()->notice() : "Bookmarks are unavailable."};
+  }
+  Tab* t = ActiveTab();
+  if (!t || !t->client || t->client->role() != BrowserRole::kWebTab ||
+      !browsing::IsStorableUrl(t->url)) {
+    return {false, "This page cannot be bookmarked."};
+  }
+  const std::string url = t->url;
+  const std::vector<browsing::Bookmark> existing = places->BookmarksForUrl(url);
+  if (existing.empty()) {
+    const std::string title = t->title.empty() ? url : t->title;
+    if (!places->AddBookmark(browsing::kBookmarksBarId, title, url, -1, PlacesService::NowMs())) {
+      return {false, "The bookmark could not be saved."};
+    }
+    test_log::Event("bookmark_added", {{"via", "star"}});
+    Places()->Notify(PlacesService::Change::kBookmarks);
+    ShowNotice("Bookmarked in Bookmarks bar.");
+    return {};
+  }
+  // Already bookmarked: offer to remove it or edit it, never remove silently.
+  CefRefPtr<BrowserWindow> self = this;
+  CefRefPtr<menus::Delegate> delegate =
+      new menus::Delegate([self, url](int id, cef_event_flags_t) {
+        if (id == kStarEdit) {
+          self->OpenInternalPage("bookmarks");
+          return;
+        }
+        browsing::Places* db = PlacesDb();
+        if (id != kStarRemove || !db) {
+          return;
+        }
+        for (const browsing::Bookmark& b : db->BookmarksForUrl(url)) {
+          db->RemoveBookmark(b.id);
+        }
+        test_log::Event("bookmark_removed", {{"via", "star"}});
+        Places()->Notify(PlacesService::Change::kBookmarks);
+      });
+  CefRefPtr<CefMenuModel> model = CefMenuModel::CreateMenuModel(delegate);
+  model->AddItem(kStarRemove, existing.size() > 1 ? "Remove bookmarks" : "Remove bookmark");
+  model->AddItem(kStarEdit, "Edit in Bookmarks");
+  const CefPoint point = ShellToScreen(x, y);
+  CefRefPtr<CefWindow> window = window_;
+  // Shown from a fresh task so the bridge reply is never held up by a menu.
+  CefPostTask(TID_UI, base::BindOnce(
+                          [](CefRefPtr<CefWindow> w, CefRefPtr<CefMenuModel> m,
+                             CefRefPtr<menus::Delegate> d, CefPoint p) {
+                            menus::Show(w, m, d, p, CEF_MENU_ANCHOR_TOPRIGHT, "star");
+                          },
+                          window, model, delegate, point));
+  return {};
+}
+
+void BrowserWindow::ShowAppMenu(int x, int y) {
+  using browsing::Command;
+  CefRefPtr<BrowserWindow> self = this;
+  CefRefPtr<menus::Delegate> delegate = new menus::Delegate([self](int id, cef_event_flags_t) {
+    const int c = id - kAppMenuBase;
+    if (c >= 0 && c <= static_cast<int>(Command::kSettings)) {
+      self->HandleCommand({static_cast<Command>(c)});
+    }
+  });
+  CefRefPtr<CefMenuModel> model = CefMenuModel::CreateMenuModel(delegate);
+  auto add = [&](Command c, const char* label, int key = 0, bool shift = false) {
+    const int id = kAppMenuBase + static_cast<int>(c);
+    model->AddItem(id, label);
+#if defined(OS_WIN)
+    if (key) {
+      model->SetAccelerator(id, key, shift, true, false);
+    }
+#endif
+  };
+  add(Command::kNewTab, "New tab", 'T');
+  add(Command::kNewWindow, "New window", 'N');
+  add(Command::kNewPrivateWindow, "New private window", 'N', true);
+  model->AddSeparator();
+  add(Command::kShowHistory, "History", 'H');
+  add(Command::kShowBookmarks, "Bookmarks", 'O', true);
+  const int bar_id = kAppMenuBase + static_cast<int>(Command::kToggleBookmarksBar);
+  model->AddCheckItem(bar_id, "Show bookmarks bar");
+  model->SetChecked(bar_id, BookmarksBarVisible());
+#if defined(OS_WIN)
+  model->SetAccelerator(bar_id, 'B', true, true, false);
+#endif
+  model->AddSeparator();
+  int percent = 100;
+  if (CefRefPtr<CefBrowser> b = ActiveBrowser()) {
+    percent = browsing::ZoomPercentForLevel(b->GetHost()->GetZoomLevel());
+  }
+  add(Command::kZoomOut, "Zoom out", 0xBD);
+  add(Command::kZoomReset, ("Reset zoom (" + std::to_string(percent) + "%)").c_str(), '0');
+  add(Command::kZoomIn, "Zoom in", 0xBB);
+  model->AddSeparator();
+  add(Command::kFind, "Find in page", 'F');
+  model->AddSeparator();
+  add(Command::kSettings, "Settings");
+  const CefPoint point = ShellToScreen(x, y);
+  CefRefPtr<CefWindow> window = window_;
+  CefPostTask(TID_UI, base::BindOnce(
+                          [](CefRefPtr<CefWindow> w, CefRefPtr<CefMenuModel> m,
+                             CefRefPtr<menus::Delegate> d, CefPoint p) {
+                            menus::Show(w, m, d, p, CEF_MENU_ANCHOR_TOPRIGHT, "app");
+                          },
+                          window, model, delegate, point));
+}
+
+void BrowserWindow::FillBookmarkMenu(CefRefPtr<CefMenuModel> model, int64_t folder, int depth,
+                                     std::vector<std::string>* urls, int* next_submenu_id) {
+  browsing::Places* places = PlacesDb();
+  if (!places) {
+    return;
+  }
+  std::size_t added = 0;
+  for (const browsing::Bookmark& b : places->Children(folder)) {
+    if (urls->size() >= kMaxBookmarkMenuItems) {
+      break;
+    }
+    if (b.kind == browsing::BookmarkKind::kFolder) {
+      if (depth >= kMaxBookmarkMenuDepth) {
+        continue;
+      }
+      CefRefPtr<CefMenuModel> sub =
+          model->AddSubMenu((*next_submenu_id)++, MenuLabel(b.title.empty() ? "Folder" : b.title));
+      FillBookmarkMenu(sub, b.id, depth + 1, urls, next_submenu_id);
+    } else {
+      urls->push_back(b.url);
+      model->AddItem(static_cast<int>(urls->size()), MenuLabel(b.title.empty() ? b.url : b.title));
+    }
+    ++added;
+  }
+  if (added == 0) {
+    model->AddItem(kBookmarkMenuEmpty, "(empty)");
+    model->SetEnabledAt(model->GetCount() - 1, false);
+  }
+}
+
+BrowserWindow::Result BrowserWindow::ShowBookmarkFolderMenu(int64_t folder_id, int x, int y) {
+  browsing::Places* places = PlacesDb();
+  if (!places) {
+    return {false, "Bookmarks are unavailable."};
+  }
+  auto folder = places->GetBookmark(folder_id);
+  if (!folder || folder->kind != browsing::BookmarkKind::kFolder) {
+    return {false, "no such folder"};
+  }
+  auto urls = std::make_shared<std::vector<std::string>>();
+  CefRefPtr<BrowserWindow> self = this;
+  CefRefPtr<menus::Delegate> delegate =
+      new menus::Delegate([self, urls](int id, cef_event_flags_t flags) {
+        if (id < 1 || static_cast<std::size_t>(id) > urls->size()) {
+          return;
+        }
+        const bool new_tab = (flags & EVENTFLAG_MIDDLE_MOUSE_BUTTON) != 0;
+        self->OpenUrl(0, (*urls)[static_cast<std::size_t>(id - 1)], new_tab);
+      });
+  CefRefPtr<CefMenuModel> model = CefMenuModel::CreateMenuModel(delegate);
+  int next_submenu_id = kBookmarkSubmenuBase;
+  FillBookmarkMenu(model, folder_id, 0, urls.get(), &next_submenu_id);
+  const CefPoint point = ShellToScreen(x, y);
+  CefRefPtr<CefWindow> window = window_;
+  CefPostTask(TID_UI, base::BindOnce(
+                          [](CefRefPtr<CefWindow> w, CefRefPtr<CefMenuModel> m,
+                             CefRefPtr<menus::Delegate> d, CefPoint p) {
+                            menus::Show(w, m, d, p, CEF_MENU_ANCHOR_TOPLEFT, "bookmark_folder");
+                          },
+                          window, model, delegate, point));
+  return {};
+}
+
+// ----- Commands --------------------------------------------------------------
+
+void BrowserWindow::HandleCommand(browsing::ShortcutCommand command) {
+  using browsing::Command;
   if (closing_window_) {
     return;
   }
-  switch (shortcut) {
-    case Shortcut::kNewTab:
+  test_log::Event("command", {{"id", static_cast<int>(command.command)}});
+  switch (command.command) {
+    case Command::kNewTab:
       NewTab();
       break;
-    case Shortcut::kCloseTab:
+    case Command::kNewWindow:
+      Open("", false);
+      break;
+    case Command::kNewPrivateWindow:
+      Open("", true, this);
+      break;
+    case Command::kCloseTab:
       if (active_tab_id_) {
         CloseTab(active_tab_id_);
       }
       break;
-    case Shortcut::kFocusAddress:
+    case Command::kCloseWindow:
+      if (window_) {
+        window_->Close();
+      }
+      break;
+    case Command::kReopenClosedTab:
+      ReopenClosedTab();
+      break;
+    case Command::kFocusAddress:
       if (shell_view_) {
         shell_view_->RequestFocus();
       }
       PushEvent({{"type", "focusAddress"}});
       break;
-    case Shortcut::kReload:
-      Reload();
+    case Command::kReload:
+      Reload(false);
       break;
-    case Shortcut::kBack:
+    case Command::kReloadBypassingCache:
+      Reload(true);
+      break;
+    case Command::kBack:
       GoBack();
       break;
-    case Shortcut::kForward:
+    case Command::kForward:
       GoForward();
       break;
-    case Shortcut::kNextTab:
-    case Shortcut::kPreviousTab: {
+    case Command::kHome:
+      Home();
+      break;
+    case Command::kNextTab:
+    case Command::kPreviousTab: {
       if (tabs_.size() < 2) {
         break;
       }
-      auto it = std::find_if(tabs_.begin(), tabs_.end(),
-                             [this](const Tab& t) { return t.id == active_tab_id_; });
-      std::size_t i = it == tabs_.end() ? 0 : static_cast<std::size_t>(it - tabs_.begin());
-      i = shortcut == Shortcut::kNextTab ? (i + 1) % tabs_.size()
-                                         : (i + tabs_.size() - 1) % tabs_.size();
+      const int pos = IndexOf(active_tab_id_);
+      std::size_t i = pos < 0 ? 0 : static_cast<std::size_t>(pos);
+      i = command.command == Command::kNextTab ? (i + 1) % tabs_.size()
+                                               : (i + tabs_.size() - 1) % tabs_.size();
       Activate(tabs_[i].id);
       break;
     }
-    case Shortcut::kSettings:
+    case Command::kSelectTab:
+      SelectTabNumber(command.tab_number);
+      break;
+    case Command::kMoveTabLeft:
+      MoveActiveTab(-1);
+      break;
+    case Command::kMoveTabRight:
+      MoveActiveTab(1);
+      break;
+    case Command::kFind:
+      if (!ActiveTab()) {
+        break;
+      }
+      if (!find_open_) {
+        find_open_ = true;
+        find_tab_id_ = active_tab_id_;
+        find_text_.clear();
+        RelayoutShell();
+        PushState();
+      }
+      if (shell_view_) {
+        shell_view_->RequestFocus();
+      }
+      PushEvent({{"type", "focusFind"}});
+      break;
+    case Command::kFindNext:
+    case Command::kFindPrevious:
+      if (find_open_ && !find_text_.empty()) {
+        Find(find_text_, command.command == Command::kFindNext, find_match_case_);
+      } else {
+        HandleCommand({Command::kFind});
+      }
+      break;
+    case Command::kZoomIn:
+      ChangeZoom(1);
+      break;
+    case Command::kZoomOut:
+      ChangeZoom(-1);
+      break;
+    case Command::kZoomReset:
+      ChangeZoom(0);
+      break;
+    case Command::kBookmarkPage:
+      // The shell answers with bookmarks.star and the star's position.
+      PushEvent({{"type", "star"}});
+      break;
+    case Command::kToggleBookmarksBar: {
+      Services& services = GetServices();
+      if (services.settings) {
+        services.settings->Change(kBookmarksBarSetting, Json(!BookmarksBarVisible()));
+      }
+      break;
+    }
+    case Command::kShowBookmarks:
+      OpenInternalPage("bookmarks");
+      break;
+    case Command::kShowHistory:
+      OpenInternalPage("history");
+      break;
+    case Command::kSettings:
       OpenSettings();
       break;
   }
@@ -501,9 +1073,16 @@ void BrowserWindow::OnClientClosed(TabClient* client) {
   }
 }
 
+bool BrowserWindow::RecordsHistory(const Tab& tab) const {
+  return !private_ && tab.client && tab.client->role() == BrowserRole::kWebTab;
+}
+
 void BrowserWindow::OnTitleChange(int tab_id, const std::string& title) {
   if (Tab* t = FindTab(tab_id)) {
     t->title = title;
+    if (RecordsHistory(*t) && PlacesDb() && browsing::IsStorableUrl(t->url)) {
+      PlacesDb()->SetTitle(t->url, title);
+    }
     if (tab_id == active_tab_id_) {
       UpdateTitle();
     }
@@ -527,6 +1106,22 @@ void BrowserWindow::OnLoadingState(int tab_id, bool loading, bool can_back, bool
   }
 }
 
+void BrowserWindow::OnPageLoaded(int tab_id, const std::string& url) {
+  Tab* t = FindTab(tab_id);
+  if (!t) {
+    return;
+  }
+  const bool record = RecordsHistory(*t) && PlacesDb() && browsing::IsStorableUrl(url);
+  test_log::Event("page_loaded", {{"tab", tab_id}, {"private", private_}, {"recorded", record}});
+  if (!record) {
+    return;
+  }
+  if (PlacesDb()->AddVisit(url, t->title.empty() || t->title == url ? "" : t->title,
+                           PlacesService::NowMs())) {
+    Places()->Notify(PlacesService::Change::kHistory);
+  }
+}
+
 void BrowserWindow::OnRendererCrashed(TabClient* client) {
   if (client == shell_client_.get() && client->browser() && !closing_window_) {
     // The shell must always work: reload it.
@@ -545,6 +1140,7 @@ bool BrowserWindow::CanClose(CefRefPtr<CefWindow> window) {
     std::vector<Tab> tabs = std::move(tabs_);
     tabs_.clear();
     active_tab_id_ = 0;
+    closed_tabs_.Clear();
     for (Tab& t : tabs) {
       StartClose(t.client, t.view, content_);
     }
@@ -564,14 +1160,22 @@ void BrowserWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
     services.settings->RemoveObserver(settings_observer_);
     settings_observer_ = 0;
   }
+  if (services.places && places_observer_) {
+    services.places->RemoveObserver(places_observer_);
+    places_observer_ = 0;
+  }
   state_subscribers_.clear();
   closing_.clear();
   tabs_.clear();
+  closed_tabs_.Clear();
   content_ = nullptr;
   shell_view_ = nullptr;
   shell_client_ = nullptr;
   window_ = nullptr;
-  test_log::Event("window_destroyed");
+  // A private window's context (its whole off-the-record profile) goes with
+  // the window.
+  web_context_ = nullptr;
+  test_log::Event("window_destroyed", {{"private", private_}});
   if (services.window_destroyed) {
     services.window_destroyed(this);
   }
@@ -584,14 +1188,15 @@ void BrowserWindow::UpdateTitle() {
     return;
   }
   Tab* t = ActiveTab();
-  std::string title = t && !t->title.empty() ? t->title + " \xE2\x80\x94 TorFox" : "TorFox";
+  const std::string name = private_ ? "TorFox Private" : "TorFox";
+  std::string title = t && !t->title.empty() ? t->title + " \xE2\x80\x94 " + name : name;
   if (kTestHooks) {
     title += " (TEST BUILD)";  // Test-hook builds must never pass for a release.
   }
   window_->SetTitle(title);
 }
 
-Json BrowserWindow::StateJson() const {
+Json BrowserWindow::StateJson() {
   Json tabs = Json::array();
   Json nav = Json::object();
   for (const Tab& t : tabs_) {
@@ -602,14 +1207,50 @@ Json BrowserWindow::StateJson() const {
                     {"internal", internal},
                     {"loading", t.loading}});
     if (t.id == active_tab_id_) {
+      const bool web = t.client && t.client->role() == BrowserRole::kWebTab;
+      const bool bookmarkable = web && browsing::IsStorableUrl(t.url);
+      bool bookmarked = false;
+      if (bookmarkable && PlacesDb()) {
+        bookmarked = !PlacesDb()->BookmarksForUrl(t.url).empty();
+      }
+      int zoom = 100;
+      if (t.client && t.client->browser()) {
+        zoom = browsing::ZoomPercentForLevel(t.client->browser()->GetHost()->GetZoomLevel());
+      }
       nav = {{"url", t.url},
              {"internal", internal},
              {"loading", t.loading},
              {"canGoBack", t.can_back},
-             {"canGoForward", t.can_forward}};
+             {"canGoForward", t.can_forward},
+             {"bookmarkable", bookmarkable},
+             {"bookmarked", bookmarked},
+             {"zoom", zoom}};
     }
   }
-  return {{"type", "state"}, {"tabs", tabs}, {"activeId", active_tab_id_}, {"nav", nav}};
+  return {{"type", "state"},
+          {"private", private_},
+          {"tabs", tabs},
+          {"activeId", active_tab_id_},
+          {"nav", nav},
+          {"findOpen", find_open_},
+          {"bookmarksBar", BookmarksBarVisible()}};
+}
+
+Json BrowserWindow::BookmarksBarJson() {
+  Json items = Json::array();
+  const bool visible = BookmarksBarVisible();
+  if (visible && PlacesDb()) {
+    for (const browsing::Bookmark& b : PlacesDb()->Children(browsing::kBookmarksBarId)) {
+      if (items.size() >= kMaxBookmarksBarItems) {
+        break;
+      }
+      items.push_back({{"id", b.id},
+                       {"title", b.title},
+                       {"url", b.url},
+                       {"folder", b.kind == browsing::BookmarkKind::kFolder}});
+    }
+  }
+  return {{"type", "bookmarksBar"}, {"visible", visible}, {"items", items}};
 }
 
 void BrowserWindow::PushEvent(const Json& event) {
@@ -625,11 +1266,22 @@ void BrowserWindow::PushState() {
   }
 }
 
+void BrowserWindow::PushBookmarksBar() {
+  if (!state_subscribers_.empty()) {
+    PushEvent(BookmarksBarJson());
+  }
+}
+
+void BrowserWindow::ShowNotice(const std::string& text) {
+  PushEvent({{"type", "notice"}, {"text", text}});
+}
+
 void BrowserWindow::AddStateSubscriber(int browser_id,
                                        int64_t query_id,
                                        CefRefPtr<CefMessageRouterBrowserSide::Callback> callback) {
   state_subscribers_.push_back(Subscriber{browser_id, query_id, callback});
   callback->Success(DumpJson(StateJson()));
+  callback->Success(DumpJson(BookmarksBarJson()));
 }
 
 void BrowserWindow::RemoveStateSubscriber(int browser_id, int64_t query_id) {

@@ -8,6 +8,7 @@
 #include <string>
 
 #include "include/cef_client.h"
+#include "include/cef_find_handler.h"
 #include "include/views/cef_browser_view.h"
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
@@ -28,6 +29,7 @@ class TabClient : public CefClient,
                   public CefContextMenuHandler,
                   public CefDisplayHandler,
                   public CefDownloadHandler,
+                  public CefFindHandler,
                   public CefKeyboardHandler,
                   public CefLifeSpanHandler,
                   public CefLoadHandler,
@@ -51,6 +53,7 @@ class TabClient : public CefClient,
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
+  CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
   CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
@@ -66,6 +69,16 @@ class TabClient : public CefClient,
                            CefRefPtr<CefFrame> frame,
                            CefRefPtr<CefContextMenuParams> params,
                            CefRefPtr<CefMenuModel> model) override;
+  bool RunContextMenu(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefFrame> frame,
+                      CefRefPtr<CefContextMenuParams> params,
+                      CefRefPtr<CefMenuModel> model,
+                      CefRefPtr<CefRunContextMenuCallback> callback) override;
+  bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefContextMenuParams> params,
+                            int command_id,
+                            EventFlags event_flags) override;
 
   // CefDisplayHandler
   void OnAddressChange(CefRefPtr<CefBrowser> browser,
@@ -87,6 +100,14 @@ class TabClient : public CefClient,
                         CefRefPtr<CefDownloadItem> download_item,
                         const CefString& suggested_name,
                         CefRefPtr<CefBeforeDownloadCallback> callback) override;
+
+  // CefFindHandler
+  void OnFindResult(CefRefPtr<CefBrowser> browser,
+                    int identifier,
+                    int count,
+                    const CefRect& selectionRect,
+                    int activeMatchOrdinal,
+                    bool finalUpdate) override;
 
   // CefKeyboardHandler
   bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
@@ -117,6 +138,17 @@ class TabClient : public CefClient,
                             bool isLoading,
                             bool canGoBack,
                             bool canGoForward) override;
+  void OnLoadStart(CefRefPtr<CefBrowser> browser,
+                   CefRefPtr<CefFrame> frame,
+                   TransitionType transition_type) override;
+  void OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                 CefRefPtr<CefFrame> frame,
+                 int httpStatusCode) override;
+  void OnLoadError(CefRefPtr<CefBrowser> browser,
+                   CefRefPtr<CefFrame> frame,
+                   ErrorCode errorCode,
+                   const CefString& errorText,
+                   const CefString& failedUrl) override;
 
   // CefPermissionHandler: everything is denied until Stage 4 adds prompts.
   bool OnRequestMediaAccessPermission(CefRefPtr<CefBrowser> browser,
@@ -170,6 +202,9 @@ class TabClient : public CefClient,
   // Returns an empty string if |url| is allowed, else the reason.
   std::string NavigationBlockReason(const std::string& url) const;
   std::string ResourceBlockReason(const std::string& url) const;
+  void BuildWebMenu(CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model);
+  // Opens |url| (from a link or menu) in a new tab next to this one.
+  void OpenInNewTab(const std::string& url, bool foreground);
 
   const BrowserRole role_;
   const int tab_id_;
@@ -178,6 +213,9 @@ class TabClient : public CefClient,
   std::string initial_url_;
   CefRefPtr<CefBrowser> browser_;
   bool closing_ = false;
+  // The main-frame URL whose load failed most recently: its error page is
+  // not history.
+  std::string failed_url_;
 
   IMPLEMENT_REFCOUNTING(TabClient);
 };

@@ -90,4 +90,38 @@ std::string PathToUtf8(const std::filesystem::path& path) {
   return Narrow(path.native());
 }
 
+bool CopyTextToClipboard(const std::string& utf8) {
+  const int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+                                        static_cast<int>(utf8.size()), nullptr, 0);
+  if (chars <= 0 && !utf8.empty()) {
+    return false;
+  }
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (static_cast<size_t>(chars) + 1) * sizeof(wchar_t));
+  if (!memory) {
+    return false;
+  }
+  wchar_t* text = static_cast<wchar_t*>(GlobalLock(memory));
+  if (!text) {
+    GlobalFree(memory);
+    return false;
+  }
+  if (chars > 0) {
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()),
+                        text, chars);
+  }
+  text[chars] = L'\0';
+  GlobalUnlock(memory);
+  if (!OpenClipboard(nullptr)) {
+    GlobalFree(memory);
+    return false;
+  }
+  EmptyClipboard();
+  const bool ok = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+  CloseClipboard();
+  if (!ok) {
+    GlobalFree(memory);  // Ownership passes to the clipboard only on success.
+  }
+  return ok;
+}
+
 }  // namespace torfox::platform

@@ -141,6 +141,10 @@ export const SETTINGS: Record<string, SettingLabel> = {
     title: "Theme",
     values: { dark: "Dark", light: "Light", system: "Match system" },
   },
+  "appearance.showBookmarksBar": {
+    title: "Show bookmarks bar",
+    description: "Show the Bookmarks bar folder below the address bar.",
+  },
   "updates.enabled": { title: "Updates", description: "Allow TorFox to update itself." },
   "updates.autoCheck": {
     title: "Check for updates automatically",

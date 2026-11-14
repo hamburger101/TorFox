@@ -69,4 +69,16 @@ std::string PathToUtf8(const std::filesystem::path& path) {
   return path.string();
 }
 
+bool CopyTextToClipboard(const std::string& utf8) {
+  @autoreleasepool {
+    NSString* text = [NSString stringWithUTF8String:utf8.c_str()];
+    if (!text) {
+      return false;
+    }
+    NSPasteboard* board = [NSPasteboard generalPasteboard];
+    [board clearContents];
+    return [board setString:text forType:NSPasteboardTypeString];
+  }
+}
+
 }  // namespace torfox::platform

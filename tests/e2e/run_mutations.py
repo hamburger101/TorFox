@@ -147,6 +147,33 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     **{f"feature-{name}-enabled": ([(POLICY, f'    "{name}",', "    // removed")], [IDLE])
        for name in ("NetworkTimeServiceQuerying", "TranslateRankerQuery", "TranslateRankerEnforcement",
                     "AimServerRequestOnStartupEnabled")},
+    # Stage 2. Chromium's own history service, switched back on everywhere.
+    "chromium-history-enabled": ([
+        ("src/browser/app/browser_app.cc",
+         '         SetPrefVerified(global, "global", "history.saving_disabled", BoolValue(true), error) &&\n',
+         ""),
+        ("src/browser/app/context_manager.cc",
+         '  if (!SetPrefVerified(context, name, "history.saving_disabled", BoolValue(true), error)) {',
+         "  if (false) {"),
+    ], ["e2e:test_places.PlacesTest.test_visits_are_recorded_by_torfox_not_chromium"]),
+    "private-windows-record-history": ([
+        ("src/browser/shell/browser_window.cc",
+         "  return !private_ && tab.client && tab.client->role() == BrowserRole::kWebTab;",
+         "  return tab.client && tab.client->role() == BrowserRole::kWebTab;"),
+    ], ["e2e:test_private.PrivateWindowTest.test_private_window_is_marked_and_records_nothing",
+        "e2e:test_private.PrivateWindowTest.test_nothing_from_a_private_window_reaches_the_disk"]),
+    "private-windows-share-normal-context": ([
+        ("src/browser/shell/browser_window.cc",
+         "        CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url, true, context));",
+         "        CefWindow::CreateTopLevelWindow(new BrowserWindow(\n"
+         "            first_url, true, GetServices().contexts->Get(ContextManager::Kind::kNormal)));"),
+    ], ["e2e:test_private.PrivateWindowTest.test_storage_is_isolated_between_windows",
+        "e2e:test_private.PrivateWindowTest.test_nothing_from_a_private_window_reaches_the_disk"]),
+    "onion-selections-searchable": ([
+        ("src/core/browsing/context_menu.cc",
+         "  if (ContainsOnionText(query) || MentionsOnionHost(query)) {", "  if (false) {"),
+    ], ["unit:ContextMenu.NeverSearchesOnionAddresses",
+        "e2e:test_browsing.BrowsingTest.test_onion_selections_are_never_searched"]),
 }
 
 

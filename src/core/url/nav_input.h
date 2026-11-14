@@ -28,14 +28,18 @@ inline constexpr std::size_t kMaxNavInputLength = 8192;
 
 // Classifies what the user typed in the address bar.
 //
-// Stage 1 rules (the full classifier with Public Suffix List handling lands
-// in Stage 2):
+// Rules, in order:
 //  1. Empty or over-long input, and input with control characters, is refused.
 //  2. Input mentioning a .onion host anywhere is kOnion and is never searched.
 //  3. "torfox://<known page>" is kInternal. Other explicit schemes are allowed
 //     only for http and https; javascript:, data:, file: and others are refused.
-//  4. Input without spaces that looks like a host ("example.com",
-//     "localhost:8080", "127.0.0.1/x") becomes https://<input>.
+//  4. Input without spaces that looks like a host becomes a URL: a name whose
+//     last label is a top-level domain on the Public Suffix List
+//     ("example.com"), a dotted name with a port or a path ("nas.lan:8080",
+//     "nas.lan/"), a single label with a port ("intranet:8080"),
+//     "localhost", or an IPv4 or bracketed IPv6 address.
+//     Local hosts (localhost, loopback, private and link-local addresses) get
+//     http://, everything else https://.
 //  5. Everything else is a DuckDuckGo search.
 NavDecision ClassifyNavInput(std::string_view input);
 

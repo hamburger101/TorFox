@@ -10,7 +10,12 @@
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/fault_injection.h"
 #include "src/browser/app/test_log.h"
+#include "src/browser/platform/platform.h"
 #include "src/browser/shell/browser_window.h"
+#include "src/browser/shell/menus.h"
+#include "src/core/browsing/context_menu.h"
+#include "src/core/browsing/places.h"
+#include "src/core/browsing/shortcuts.h"
 #include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
 #include "src/core/url/nav_input.h"
@@ -23,6 +28,22 @@ void LogBlock(const char* what, BrowserRole role, const std::string& url, const 
   test_log::Event(what, {{"role", std::string(RoleName(role))},
                          {"url", url.substr(0, 300)},
                          {"why", why}});
+}
+
+// TorFox's own context-menu commands for web pages.
+enum WebMenuCommand {
+  kOpenLinkInNewTab = MENU_ID_USER_FIRST,
+  kOpenLinkInPrivateWindow,
+  kCopyLinkAddress,
+  kOpenImageInNewTab,
+  kCopyImageAddress,
+  kSearchSelection,
+  kBookmarkPage,
+};
+
+bool IsWebUrl(const std::string& url) {
+  const std::string scheme = guards::SchemeOf(url);
+  return scheme == "http" || scheme == "https";
 }
 
 }  // namespace
@@ -81,17 +102,169 @@ void TabClient::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
       if (edit_flags & CM_EDITFLAG_CAN_PASTE) {
         model->AddItem(MENU_ID_PASTE, "Paste");
       }
-      model->AddItem(MENU_ID_SELECT_ALL, "Select All");
+      model->AddItem(MENU_ID_SELECT_ALL, "Select all");
     } else if (edit_flags & CM_EDITFLAG_CAN_COPY) {
       model->AddItem(MENU_ID_COPY, "Copy");
     }
     return;
   }
-  // Web tabs: Stage 2 builds TorFox's own menu. Until then remove entries
-  // that would download or save content (download policy arrives in Stage 3).
-  for (int id : {MENU_ID_PRINT, MENU_ID_VIEW_SOURCE}) {
-    model->Remove(id);
+  BuildWebMenu(params, model);
+}
+
+void TabClient::BuildWebMenu(CefRefPtr<CefContextMenuParams> params,
+                             CefRefPtr<CefMenuModel> model) {
+  // TorFox builds the whole menu itself instead of trimming Chromium's: no
+  // "Save as", "Print", "View source" or "Inspect", and nothing that would
+  // download or save content (the download policy arrives in Stage 3).
+  model->Clear();
+  const int type = params->GetTypeFlags();
+  const int edit = params->GetEditStateFlags();
+  auto separate = [&model]() {
+    if (model->GetCount() > 0 && model->GetTypeAt(model->GetCount() - 1) != MENUITEMTYPE_SEPARATOR) {
+      model->AddSeparator();
+    }
+  };
+
+  const std::string link = params->GetLinkUrl().ToString();
+  if ((type & CM_TYPEFLAG_LINK) && IsWebUrl(link) && NavigationBlockReason(link).empty()) {
+    model->AddItem(kOpenLinkInNewTab, "Open link in new tab");
+    model->AddItem(kOpenLinkInPrivateWindow, "Open link in private window");
+    model->AddItem(kCopyLinkAddress, "Copy link address");
   }
+
+  const std::string source = params->GetSourceUrl().ToString();
+  if ((type & CM_TYPEFLAG_MEDIA) && params->GetMediaType() == CM_MEDIATYPE_IMAGE &&
+      IsWebUrl(source) && NavigationBlockReason(source).empty()) {
+    separate();
+    model->AddItem(kOpenImageInNewTab, "Open image in new tab");
+    model->AddItem(kCopyImageAddress, "Copy image address");
+  }
+
+  if (type & CM_TYPEFLAG_EDITABLE) {
+    separate();
+    model->AddItem(MENU_ID_UNDO, "Undo");
+    model->SetEnabled(MENU_ID_UNDO, (edit & CM_EDITFLAG_CAN_UNDO) != 0);
+    model->AddItem(MENU_ID_REDO, "Redo");
+    model->SetEnabled(MENU_ID_REDO, (edit & CM_EDITFLAG_CAN_REDO) != 0);
+    model->AddSeparator();
+    model->AddItem(MENU_ID_CUT, "Cut");
+    model->SetEnabled(MENU_ID_CUT, (edit & CM_EDITFLAG_CAN_CUT) != 0);
+    model->AddItem(MENU_ID_COPY, "Copy");
+    model->SetEnabled(MENU_ID_COPY, (edit & CM_EDITFLAG_CAN_COPY) != 0);
+    model->AddItem(MENU_ID_PASTE, "Paste");
+    model->SetEnabled(MENU_ID_PASTE, (edit & CM_EDITFLAG_CAN_PASTE) != 0);
+    model->AddItem(MENU_ID_SELECT_ALL, "Select all");
+  } else if (type & CM_TYPEFLAG_SELECTION) {
+    separate();
+    model->AddItem(MENU_ID_COPY, "Copy");
+  }
+
+  // Never offered for anything that mentions an onion address.
+  const std::string selection = params->GetSelectionText().ToString();
+  if ((type & CM_TYPEFLAG_SELECTION) && browsing::SelectionSearchUrl(selection)) {
+    model->AddItem(kSearchSelection, "Search DuckDuckGo for \xE2\x80\x9C" +
+                                         browsing::MenuExcerpt(selection, 32) + "\xE2\x80\x9D");
+  }
+
+  if (model->GetCount() == 0) {
+    // The page itself.
+    model->AddItem(MENU_ID_BACK, "Back");
+    model->SetEnabled(MENU_ID_BACK, browser_ && browser_->CanGoBack());
+    model->AddItem(MENU_ID_FORWARD, "Forward");
+    model->SetEnabled(MENU_ID_FORWARD, browser_ && browser_->CanGoForward());
+    model->AddItem(MENU_ID_RELOAD, "Reload");
+    model->AddSeparator();
+    model->AddItem(kBookmarkPage, "Bookmark this page");
+    model->SetEnabled(kBookmarkPage, browsing::IsStorableUrl(params->GetPageUrl().ToString()));
+    model->AddItem(MENU_ID_SELECT_ALL, "Select all");
+  }
+}
+
+bool TabClient::RunContextMenu(CefRefPtr<CefBrowser> browser,
+                               CefRefPtr<CefFrame> frame,
+                               CefRefPtr<CefContextMenuParams> params,
+                               CefRefPtr<CefMenuModel> model,
+                               CefRefPtr<CefRunContextMenuCallback> callback) {
+  // Test builds only (--torfox-test-menu-choice): log the items and pick one
+  // without showing a menu. Otherwise CEF shows the native menu.
+  auto choice = menus::TestChoice(model, IsInternal() ? "internal_context" : "web_context");
+  if (!choice) {
+    return false;
+  }
+  if (*choice >= 0) {
+    callback->Continue(*choice, EVENTFLAG_NONE);
+  } else {
+    callback->Cancel();
+  }
+  return true;
+}
+
+bool TabClient::OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                                     CefRefPtr<CefFrame> frame,
+                                     CefRefPtr<CefContextMenuParams> params,
+                                     int command_id,
+                                     EventFlags event_flags) {
+  if (IsInternal()) {
+    return false;  // Only CEF's own editing commands are on internal menus.
+  }
+  const std::string link = params->GetLinkUrl().ToString();
+  const std::string source = params->GetSourceUrl().ToString();
+  // Every URL is checked again here: the menu was built from the same
+  // params, but nothing is opened without the navigation policy's consent.
+  auto allowed = [this](const std::string& url) {
+    return IsWebUrl(url) && NavigationBlockReason(url).empty();
+  };
+  switch (command_id) {
+    case kOpenLinkInNewTab:
+      if (allowed(link)) {
+        OpenInNewTab(link, false);
+      }
+      return true;
+    case kOpenLinkInPrivateWindow:
+      if (allowed(link)) {
+        CefPostTask(TID_UI, base::BindOnce(
+                                [](std::string url) { BrowserWindow::Open(url, true); }, link));
+      }
+      return true;
+    case kCopyLinkAddress:
+      if (IsWebUrl(link)) {
+        platform::CopyTextToClipboard(link);
+      }
+      return true;
+    case kOpenImageInNewTab:
+      if (allowed(source)) {
+        OpenInNewTab(source, false);
+      }
+      return true;
+    case kCopyImageAddress:
+      if (IsWebUrl(source)) {
+        platform::CopyTextToClipboard(source);
+      }
+      return true;
+    case kSearchSelection:
+      if (auto url = browsing::SelectionSearchUrl(params->GetSelectionText().ToString())) {
+        OpenInNewTab(*url, true);
+      }
+      return true;
+    case kBookmarkPage:
+      if (window_) {
+        CefRefPtr<BrowserWindow> window = window_;
+        CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::HandleCommand, window,
+                                           browsing::ShortcutCommand{
+                                               browsing::Command::kBookmarkPage, 0}));
+      }
+      return true;
+  }
+  return false;  // CEF's own commands (copy, paste, back...).
+}
+
+void TabClient::OpenInNewTab(const std::string& url, bool foreground) {
+  if (!window_) {
+    return;
+  }
+  CefRefPtr<BrowserWindow> window = window_;
+  CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::OpenWebUrlInNewTab, window, url, foreground,
+                                     tab_id_));
 }
 
 // ----- Display ---------------------------------------------------------------
@@ -146,6 +319,19 @@ bool TabClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
   return true;
 }
 
+// ----- Find ------------------------------------------------------------------
+
+void TabClient::OnFindResult(CefRefPtr<CefBrowser> browser,
+                             int identifier,
+                             int count,
+                             const CefRect& selectionRect,
+                             int activeMatchOrdinal,
+                             bool finalUpdate) {
+  if (window_ && role_ != BrowserRole::kShell) {
+    window_->OnFindResult(tab_id_, count, activeMatchOrdinal, finalUpdate);
+  }
+}
+
 // ----- Keyboard --------------------------------------------------------------
 
 bool TabClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
@@ -155,55 +341,31 @@ bool TabClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
   if (event.type != KEYEVENT_RAWKEYDOWN || !window_) {
     return false;
   }
+  uint32_t mods = 0;
+  if (event.modifiers & EVENTFLAG_SHIFT_DOWN) {
+    mods |= browsing::keymod::kShift;
+  }
+  if (event.modifiers & EVENTFLAG_CONTROL_DOWN) {
+    mods |= browsing::keymod::kCtrl;
+  }
+  if (event.modifiers & EVENTFLAG_ALT_DOWN) {
+    mods |= browsing::keymod::kAlt;
+  }
+  if (event.modifiers & EVENTFLAG_COMMAND_DOWN) {
+    mods |= browsing::keymod::kCmd;
+  }
 #if defined(OS_MAC)
-  const uint32_t kPrimary = EVENTFLAG_COMMAND_DOWN;
+  constexpr browsing::KeyPlatform kPlatform = browsing::KeyPlatform::kMac;
 #else
-  const uint32_t kPrimary = EVENTFLAG_CONTROL_DOWN;
+  constexpr browsing::KeyPlatform kPlatform = browsing::KeyPlatform::kWindows;
 #endif
-  const uint32_t mods = event.modifiers & (EVENTFLAG_CONTROL_DOWN | EVENTFLAG_COMMAND_DOWN |
-                                           EVENTFLAG_ALT_DOWN | EVENTFLAG_SHIFT_DOWN);
-  const int key = event.windows_key_code;
-  auto fire = [this](Shortcut s) {
-    CefRefPtr<BrowserWindow> window = window_;
-    CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::HandleShortcut, window, s));
-    return true;
-  };
-  if (mods == kPrimary) {
-    switch (key) {
-      case 'T':
-        return fire(Shortcut::kNewTab);
-      case 'W':
-        return fire(Shortcut::kCloseTab);
-      case 'L':
-        return fire(Shortcut::kFocusAddress);
-      case 'R':
-        return fire(Shortcut::kReload);
-      case 0xBC:  // VK_OEM_COMMA
-        return fire(Shortcut::kSettings);
-#if defined(OS_MAC)
-      case 0xDB:  // [
-        return fire(Shortcut::kBack);
-      case 0xDD:  // ]
-        return fire(Shortcut::kForward);
-#endif
-    }
+  auto command = browsing::MapShortcut(event.windows_key_code, mods, kPlatform);
+  if (!command) {
+    return false;
   }
-  if (mods == 0 && key == 0x74) {  // F5
-    return fire(Shortcut::kReload);
-  }
-  if (mods == EVENTFLAG_ALT_DOWN && key == 0x25) {  // Alt+Left
-    return fire(Shortcut::kBack);
-  }
-  if (mods == EVENTFLAG_ALT_DOWN && key == 0x27) {  // Alt+Right
-    return fire(Shortcut::kForward);
-  }
-  if (key == 0x09 && (mods == EVENTFLAG_CONTROL_DOWN)) {  // Ctrl+Tab
-    return fire(Shortcut::kNextTab);
-  }
-  if (key == 0x09 && (mods == (EVENTFLAG_CONTROL_DOWN | EVENTFLAG_SHIFT_DOWN))) {
-    return fire(Shortcut::kPreviousTab);
-  }
-  return false;
+  CefRefPtr<BrowserWindow> window = window_;
+  CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::HandleCommand, window, *command));
+  return true;
 }
 
 // ----- Life span -------------------------------------------------------------
@@ -234,10 +396,7 @@ bool TabClient::OnBeforePopup(CefRefPtr<CefBrowser> browser,
     LogBlock("popup_blocked", role_, url, "disallowed URL");
     return true;
   }
-  if (window_) {
-    CefRefPtr<BrowserWindow> window = window_;
-    CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::OpenWebUrlInNewTab, window, url, true));
-  }
+  OpenInNewTab(url, true);
   return true;
 }
 
@@ -298,6 +457,44 @@ void TabClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
   if (window_ && role_ != BrowserRole::kShell) {
     window_->OnLoadingState(tab_id_, isLoading, canGoBack, canGoForward);
   }
+}
+
+void TabClient::OnLoadStart(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            TransitionType transition_type) {
+  if (frame->IsMain()) {
+    test_log::Event("load_start", {{"role", std::string(RoleName(role_))}, {"tab", tab_id_}});
+  }
+}
+
+void TabClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame,
+                          int httpStatusCode) {
+  if (!frame->IsMain() || role_ != BrowserRole::kWebTab || !window_) {
+    return;
+  }
+  const std::string url = frame->GetURL().ToString();
+  test_log::Event("load_end", {{"tab", tab_id_}, {"status", httpStatusCode},
+                               {"error_page", url == failed_url_}});
+  // Error pages are not visits: no HTTP response, or the URL that just failed.
+  if (httpStatusCode <= 0 || url == failed_url_) {
+    return;
+  }
+  window_->OnPageLoaded(tab_id_, url);
+}
+
+void TabClient::OnLoadError(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            ErrorCode errorCode,
+                            const CefString& errorText,
+                            const CefString& failedUrl) {
+  if (!frame->IsMain()) {
+    return;
+  }
+  failed_url_ = failedUrl.ToString();
+  test_log::Event("load_error", {{"role", std::string(RoleName(role_))},
+                                 {"tab", tab_id_},
+                                 {"code", static_cast<int>(errorCode)}});
 }
 
 // ----- Permissions (denied until Stage 4) ------------------------------------
@@ -362,10 +559,7 @@ bool TabClient::OnOpenURLFromTab(CefRefPtr<CefBrowser> browser,
   const std::string url = target_url.ToString();
   if (role_ == BrowserRole::kWebTab && user_gesture && NavigationBlockReason(url).empty() &&
       (guards::SchemeOf(url) == "http" || guards::SchemeOf(url) == "https") && window_) {
-    const bool foreground = target_disposition == CEF_WOD_NEW_FOREGROUND_TAB;
-    CefRefPtr<BrowserWindow> window = window_;
-    CefPostTask(TID_UI,
-                base::BindOnce(&BrowserWindow::OpenWebUrlInNewTab, window, url, foreground));
+    OpenInNewTab(url, target_disposition == CEF_WOD_NEW_FOREGROUND_TAB);
   } else {
     LogBlock("open_url_blocked", role_, url, "not allowed");
   }

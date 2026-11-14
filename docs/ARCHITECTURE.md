@@ -75,6 +75,28 @@ override the Tor context's proxy.
 Chrome's runtime also keeps an on-disk `User Data/Default` profile. TorFox never browses in it, and a test
 checks that it stays empty of browsing data.
 
+## Browsing data
+- **History and bookmarks** live in TorFox's own SQLite database, `<user data>/places.db` (pinned SQLite
+  amalgamation, `secure_delete` on, WAL truncated after removals). Chromium's history service is switched off
+  in every context (`history.saving_disabled`), so this is the only record. The schema and its rules are in
+  `src/core/browsing/places.cc`, unit-tested without CEF.
+- **What is recorded:** successful page loads in Normal windows only. Private windows, TorFox pages and error
+  pages are never recorded. Only http(s) URLs with a host are stored (`IsStorableUrl`).
+- **Private windows** each create a new off-the-record context when they open, verified before the window
+  appears. The context belongs to the window and is dropped when it closes. Every tab and link in it stays in
+  that context.
+- **Pages:** `torfox://bookmarks/` and `torfox://history/` reach the data only through their own bridge
+  commands (`bookmarks.*`, `history.*`). The shell keeps only the commands it needs (star, folder menus).
+
+## Commands, shortcuts and menus
+- One command list (`src/core/browsing/shortcuts.h`) serves keyboard shortcuts, the app menu and the shell
+  buttons. The key tables for Windows and macOS are separate and unit-tested; macOS keeps Cmd+Left/Right for
+  text editing.
+- Shortcuts are caught in the browser process (`OnPreKeyEvent`) before any page sees them, in web pages and
+  TorFox pages alike.
+- Menus are native CEF Views menus (`CefWindow::ShowMenu`). TorFox builds the page context menu itself, so
+  Chromium's Save, Print, View source and Inspect items never appear.
+
 ## Internal UI (`torfox://`)
 The UI is HTML/TypeScript (Lit, built by Vite into a compiled-in resource table), rendered in a separate
 privileged browser. A web page reaching a TorFox page has to get past five layers:
@@ -100,8 +122,8 @@ Each layer is also tested end-to-end with the outer layers switched off (test bu
   - typed argument schemas.
 - **Native platform UI:**
   - Windows: title bar with system caption buttons, TaskDialog prompts.
-  - macOS: NSMenu, traffic lights, NSAlert sheets. Stage 1 has App, Edit and Window menus; TorFox
-    commands are keyboard shortcuts only. None of the macOS code has been compiled yet.
+  - macOS: NSMenu, traffic lights, NSAlert sheets. The main menu has App, Edit and Window menus; the
+    Stage 2 commands are reachable through shortcuts and the in-window app menu. macOS is built only by CI.
 
 ## Tor
 - **Client:** the official Tor Expert Bundle (C tor). Bundles are GPG-verified against the Tor Browser

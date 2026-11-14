@@ -59,14 +59,11 @@ TEST(SettingsSchema, SaferDefaults) {
 }
 
 TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
-  // Stage 1 implements the theme only. Every other setting must stay
-  // "planned" until its feature exists and is tested.
+  // A setting becomes active only once its feature exists and is tested;
+  // every other setting stays "planned".
+  const std::set<std::string_view> active = {"appearance.theme", "appearance.showBookmarksBar"};
   for (const Def& d : AllSettings()) {
-    if (d.key == "appearance.theme") {
-      EXPECT_EQ(d.status, Status::kActive);
-    } else {
-      EXPECT_EQ(d.status, Status::kPlanned) << d.key;
-    }
+    EXPECT_EQ(d.status, active.count(d.key) ? Status::kActive : Status::kPlanned) << d.key;
   }
 }
 

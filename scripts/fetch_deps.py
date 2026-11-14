@@ -5,7 +5,8 @@
 """Download, verify and extract pinned third-party dependencies.
 
 Every artifact listed in deps.lock.json is verified by size, SHA-256 and (when
-present) the SHA-1 published by the upstream project before it is extracted.
+present) the SHA-1 or SHA3-256 published by the upstream project before it is
+extracted.
 A missing or mismatching hash is a hard failure; nothing is ever extracted
 from an unverified file.
 
@@ -53,9 +54,10 @@ def save_lock(lock: dict) -> None:
     os.replace(tmp, LOCK_PATH)
 
 
-def hash_file(path: Path) -> tuple[str, str, int]:
+def hash_file(path: Path) -> tuple[str, str, str, int]:
     sha1 = hashlib.sha1()
     sha256 = hashlib.sha256()
+    sha3 = hashlib.sha3_256()
     size = 0
     with path.open("rb") as f:
         while True:
@@ -64,8 +66,9 @@ def hash_file(path: Path) -> tuple[str, str, int]:
                 break
             sha1.update(block)
             sha256.update(block)
+            sha3.update(block)
             size += len(block)
-    return sha1.hexdigest(), sha256.hexdigest(), size
+    return sha1.hexdigest(), sha256.hexdigest(), sha3.hexdigest(), size
 
 
 def download(url: str, dest: Path) -> None:
@@ -82,11 +85,13 @@ def download(url: str, dest: Path) -> None:
 
 
 def verify(path: Path, entry: dict, allow_pin: bool) -> str:
-    sha1, sha256, size = hash_file(path)
+    sha1, sha256, sha3_256, size = hash_file(path)
     if entry.get("size") is not None and size != entry["size"]:
         raise VerificationError(f"{path.name}: size {size} != pinned {entry['size']}")
     if entry.get("sha1") and sha1 != entry["sha1"]:
         raise VerificationError(f"{path.name}: SHA-1 {sha1} != upstream {entry['sha1']}")
+    if entry.get("sha3_256") and sha3_256 != entry["sha3_256"]:
+        raise VerificationError(f"{path.name}: SHA3-256 {sha3_256} != upstream {entry['sha3_256']}")
     pinned = entry.get("sha256")
     if pinned:
         if sha256 != pinned:
@@ -96,7 +101,7 @@ def verify(path: Path, entry: dict, allow_pin: bool) -> str:
             f"{path.name}: no SHA-256 pinned in deps.lock.json (computed {sha256}). "
             "A maintainer must pin it with --pin-sha256 after checking the upstream hash."
         )
-    elif not entry.get("sha1"):
+    elif not entry.get("sha1") and not entry.get("sha3_256"):
         raise VerificationError(f"{path.name}: refusing to pin SHA-256 without an upstream hash to cross-check")
     return sha256
 
