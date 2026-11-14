@@ -72,6 +72,32 @@ std::string InternalPageUrl(std::string_view host) {
   return std::string(kInternalScheme) + "://" + std::string(host) + "/";
 }
 
+std::optional<std::string> ResourcePathFor(const InternalUrl& url) {
+  if (!IsInternalPage(url.host)) {
+    return std::nullopt;
+  }
+  if (url.path == "/" || url.path == "/index.html") {
+    return "pages/" + url.host + "/index.html";
+  }
+  constexpr std::string_view kAssets = "/assets/";
+  if (url.path.size() <= kAssets.size() || url.path.compare(0, kAssets.size(), kAssets) != 0) {
+    return std::nullopt;
+  }
+  std::string_view file = std::string_view(url.path).substr(kAssets.size());
+  // Bundled asset names are flat: letters, digits, '-', '_', '.', no "..".
+  if (file.find("..") != std::string_view::npos || file.front() == '.') {
+    return std::nullopt;
+  }
+  for (char c : file) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '-' || c == '_' || c == '.';
+    if (!ok) {
+      return std::nullopt;
+    }
+  }
+  return "assets/" + std::string(file);
+}
+
 bool HasInternalScheme(std::string_view url) {
   // Skip leading C0 controls and spaces, which URL parsers strip.
   std::size_t i = 0;

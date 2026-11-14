@@ -4,9 +4,10 @@ A privacy-focused desktop web browser for Windows 10/11 (x64) and macOS (Apple S
 built on the Chromium Embedded Framework (CEF), with built-in `.onion` browsing through a bundled
 official Tor client.
 
-> **Status: early development (Stage 0, feasibility). Not usable yet.** Nothing in this repository should
-> be relied on for security or anonymity until [`docs/FEATURE_STATUS.md`](docs/FEATURE_STATUS.md) marks it
-> *Verified by test*. TorFox is **not** Tor Browser and does not claim Tor Browser's anti-fingerprinting
+> **Status: early development. Stage 1 (core shell) is done on Windows. Not usable for browsing yet.**
+> Nothing in this repository should be relied on for security or anonymity until
+> [`docs/FEATURE_STATUS.md`](docs/FEATURE_STATUS.md) marks it *Verified by test*. The macOS build has
+> not been compiled yet. TorFox is **not** Tor Browser and does not claim Tor Browser's anti-fingerprinting
 > or anonymity protections.
 
 ## Goals
@@ -21,22 +22,29 @@ official Tor client.
 ## Repository layout
 | Path | Contents |
 |---|---|
-| `deps.lock.json` | Pinned, hash-verified third-party binaries (CEF, Tor) |
-| `scripts/fetch_deps.py` | Downloads and verifies dependencies; refuses unverified files |
-| `cmake/` | Build helpers |
+| `src/core/` | Pure C++ logic with no CEF dependency (settings, URL guards, bridge validation, command-line policy), unit-tested |
+| `src/browser/` | The CEF application: windows, tabs, request contexts, the `torfox://` scheme, the bridge, platform code |
+| `ui/` | The TorFox interface (TypeScript + Lit, built by Vite), compiled into the binary |
+| `tests/unit/`, `tests/e2e/`, `tests/platform/` | Unit, end-to-end, release-build platform tests, and the mutation check |
+| `deps.lock.json`, `scripts/fetch_deps.py` | Pinned, hash-verified third-party binaries (CEF, Tor); unverified files are refused |
 | `config/release.json` | Updater repository and public key; never secrets |
 | `spikes/` | Stage 0 feasibility experiments (not shipped) |
-| `tests/` | Automated tests |
-| `docs/` | Architecture, security and status documentation |
+| `docs/` | Architecture, security, testing and status documentation |
 
-## Building (Windows, development)
+## Building (Windows)
+Needs Visual Studio 2026 with desktop C++, Node.js 22.12 or newer, and Python 3.13 or newer. Use the
+CMake bundled with Visual Studio.
 ```
 python scripts/fetch_deps.py cef windows64-standard
-cmake -S . -B out/spike -G "Visual Studio 18 2026" -A x64 -DTORFOX_BUILD_SPIKES=ON
-cmake --build out/spike --config Release --target cefspike
+npm --prefix ui ci
+cmake -S . -B out/dev -G "Visual Studio 18 2026" -A x64
+cmake --build out/dev --config Release --parallel
+out\dev\src\browser\Release\TorFox.exe
 ```
-Use the CMake bundled with Visual Studio. The browser itself is not buildable yet; see the staged plan in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Release builds only: CEF's Debug build asserts in off-the-record profiles. For the test build and how
+to run the tests, see [`docs/TESTING.md`](docs/TESTING.md). For what Stage 1 found and what it leaves open,
+see [`docs/STAGE1_FINDINGS.md`](docs/STAGE1_FINDINGS.md). To report a vulnerability, see
+[`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## License
 [Mozilla Public License 2.0](LICENSE). Third-party components keep their own licenses.

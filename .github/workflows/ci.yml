@@ -1,5 +1,6 @@
-# Continuous integration. Windows builds on every push to main and on PRs.
-# macOS (10x minute cost on private repos) runs on PRs and manual dispatch only.
+# Continuous integration. Windows builds and tests on every push to main and
+# on PRs. macOS (10x minute cost on private repos) runs on PRs and manual
+# dispatch only.
 name: CI
 
 on:
@@ -18,13 +19,17 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
 
       - name: Cache verified dependencies
         uses: actions/cache@v6
@@ -35,7 +40,10 @@ jobs:
       - name: Fetch CEF (hash-verified)
         run: python -I scripts/fetch_deps.py cef windows64-minimal
 
-      - name: Configure
+      - name: Install UI dependencies (lockfile, no install scripts)
+        run: npm --prefix ui ci
+
+      - name: Configure release and test builds
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -47,10 +55,25 @@ jobs:
             '17' { $gen = 'Visual Studio 17 2022' }
             default { throw "Unsupported or missing Visual Studio: '$line' ($ver)" }
           }
-          cmake -S . -B out/ci -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal -DTORFOX_BUILD_SPIKES=ON
+          cmake -S . -B out/dev -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal
+          cmake -S . -B out/test -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal -DTORFOX_TEST_HOOKS=ON
 
       - name: Build
-        run: cmake --build out/ci --config Release --parallel
+        run: |
+          cmake --build out/dev --config Release --parallel
+          cmake --build out/test --config Release --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir out/test -C Release --output-on-failure
+
+      - name: End-to-end tests (test build)
+        working-directory: tests/e2e
+        env:
+          TORFOX_QUIET_SECONDS: "60"
+        run: python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup
+
+      - name: Release-build platform tests (sandbox, command line)
+        run: python -m unittest discover -v -s tests/platform -p "test_*_win.py"
 
   macos:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -65,13 +88,17 @@ jobs:
             cef: macosx64-minimal
             arch: x86_64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
 
       - name: Cache verified dependencies
         uses: actions/cache@v6
@@ -82,11 +109,27 @@ jobs:
       - name: Fetch CEF (hash-verified)
         run: python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }}
 
+      - name: Install UI dependencies (lockfile, no install scripts)
+        run: npm --prefix ui ci
+
       - name: Ensure Ninja
         run: command -v ninja || brew install ninja
 
       - name: Configure
         run: cmake -S . -B out/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DTORFOX_CEF_FLAVOR=minimal
 
-      - name: Build CEF wrapper
-        run: cmake --build out/ci --target libcef_dll_wrapper
+      - name: Build app and unit tests
+        run: cmake --build out/ci --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir out/ci --output-on-failure
+
+      - name: Bundle layout
+        run: |
+          app="out/ci/src/browser/Release/TorFox.app"
+          test -x "$app/Contents/MacOS/TorFox"
+          test -d "$app/Contents/Frameworks/Chromium Embedded Framework.framework"
+          for h in "" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)"; do
+            test -x "$app/Contents/Frameworks/TorFox Helper$h.app/Contents/MacOS/TorFox Helper$h"
+          done
+          plutil -lint "$app/Contents/Info.plist"

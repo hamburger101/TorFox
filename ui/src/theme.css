@@ -1,0 +1,124 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+/* Shared design tokens for TorFox's internal pages. Dark is the default;
+ * <html data-theme="light|dark|system"> is set from the Appearance setting. */
+
+:root {
+  color-scheme: dark;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
+    "Helvetica Neue", sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system,
+    BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-mono: "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --strip: #111016;
+  --toolbar: #1c1b22;
+  --tab-hover: #22212a;
+  --field: #2a2933;
+  --field-hover: #302e3a;
+  --field-focus: #23222b;
+  --page: #16151b;
+  --card: #1e1d25;
+  --card-raised: #26252e;
+  --fg: #ecebf2;
+  --fg-muted: #a6a3b4;
+  --fg-faint: #6f6c7d;
+  --border: #33313d;
+  --border-strong: #4a4757;
+  --accent: #b69bff;
+  --accent-strong: #8f6cf5;
+  --accent-soft: rgba(182, 155, 255, 0.14);
+  --on-accent: #120d1f;
+  --warn: #f5c26b;
+  --danger: #ff8a8a;
+  --danger-soft: rgba(255, 138, 138, 0.12);
+  --ok: #7ee2a8;
+  --focus-ring: 0 0 0 2px var(--accent);
+  --radius-s: 6px;
+  --radius-m: 9px;
+  --radius-l: 14px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --strip: #e3e1ea;
+  --toolbar: #f7f6fa;
+  --tab-hover: #ebe9f1;
+  --field: #e9e7ef;
+  --field-hover: #e1dfe9;
+  --field-focus: #ffffff;
+  --page: #f9f8fc;
+  --card: #ffffff;
+  --card-raised: #f3f2f7;
+  --fg: #1c1a25;
+  --fg-muted: #5c596a;
+  --fg-faint: #8f8c9c;
+  --border: #d6d3df;
+  --border-strong: #bcb8c8;
+  --accent: #6d3fe0;
+  --accent-strong: #5a2fc8;
+  --accent-soft: rgba(109, 63, 224, 0.1);
+  --on-accent: #ffffff;
+  --warn: #9a6200;
+  --danger: #c22f2f;
+  --danger-soft: rgba(194, 47, 47, 0.08);
+  --ok: #17803d;
+  --shadow: 0 1px 2px rgba(20, 16, 40, 0.08), 0 8px 24px rgba(20, 16, 40, 0.08);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+    --strip: #e3e1ea;
+    --toolbar: #f7f6fa;
+    --tab-hover: #ebe9f1;
+    --field: #e9e7ef;
+    --field-hover: #e1dfe9;
+    --field-focus: #ffffff;
+    --page: #f9f8fc;
+    --card: #ffffff;
+    --card-raised: #f3f2f7;
+    --fg: #1c1a25;
+    --fg-muted: #5c596a;
+    --fg-faint: #8f8c9c;
+    --border: #d6d3df;
+    --border-strong: #bcb8c8;
+    --accent: #6d3fe0;
+    --accent-strong: #5a2fc8;
+    --accent-soft: rgba(109, 63, 224, 0.1);
+    --on-accent: #ffffff;
+    --warn: #9a6200;
+    --danger: #c22f2f;
+    --danger-soft: rgba(194, 47, 47, 0.08);
+    --ok: #17803d;
+    --shadow: 0 1px 2px rgba(20, 16, 40, 0.08), 0 8px 24px rgba(20, 16, 40, 0.08);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

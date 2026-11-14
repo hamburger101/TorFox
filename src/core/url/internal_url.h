@@ -36,6 +36,12 @@ std::optional<InternalUrl> ParseInternalUrl(std::string_view url);
 // Returns "torfox://<host>/" for a known page.
 std::string InternalPageUrl(std::string_view host);
 
+// Maps an internal URL to a path in the bundled resource table:
+//   torfox://<page>/ and torfox://<page>/index.html -> "pages/<page>/index.html"
+//   torfox://<page>/assets/<file>                  -> "assets/<file>"
+// Anything else (unknown page, other paths, "..", "//", "%") has no resource.
+std::optional<std::string> ResourcePathFor(const InternalUrl& url);
+
 // True if |url| uses the torfox scheme at all (case-insensitive), whether or
 // not it is well formed. Used to block any attempt to reach internal pages.
 bool HasInternalScheme(std::string_view url);

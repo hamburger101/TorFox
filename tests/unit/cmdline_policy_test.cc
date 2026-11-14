@@ -67,8 +67,18 @@ TEST(CmdlinePolicy, AddsForcedSwitches) {
     EXPECT_EQ(p.switches.count(s), 1u) << s;
   }
   EXPECT_EQ(p.switches.at("host-resolver-rules"), "MAP *.onion ~NOTFOUND");
+  EXPECT_EQ(p.switches.at("component-updater"), "url-source=http://127.0.0.1:9/,disable-pings");
   EXPECT_EQ(p.switches.at("enable-features"), "NetworkServiceSandbox");
-  EXPECT_EQ(p.switches.at("disable-features"), "HttpsUpgrades");
+  EXPECT_EQ(SplitFeatureList(p.switches.at("disable-features")), ForcedDisableFeatures());
+  EXPECT_TRUE(Has(ForcedDisableFeatures(), "HttpsUpgrades"));
+  EXPECT_TRUE(Has(ForcedDisableFeatures(), "NetworkTimeServiceQuerying"));
+}
+
+TEST(CmdlinePolicy, UserCannotRedirectTheComponentUpdater) {
+  Input in = WithUser({{"component-updater", "url-source=https://evil.test/"}});
+  in.current_switches = {{"component-updater", "url-source=https://evil.test/"}};
+  Plan p = Apply(in);
+  EXPECT_EQ(p.switches.at("component-updater"), "url-source=http://127.0.0.1:9/,disable-pings");
 }
 
 TEST(CmdlinePolicy, MergesFeatureListsWithCefAndRemovesUserEntries) {

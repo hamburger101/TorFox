@@ -29,18 +29,30 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
   restricted tokens.
 - **macOS:** helper app bundles, with `libcef_sandbox.dylib` initialised in each helper. Hardened runtime;
   `allow-jit` only for the Renderer and GPU helpers.
-- **Command-line hardening:** release builds drop every command-line switch that isn't on an allowlist,
-  then add TorFox's own switches:
-  - `--host-resolver-rules="MAP *.onion ~NOTFOUND"`
-  - `--disable-extensions`
-  - the network-service sandbox feature
-  - background-networking disables, merged into CEF's own feature switches
+- **Command-line hardening:** release builds have two independent layers.
+  1. CEF's `command_line_args_disabled`.
+  2. TorFox's policy (`src/core/cmdline/policy.cc`). It drops every user switch, keeps only absolute
+     http(s) URL arguments, and then forces TorFox's own switches:
+     - `--site-per-process`
+     - `--host-resolver-rules="MAP *.onion ~NOTFOUND"`
+     - `--disable-extensions`
+     - Chromium background services off: background networking, component update, domain reliability,
+       client-side phishing detection, sync, default apps, pings
+     - `--component-updater=url-source=http://127.0.0.1:9/,disable-pings`. Port 9 is refused by Chromium,
+       so no component can update or ping. As a result, CRLSets aren't updated either.
+     - `NetworkServiceSandbox` enabled
+     - Four background features disabled, each needed according to the quiet-startup test:
+       `NetworkTimeServiceQuerying`, `TranslateRankerQuery`, `TranslateRankerEnforcement` and
+       `AimServerRequestOnStartupEnabled`. `HttpsUpgrades` is disabled too, in favour of TorFox's own HTTPS-first.
+
+     Test builds (`TORFOX_TEST_HOOKS=ON`) also keep a short list of test switches; release builds keep none.
+     See [`TESTING.md`](TESTING.md).
 
 ## Request contexts (isolation boundaries)
 | Context | Storage | Network | Notes |
 |---|---|---|---|
-| Base (global) | Disk, never hosts content | — | Holds the strict baseline prefs |
-| Internal | Off-the-record (OTR) | None; http(s) requests are cancelled | Only context with the `torfox` scheme handler |
+| Base (global) | Disk, never hosts content | Proxy pref `direct` (also in Local State) | Holds the strict baseline prefs |
+| Internal | Off-the-record (OTR) | None; http(s) requests are cancelled; proxy pref `direct` | Only context with the `torfox` scheme handler |
 | Normal | Disk profile | Direct | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled and offered in a Tor tab |
 | Private | Its own OTR profile, one per private window | Direct | No history and no downloads list |
 | Tor | Its own OTR profile | SOCKS5 to tor only | See below |
@@ -54,8 +66,27 @@ The Tor context:
 
 A tab changes context only by replacing its browser. Popups inherit the opener's context.
 
+The service contexts (Base, Local State and Internal) use `direct` so that they never run proxy
+auto-discovery (WPAD). The Normal context still follows the system proxy, and auto-discovers once at
+start-up before its prefs apply. That is a known gap, with a decision due in Stage 4 (see
+[`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) §4). TorFox never uses `--no-proxy-server`, because it would
+override the Tor context's proxy.
+
+Chrome's runtime also keeps an on-disk `User Data/Default` profile. TorFox never browses in it, and a test
+checks that it stays empty of browsing data.
+
 ## Internal UI (`torfox://`)
-The UI is HTML/TypeScript, rendered in a separate privileged browser:
+The UI is HTML/TypeScript (Lit, built by Vite into a compiled-in resource table), rendered in a separate
+privileged browser. A web page reaching a TorFox page has to get past five layers:
+1. Chromium's `DISPLAY_ISOLATED` check.
+2. TorFox's navigation guard (`OnBeforeBrowse`), which also covers browser-initiated navigations.
+3. The resource guard (`OnBeforeResourceLoad`).
+4. A scheme handler that exists only in the Internal context.
+5. The handler's own check of the requesting browser's role.
+
+The decisions for layers 2, 3 and 5 are pure functions in `src/core/url/guards.cc`, unit-tested on their own.
+Each layer is also tested end-to-end with the outer layers switched off (test builds only), see
+[`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) §1. The rest of the setup:
 - **Scheme handler:** registered only on the Internal context, with `STANDARD | SECURE | DISPLAY_ISOLATED`.
 - **Resources:** served from a compiled-in read-only table (exact-path lookup).
 - **Content Security Policy:** `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
@@ -69,7 +100,8 @@ The UI is HTML/TypeScript, rendered in a separate privileged browser:
   - typed argument schemas.
 - **Native platform UI:**
   - Windows: title bar with system caption buttons, TaskDialog prompts.
-  - macOS: NSMenu, traffic lights, NSAlert sheets.
+  - macOS: NSMenu, traffic lights, NSAlert sheets. Stage 1 has App, Edit and Window menus; TorFox
+    commands are keyboard shortcuts only. None of the macOS code has been compiled yet.
 
 ## Tor
 - **Client:** the official Tor Expert Bundle (C tor). Bundles are GPG-verified against the Tor Browser

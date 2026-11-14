@@ -13,6 +13,7 @@ add_library(torfox_core STATIC
   cmdline/policy.cc cmdline/policy.h
   settings/schema.cc settings/schema.h
   settings/store.cc settings/store.h
+  url/guards.cc url/guards.h
   url/internal_url.cc url/internal_url.h
   url/nav_input.cc url/nav_input.h
   util/file_io.cc util/file_io.h

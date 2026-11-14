@@ -22,6 +22,7 @@ const std::vector<std::string> kTestHookSwitches = {
     "torfox-test-user-data",
     "torfox-test-host-rules",
     "torfox-test-start-url",
+    "torfox-test-skip-guards",
 };
 
 // Evidence for each entry is in docs/STAGE0_FINDINGS.md and the quiet-startup
@@ -31,6 +32,15 @@ const std::vector<std::string> kEnableFeatures = {
 };
 const std::vector<std::string> kDisableFeatures = {
     "HttpsUpgrades",  // Replaced by TorFox's own HTTPS-first policy.
+    // Background services that contact Google while TorFox sits idle. The
+    // Chrome runtime starts them even with --disable-background-networking
+    // and --disable-component-update; found by the quiet-startup test.
+    // Each entry is needed on its own: tests/e2e/run_mutations.py removes
+    // them one at a time and the quiet-startup test then fails.
+    "NetworkTimeServiceQuerying",        // clients2.google.com/time/1/current
+    "TranslateRankerQuery",              // www.gstatic.com: translate ranker model
+    "TranslateRankerEnforcement",        //   (loaded if either is enabled)
+    "AimServerRequestOnStartupEnabled",  // www.google.com/async/folae: AI mode eligibility
 };
 
 constexpr char kOnionRule[] = "MAP *.onion ~NOTFOUND";
@@ -68,6 +78,11 @@ SwitchMap ForcedSwitches(const std::string& test_host_rules) {
       {"disable-extensions", ""},
       {"disable-background-networking", ""},
       {"disable-component-update", ""},
+      // Some components are registered even with --disable-component-update
+      // (the on-device model manifest, seen by the quiet-startup test). Point
+      // the component updater at a port Chromium refuses to connect to, so no
+      // component can ever check for updates, download, or ping.
+      {"component-updater", "url-source=http://127.0.0.1:9/,disable-pings"},
       {"disable-domain-reliability", ""},
       {"disable-client-side-phishing-detection", ""},
       {"disable-default-apps", ""},
