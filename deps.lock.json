@@ -57,5 +57,31 @@
         "pgp_signing_subkey": "022DA248432D2A0E0F54E65E316C1FACD62D07D9"
       }
     }
+  },
+  "googletest": {
+    "_comment": "Test-only dependency. SHA-256 matches the digest GitHub publishes for the official release asset.",
+    "version": "1.18.0",
+    "base_url": "https://github.com/google/googletest/releases/download/v1.18.0/",
+    "files": {
+      "source": {
+        "name": "googletest-1.18.0.tar.gz",
+        "size": 894741,
+        "sha256": "6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5"
+      }
+    }
+  },
+  "nlohmann_json": {
+    "_comment": "Single-header JSON library. The release file's OpenPGP signature was verified against Niels Lohmann's key (fingerprint published in the project README), then pinned by SHA-256.",
+    "version": "3.12.0",
+    "signing_key_primary_fpr": "797167AE41C0A6D9232E48457F3CEA63AE251B69",
+    "base_url": "https://github.com/nlohmann/json/releases/download/v3.12.0/",
+    "files": {
+      "header": {
+        "name": "json.hpp",
+        "size": 953436,
+        "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63",
+        "install_as": "json-3.12.0/nlohmann/json.hpp"
+      }
+    }
   }
 }

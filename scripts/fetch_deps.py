@@ -142,10 +142,18 @@ def fetch(kind: str, key: str, file_override: str | None, allow_pin: bool, verif
     dest_parent = DEPS_DIR / kind
     marker_name = f"{name}.verified"
     marker = dest_parent / marker_name
-    root_name = name
-    for ext in (".tar.bz2", ".tar.gz", ".tar.xz", ".tgz"):
-        if root_name.endswith(ext):
-            root_name = root_name[: -len(ext)]
+    install_as = entry.get("install_as")
+    if install_as:
+        # Single-file artifact: copied (not extracted) to dest_parent/install_as.
+        rel = Path(install_as)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise VerificationError(f"invalid install_as for {name}: {install_as}")
+        root_name = rel.parts[0]
+    else:
+        root_name = name
+        for ext in (".tar.bz2", ".tar.gz", ".tar.xz", ".tgz"):
+            if root_name.endswith(ext):
+                root_name = root_name[: -len(ext)]
     if entry.get("sha256") and marker.exists() and marker.read_text().strip() == entry["sha256"]:
         root = dest_parent / root_name
         if root.is_dir():
@@ -169,8 +177,17 @@ def fetch(kind: str, key: str, file_override: str | None, allow_pin: bool, verif
         print(f"Verified {name}", file=sys.stderr)
         return archive
 
-    print(f"Verified {name}; extracting", file=sys.stderr)
-    root = safe_extract(archive, dest_parent, root_name)
+    if install_as:
+        print(f"Verified {name}; installing", file=sys.stderr)
+        root = dest_parent / root_name
+        if root.exists():
+            shutil.rmtree(root)
+        target = dest_parent / install_as
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(archive, target)
+    else:
+        print(f"Verified {name}; extracting", file=sys.stderr)
+        root = safe_extract(archive, dest_parent, root_name)
     marker.write_text(sha256 + "\n")
     return root
 
