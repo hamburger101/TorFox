@@ -54,7 +54,7 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
 | Base (global) | Disk, never hosts content | Proxy pref `direct` (also in Local State) | Holds the strict baseline prefs |
 | Internal | Off-the-record (OTR) | None; http(s) requests are cancelled; proxy pref `direct` | Only context with the `torfox` scheme handler |
 | Normal | Disk profile | Direct | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled and offered in a Tor tab |
-| Private | Its own OTR profile, one per private window | Direct | No history and no downloads list |
+| Private | Its own OTR profile, one per private window | Direct | No history; its downloads list is its own and is dropped with the window |
 | Tor | Its own OTR profile | SOCKS5 to tor only | See below |
 
 The Tor context:
@@ -87,6 +87,27 @@ checks that it stays empty of browsing data.
   that context.
 - **Pages:** `torfox://bookmarks/` and `torfox://history/` reach the data only through their own bridge
   commands (`bookmarks.*`, `history.*`). The shell keeps only the commands it needs (star, folder menus).
+
+## Downloads
+- **Policy:** `downloads::Decide(disable, ask)` (`src/core/downloads/policy.cc`) gives Block, Ask or Allow.
+  *Disable* overrides *Ask*. `TabClient` applies it in `CanDownload` (which in CEF 156 sees every download),
+  again in `OnBeforeDownload` (before any file is named), and in `OnDownloadUpdated`. Only web tabs download.
+- **Prompt:** `dialogs::Confirm` → `platform::ShowConfirmPrompt`: TaskDialog (Windows) or NSAlert sheet
+  (macOS), Cancel as the default. It belongs to the tab: closing the tab or turning downloads off cancels
+  it, and a dialog that cannot be shown counts as no.
+- **Paths:** TorFox names every file (`SafeFileName`, `UniquePath`): never an existing file or one another
+  waiting download will use, and short enough for Windows' `MAX_PATH`. Chromium writes to `name.crdownload`,
+  and `DownloadService` renames the file when it is complete. A failed download is cancelled; a partial file
+  Chromium leaves behind is deleted 2 s later. Bytes received before the decision go to
+  `<profile>/Pending Downloads` (Chromium's `download.default_directory`), which is emptied at start-up.
+- **State:** `DownloadService` (`src/browser/app/download_service.cc`) keeps the list in memory only.
+  Entries have TorFox's own ids; Chromium's updates are matched by (profile, Chromium id), because each
+  profile numbers its downloads from 1. Chromium's own record of downloads in the normal profile is erased
+  before CEF starts and after it shuts down (`chromium_profile::ScrubDownloadRecords`).
+  `torfox://downloads/` reaches it through `downloads.*` bridge commands, filtered by window: private
+  windows see only their own entries. There is no command to open a file.
+- **Pages cannot write files another way:** the File System Access pickers are turned off
+  (`--disable-blink-features=FileSystemAccessLocal`), and the page context menu has no save items.
 
 ## Commands, shortcuts and menus
 - One command list (`src/core/browsing/shortcuts.h`) serves keyboard shortcuts, the app menu and the shell

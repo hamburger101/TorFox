@@ -85,8 +85,8 @@ const std::array<Def, 26> kSettings = {
     Enum("permissions.notifications", "privacy", P, kPermission),
     Enum("permissions.clipboard", "privacy", P, kPermission),
     // Downloads
-    Bool("downloads.askBeforeDownload", "downloads", P, true),
-    Bool("downloads.disableDownloads", "downloads", P, false),
+    Bool("downloads.askBeforeDownload", "downloads", A, true),
+    Bool("downloads.disableDownloads", "downloads", A, false),
     // Tor Network
     Enum("tor.startMode", "tor", P, kTorStart),
     Enum("tor.bridges.mode", "tor", P, kBridgeModes),

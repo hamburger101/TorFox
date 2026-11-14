@@ -15,6 +15,8 @@ torfox_third_party_flags(torfox_gtest)
 add_executable(torfox_unit_tests
   bridge_validator_test.cc
   cmdline_policy_test.cc
+  chromium_profile_test.cc
+  downloads_test.cc
   guards_test.cc
   internal_url_test.cc
   json_test.cc

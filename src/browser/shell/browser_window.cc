@@ -13,11 +13,13 @@
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/app_common.h"
 #include "src/browser/app/context_manager.h"
+#include "src/browser/app/download_service.h"
 #include "src/browser/app/places_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/platform/platform.h"
+#include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
 #include "src/browser/shell/tab_client.h"
 #include "src/core/browsing/context_menu.h"
@@ -141,6 +143,10 @@ BrowserWindow::BrowserWindow(std::string first_url, bool private_window,
                              CefRefPtr<CefRequestContext> web_context)
     : first_url_(std::move(first_url)),
       private_(private_window),
+      id_([] {
+        static int next_id = 1;
+        return next_id++;
+      }()),
       web_context_(std::move(web_context)),
       shell_height_(std::make_shared<int>(kStripHeight + kToolbarHeight)) {}
 
@@ -227,6 +233,16 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
         self->PushState();  // The star.
         self->PushBookmarksBar();
       }
+    });
+  }
+  if (services.downloads) {
+    downloads_observer_ = services.downloads->AddObserver([self]() {
+      // Downloads were just disabled: no prompt may stay open.
+      if (DownloadService* d = GetServices().downloads;
+          d && d->Decide() == downloads::Decision::kBlock) {
+        self->CancelPrompts(0);
+      }
+      self->PushState();
     });
   }
   window->SetTitle("TorFox");
@@ -358,6 +374,12 @@ BrowserWindow::Result BrowserWindow::CloseTab(int tab_id) {
     return {false, "no such tab"};
   }
   const std::size_t index = static_cast<std::size_t>(pos);
+  CancelPrompts(tab_id);
+  // A tab's downloads end with it (a CEF limit): say so.
+  int cancelled_downloads = 0;
+  if (DownloadService* d = GetServices().downloads) {
+    cancelled_downloads = d->CancelForTab(id_, tab_id, "tab closed");
+  }
   Tab tab = std::move(tabs_[index]);
   tabs_.erase(tabs_.begin() + pos);
   if (find_open_ && find_tab_id_ == tab_id) {
@@ -385,6 +407,11 @@ BrowserWindow::Result BrowserWindow::CloseTab(int tab_id) {
     Activate(tabs_[browsing::NextActiveIndex(index, tabs_.size())].id);
   } else {
     PushState();
+  }
+  if (cancelled_downloads > 0) {
+    ShowNotice(cancelled_downloads == 1
+                   ? "Closing the tab cancelled its download."
+                   : "Closing the tab cancelled its downloads.");
   }
   return {};
 }
@@ -769,6 +796,7 @@ void BrowserWindow::ShowAppMenu(int x, int y) {
   model->AddSeparator();
   add(Command::kShowHistory, "History", 'H');
   add(Command::kShowBookmarks, "Bookmarks", 'O', true);
+  add(Command::kShowDownloads, "Downloads", 'J');
   const int bar_id = kAppMenuBase + static_cast<int>(Command::kToggleBookmarksBar);
   model->AddCheckItem(bar_id, "Show bookmarks bar");
   model->SetChecked(bar_id, BookmarksBarVisible());
@@ -980,6 +1008,9 @@ void BrowserWindow::HandleCommand(browsing::ShortcutCommand command) {
     case Command::kShowBookmarks:
       OpenInternalPage("bookmarks");
       break;
+    case Command::kShowDownloads:
+      OpenInternalPage("downloads");
+      break;
     case Command::kShowHistory:
       OpenInternalPage("history");
       break;
@@ -1156,6 +1187,20 @@ bool BrowserWindow::CanClose(CefRefPtr<CefWindow> window) {
 
 void BrowserWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
   Services& services = GetServices();
+  CancelPrompts(0);
+  if (services.downloads) {
+    if (downloads_observer_) {
+      services.downloads->RemoveObserver(downloads_observer_);
+      downloads_observer_ = 0;
+    }
+    // A private window's downloads leave the list with it; a normal
+    // window's unfinished ones end with it.
+    if (private_) {
+      services.downloads->ForgetWindow(id_);
+    } else {
+      services.downloads->CancelForTab(id_, 0, "window closed");
+    }
+  }
   if (services.settings && settings_observer_) {
     services.settings->RemoveObserver(settings_observer_);
     settings_observer_ = 0;
@@ -1196,6 +1241,15 @@ void BrowserWindow::UpdateTitle() {
   window_->SetTitle(title);
 }
 
+Json BrowserWindow::DownloadsJson() const {
+  DownloadService* d = GetServices().downloads;
+  if (!d) {
+    return {{"active", 0}, {"count", 0}};
+  }
+  const DownloadService::Viewer viewer{private_, id_};
+  return {{"active", d->ActiveCount(viewer)}, {"count", d->VisibleCount(viewer)}};
+}
+
 Json BrowserWindow::StateJson() {
   Json tabs = Json::array();
   Json nav = Json::object();
@@ -1233,7 +1287,8 @@ Json BrowserWindow::StateJson() {
           {"activeId", active_tab_id_},
           {"nav", nav},
           {"findOpen", find_open_},
-          {"bookmarksBar", BookmarksBarVisible()}};
+          {"bookmarksBar", BookmarksBarVisible()},
+          {"downloads", DownloadsJson()}};
 }
 
 Json BrowserWindow::BookmarksBarJson() {
@@ -1274,6 +1329,47 @@ void BrowserWindow::PushBookmarksBar() {
 
 void BrowserWindow::ShowNotice(const std::string& text) {
   PushEvent({{"type", "notice"}, {"text", text}});
+}
+
+void BrowserWindow::ConfirmDownload(int tab_id, const platform::ConfirmPrompt& prompt,
+                                    std::function<void(bool)> done) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!window_ || closing_window_ || !FindTab(tab_id)) {
+    CefPostTask(TID_UI, base::BindOnce([](std::function<void(bool)> f) { f(false); },
+                                       std::move(done)));
+    return;
+  }
+  // The prompt belongs to its tab: show that tab, so the user sees which
+  // page asked.
+  if (active_tab_id_ != tab_id) {
+    Activate(tab_id);
+  }
+  auto slot = std::make_shared<std::shared_ptr<platform::PromptHandle>>();
+  CefRefPtr<BrowserWindow> self = this;
+  std::shared_ptr<platform::PromptHandle> handle = dialogs::Confirm(
+      window_, "download", prompt,
+      [self, slot, done = std::move(done)](bool ok) {
+        auto& prompts = self->prompts_;
+        prompts.erase(std::remove_if(prompts.begin(), prompts.end(),
+                                     [&](const auto& p) { return p.second == *slot; }),
+                      prompts.end());
+        done(ok);
+      });
+  *slot = handle;
+  prompts_.emplace_back(tab_id, std::move(handle));
+}
+
+void BrowserWindow::CancelPrompts(int tab_id) {
+  // Cancel() answers asynchronously, and the answer removes the entry.
+  std::vector<std::shared_ptr<platform::PromptHandle>> cancel;
+  for (const auto& [tab, handle] : prompts_) {
+    if (tab_id == 0 || tab == tab_id) {
+      cancel.push_back(handle);
+    }
+  }
+  for (const auto& handle : cancel) {
+    handle->Cancel();
+  }
 }
 
 void BrowserWindow::AddStateSubscriber(int browser_id,

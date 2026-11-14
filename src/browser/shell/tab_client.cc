@@ -4,18 +4,26 @@
 
 #include "src/browser/shell/tab_client.h"
 
+#include <filesystem>
+#include <optional>
+#include <system_error>
+
 #include "include/cef_parser.h"
 #include "include/base/cef_callback.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "src/browser/app/download_service.h"
 #include "src/browser/app/fault_injection.h"
+#include "src/browser/app/services.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/shell/browser_window.h"
+#include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
 #include "src/core/browsing/context_menu.h"
 #include "src/core/browsing/places.h"
 #include "src/core/browsing/shortcuts.h"
+#include "src/core/downloads/policy.h"
 #include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
 #include "src/core/url/nav_input.h"
@@ -55,6 +63,7 @@ TabClient::TabClient(BrowserRole role,
                      std::string initial_url)
     : role_(role),
       tab_id_(tab_id),
+      download_context_(window && window->is_private() ? window->id() : 0),
       window_(window),
       router_(IsInternalRole(role) ? router : nullptr),
       initial_url_(std::move(initial_url)) {}
@@ -300,23 +309,224 @@ bool TabClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
   return false;
 }
 
-// ----- Downloads (blocked until Stage 3) -------------------------------------
+// ----- Downloads ---------------------------------------------------------------
+//
+// One decision (downloads::Decide, from Settings > Downloads) is applied
+// three times: in CanDownload, before Chromium starts the download; in
+// OnBeforeDownload, before any file is created; and in OnDownloadUpdated,
+// which cancels running downloads once downloads are disabled. Only web tabs
+// ever download.
+
+namespace {
+
+downloads::Decision CurrentDownloadDecision() {
+  DownloadService* d = GetServices().downloads;
+  return d ? d->Decide() : downloads::Decision::kBlock;
+}
+
+}  // namespace
 
 bool TabClient::CanDownload(CefRefPtr<CefBrowser> browser,
                             const CefString& url,
                             const CefString& request_method) {
-  LogBlock("download_blocked", role_, url.ToString(), "downloads not implemented yet");
-  return false;
+  const std::string target = url.ToString();
+  if (role_ != BrowserRole::kWebTab) {
+    LogBlock("download_blocked", role_, target, "not a web tab");
+    return false;
+  }
+  if (fault_injection::SkipDownloadGuard()) {
+    return true;  // Test builds only: OnBeforeDownload's check, on its own.
+  }
+  if (CurrentDownloadDecision() == downloads::Decision::kBlock) {
+    LogBlock("download_blocked", role_, target, "downloads disabled");
+    if (window_) {
+      window_->ShowNotice("Downloads are turned off in Settings.");
+    }
+    return false;
+  }
+  return true;
 }
 
 bool TabClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefDownloadItem> download_item,
                                  const CefString& suggested_name,
                                  CefRefPtr<CefBeforeDownloadCallback> callback) {
-  // Defence in depth: never reached because CanDownload refuses. Returning
-  // true without continuing the callback cancels the download.
-  LogBlock("download_blocked", role_, download_item->GetURL().ToString(), "OnBeforeDownload");
+  // Returning true without ever running |callback| cancels the download.
+  const std::string url = download_item->GetURL().ToString();
+  DownloadService* service = GetServices().downloads;
+  const downloads::Decision decision = CurrentDownloadDecision();
+  if (role_ != BrowserRole::kWebTab || !window_ || !service ||
+      decision == downloads::Decision::kBlock) {
+    // The second layer: in CEF 156 every download the tests can start is
+    // refused by CanDownload first (docs/STAGE3_FINDINGS.md), so this check
+    // is tested with CanDownload switched off (--torfox-test-skip-guards).
+    LogBlock("download_blocked", role_, url,
+             decision == downloads::Decision::kBlock ? "downloads disabled (before download)"
+                                                     : "not a web tab");
+    if (window_ && role_ == BrowserRole::kWebTab) {
+      window_->ShowNotice("Downloads are turned off in Settings.");
+    }
+    return true;
+  }
+  const std::filesystem::path dir = service->Directory();
+  std::error_code ec;
+  if (!service->staging_ready() || dir.empty() ||
+      (!std::filesystem::is_directory(dir, ec) && !std::filesystem::create_directories(dir, ec))) {
+    LogBlock("download_blocked", role_, url, "no download folder");
+    window_->ShowNotice("TorFox could not find your Downloads folder.");
+    return true;
+  }
+  if (DownloadService::Entry* known = service->FindItem(download_context_, download_item->GetId())) {
+    // Chromium restarts a download that failed and cannot be resumed, and
+    // asks for its target again. It keeps the name it was given, and the
+    // user's answer if TorFox asked.
+    if (known->state == DownloadService::State::kInProgress && !known->cancel_requested &&
+        !known->finishing) {
+      test_log::Event("download_restarted", {{"id", known->id}});
+      callback->Continue(platform::PathToUtf8(known->partial), false);
+    } else {
+      // Still waiting for an answer, or already ended: no second start.
+      known->cancel_requested = true;
+      LogBlock("download_blocked", role_, url, "restarted while not running");
+    }
+    return true;
+  }
+  const std::string name = downloads::SafeFileName(suggested_name.ToString());
+  std::optional<std::filesystem::path> path = downloads::UniquePath(
+      dir, name,
+      [service](const std::filesystem::path& p) {
+        std::error_code e;
+        // Chromium's partial file sits beside the target; avoid both, and
+        // names other downloads are waiting to use.
+        return std::filesystem::exists(p, e) ||
+               std::filesystem::exists(DownloadService::PartialPath(p), e) ||
+               service->PathInUse(p);
+      },
+      downloads::kPartialSuffix.size());
+  if (!path) {
+    LogBlock("download_blocked", role_, url, "no free file name");
+    window_->ShowNotice("TorFox could not find a free file name in your Downloads folder.");
+    return true;
+  }
+
+  DownloadService::Entry entry;
+  entry.item_id = download_item->GetId();
+  entry.context = download_context_;
+  entry.url = url;
+  entry.origin = downloads::DisplayOrigin(url);
+  if (entry.origin.empty() && browser && browser->GetMainFrame()) {
+    // data: and other origin-less URLs: show the page that started it.
+    entry.origin = downloads::DisplayOrigin(browser->GetMainFrame()->GetURL().ToString());
+  }
+  entry.name = platform::PathToUtf8(path->filename());
+  entry.path = *path;
+  entry.partial = DownloadService::PartialPath(*path);
+  entry.total = download_item->GetTotalBytes();
+  entry.private_window = window_->is_private();
+  entry.window_id = window_->id();
+  entry.tab_id = tab_id_;
+  entry.state = decision == downloads::Decision::kAllow ? DownloadService::State::kInProgress
+                                                        : DownloadService::State::kAsking;
+  DownloadService::Entry& added = service->Add(entry);
+  const uint32_t id = added.id;
+  test_log::Event("download_named",
+                  {{"id", id}, {"item", entry.item_id}, {"context", entry.context},
+                   {"suggested", suggested_name.ToString()}, {"name", entry.name}});
+  // Chromium writes to the partial name; DownloadService renames the file
+  // once it is complete.
+  const std::string target = platform::PathToUtf8(entry.partial);
+
+  if (decision == downloads::Decision::kAllow) {
+    test_log::Event("download_started", {{"id", id}, {"name", entry.name}, {"asked", false}});
+    callback->Continue(target, false);
+    service->Notify();
+    return true;
+  }
+
+  platform::ConfirmPrompt prompt;
+  prompt.title = "Download this file?";
+  prompt.heading = entry.name;
+  prompt.details = downloads::FormatSize(entry.total) +
+                   (entry.origin.empty() ? std::string() : "\nFrom " + entry.origin);
+  if (downloads::IsDangerousType(entry.name)) {
+    prompt.warning = "This type of file can run programs on your computer. Download it only if "
+                     "you trust where it comes from.";
+  }
+  prompt.accept = "Download";
+  prompt.cancel = "Cancel";
+  service->Notify();
+  window_->ConfirmDownload(tab_id_, prompt, [callback, id, target, name = entry.name](bool ok) {
+    DownloadService* d = GetServices().downloads;
+    DownloadService::Entry* e = d ? d->Find(id) : nullptr;
+    // Checked again: the setting may have changed while the dialog was open.
+    if (!ok || !e || e->cancel_requested || d->Decide() == downloads::Decision::kBlock) {
+      if (e) {
+        e->cancel_requested = true;
+        if (e->control) {
+          e->control->Cancel();
+        }
+        e->state = DownloadService::State::kCancelled;
+      }
+      test_log::Event("download_cancelled", {{"id", id}, {"why", ok ? "changed" : "declined"},
+                                             {"known", e != nullptr}});
+      if (d) {
+        d->Notify();
+      }
+      return;  // |callback| is dropped without Continue: Chromium cancels.
+    }
+    e->state = DownloadService::State::kInProgress;
+    test_log::Event("download_started", {{"id", id}, {"name", name}, {"asked", true}});
+    callback->Continue(target, false);
+    d->Notify();
+  });
   return true;
+}
+
+void TabClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefDownloadItem> download_item,
+                                  CefRefPtr<CefDownloadItemCallback> callback) {
+  if (DownloadService* d = GetServices().downloads) {
+    d->Update(download_context_, download_item, callback);
+  } else if (callback) {
+    callback->Cancel();
+  }
+}
+
+// ----- File dialogs ------------------------------------------------------------
+
+bool TabClient::OnFileDialog(CefRefPtr<CefBrowser> browser,
+                             FileDialogMode mode,
+                             const CefString& title,
+                             const CefString& default_file_path,
+                             const std::vector<CefString>& accept_filters,
+                             const std::vector<CefString>& accept_extensions,
+                             const std::vector<CefString>& accept_descriptions,
+                             CefRefPtr<CefFileDialogCallback> callback) {
+  // A save dialog (for example a page's showSaveFilePicker) writes a file
+  // without the download path, so "Disable downloads" refuses it here.
+  if (mode == FILE_DIALOG_SAVE &&
+      (role_ != BrowserRole::kWebTab ||
+       CurrentDownloadDecision() == downloads::Decision::kBlock)) {
+    test_log::Event("file_dialog_refused", {{"mode", static_cast<int>(mode)},
+                                            {"why", role_ != BrowserRole::kWebTab
+                                                        ? "not a web tab"
+                                                        : "downloads disabled"}});
+    if (window_ && role_ == BrowserRole::kWebTab) {
+      window_->ShowNotice("Downloads are turned off in Settings.");
+    }
+    callback->Cancel();
+    return true;
+  }
+  if (auto scripted = dialogs::TestFileChoice("file", static_cast<int>(mode))) {
+    if (scripted->empty()) {
+      callback->Cancel();
+    } else {
+      std::vector<CefString> paths(scripted->begin(), scripted->end());
+      callback->Continue(paths);
+    }
+    return true;
+  }
+  return false;  // Chromium's native file dialog.
 }
 
 // ----- Find ------------------------------------------------------------------

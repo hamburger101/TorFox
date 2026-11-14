@@ -99,12 +99,17 @@ constexpr std::array<ArgSpec, 1> kHistoryRemoveArgs = {
     ArgSpec{"url", ArgType::kString, true, kMaxNavInputLength, 0, 0},
 };
 
+// Downloads: Chromium's download ids are uint32.
+constexpr std::array<ArgSpec, 1> kDownloadIdArgs = {
+    ArgSpec{"id", ArgType::kInt, true, 0, 1, 0xFFFFFFFFLL},
+};
+
 constexpr CommandSpec Cmd(std::string_view name, std::span<const ArgSpec> args,
                           bool persistent = false) {
   return CommandSpec{name, args, persistent};
 }
 
-const std::array<CommandSpec, 26> kShellCommands = {
+const std::array<CommandSpec, 27> kShellCommands = {
     Cmd("state.subscribe", kNoArgs, true),
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("tab.new", kNoArgs),
@@ -130,6 +135,7 @@ const std::array<CommandSpec, 26> kShellCommands = {
     Cmd("app.openSettings", kNoArgs),
     Cmd("app.openBookmarks", kNoArgs),
     Cmd("app.openHistory", kNoArgs),
+    Cmd("app.openDownloads", kNoArgs),
     Cmd("app.focusContent", kNoArgs),
 };
 
@@ -168,12 +174,24 @@ const std::array<CommandSpec, 6> kHistoryCommands = {
     Cmd("nav.open", kNavOpenArgs),
 };
 
-const std::array<PageSpec, 5> kPages = {
+// No "open the file": TorFox only ever shows a download in its folder.
+const std::array<CommandSpec, 7> kDownloadsCommands = {
+    Cmd("appearance.subscribe", kNoArgs, true),
+    Cmd("downloads.subscribe", kNoArgs, true),
+    Cmd("downloads.list", kNoArgs),
+    Cmd("downloads.cancel", kDownloadIdArgs),
+    Cmd("downloads.reveal", kDownloadIdArgs),
+    Cmd("downloads.remove", kDownloadIdArgs),
+    Cmd("downloads.clear", kNoArgs),
+};
+
+const std::array<PageSpec, 6> kPages = {
     PageSpec{"shell", kShellCommands},
     PageSpec{"newtab", kNewTabCommands},
     PageSpec{"settings", kSettingsCommands},
     PageSpec{"bookmarks", kBookmarksCommands},
     PageSpec{"history", kHistoryCommands},
+    PageSpec{"downloads", kDownloadsCommands},
 };
 
 // ----- Validation -----------------------------------------------------------

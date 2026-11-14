@@ -70,23 +70,8 @@ class Stage1DefaultsTest(unittest.TestCase):
             wait_for(lambda: self.web.evaluate("location.href") == self.page_url and
                      self.web.evaluate("document.readyState") == "complete", 10, "fixture page")
 
-    # Downloads -----------------------------------------------------------------------
-    def test_downloads_are_blocked(self) -> None:
-        before = len(self.tf.events("download_blocked"))
-        self.web.evaluate("document.getElementById('dl').click(); 1", user_gesture=True)
-        wait_for(lambda: len(self.tf.events("download_blocked")) > before, 10, "download_blocked")
-        self.web.evaluate("document.getElementById('dl2').click(); 1", user_gesture=True)
-        wait_for(lambda: len(self.tf.events("download_blocked")) > before + 1, 10, "second download_blocked")
-        self.web.evaluate("""
-          (() => { const a = document.createElement("a");
-                   a.href = URL.createObjectURL(new Blob(["z"])); a.download = "blob.bin";
-                   document.body.appendChild(a); a.click(); })()""", user_gesture=True)
-        wait_for(lambda: len(self.tf.events("download_blocked")) > before + 2, 10, "blob download_blocked")
-        time.sleep(1.0)
-        reasons = {e["why"] for e in self.tf.events("download_blocked")}
-        self.assertNotIn("OnBeforeDownload", reasons, "CanDownload must refuse before any download starts")
-        self.assertFalse(list(downloads_folder().glob(self.name + "*")))
-        self.assertFalse(list(self.tf.user_data.rglob(self.name + "*")))
+    # Downloads: Stage 3 replaced the blanket block with Settings > Downloads;
+    # see test_downloads.py (a fresh profile asks before every download).
 
     # Permissions -------------------------------------------------------------------------
     def test_permission_requests_are_denied(self) -> None:

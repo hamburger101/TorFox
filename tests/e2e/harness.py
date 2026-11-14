@@ -297,7 +297,7 @@ SHELL_STATE = """(() => {
   return JSON.parse(JSON.stringify({
     tabs: s.tabs, activeId: s.activeId, nav: s.nav, private: s.isPrivate,
     findOpen: s.findOpen, findCount: s.findCount, findActive: s.findActive,
-    barVisible: s.barVisible, barItems: s.barItems, notice: s.notice,
+    barVisible: s.barVisible, barItems: s.barItems, notice: s.notice, downloads: s.downloads,
   }));
 })()"""
 
@@ -351,13 +351,80 @@ class Fixture:
 
     def __init__(self) -> None:
         self.routes: dict[str, tuple[int, dict[str, str], bytes]] = {}
+        # path -> (headers, chunk, count, delay): a body sent slowly, chunk by chunk.
+        self.slow_routes: dict[str, tuple] = {}
+        self.range_requests: list[str] = []
         self.requests: list[str] = []
+        self.stopping = threading.Event()
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            def _serve_slow(self, headers, chunk, count, delay, stall_after, cut_after,
+                            resumable) -> None:
+                if resumable:
+                    self._serve_resumable(headers, chunk, count, cut_after)
+                    return
+                self.send_response(200)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(chunk) * count))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    for i in range(count):
+                        if stall_after is not None and i == stall_after:
+                            fixture.stopping.wait()
+                            return
+                        if cut_after is not None and i == cut_after:
+                            self.close_connection = True
+                            return
+                        if fixture.stopping.wait(delay):
+                            return
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except OSError:
+                    pass  # The browser cancelled the download.
+
+            def _serve_resumable(self, headers, chunk, count, cut_after) -> None:
+                # Chunked, with validators and range support, so a browser can
+                # resume it; every response stops after |cut_after| chunks
+                # without the final empty chunk (a network failure).
+                total = len(chunk) * count
+                start = 0
+                rng = self.headers.get("Range", "")
+                if rng.startswith("bytes="):
+                    start = min(int(rng[6:].split("-", 1)[0] or 0), total)
+                    fixture.range_requests.append(self.path.split("?", 1)[0])
+                self.protocol_version = "HTTP/1.1"
+                self.send_response(206 if start else 200)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("ETag", '"torfox-test"')
+                self.send_header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                self.send_header("Accept-Ranges", "bytes")
+                if start:
+                    self.send_header("Content-Range", f"bytes {start}-{total - 1}/{total}")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.close_connection = True
+                data = (chunk * count)[start:]
+                try:
+                    for i in range(0, min(len(data), len(chunk) * cut_after), len(chunk)):
+                        piece = data[i:i + len(chunk)]
+                        self.wfile.write(f"{len(piece):x}\r\n".encode() + piece + b"\r\n")
+                        self.wfile.flush()
+                        if fixture.stopping.wait(0.02):
+                            return
+                except OSError:
+                    pass
+
             def _serve(self) -> None:
                 fixture.requests.append(f"{self.command} {self.path}")
                 path = self.path.split("?", 1)[0]
+                if path in fixture.slow_routes and self.command == "GET":
+                    self._serve_slow(*fixture.slow_routes[path])
+                    return
                 status, headers, body = fixture.routes.get(path, (404, {}, b"not found"))
                 self.send_response(status)
                 for k, v in headers.items():
@@ -391,6 +458,18 @@ class Fixture:
         self.thread.start()
         return self
 
+    def slow(self, path: str, headers: dict[str, str], chunk: bytes, count: int,
+             delay: float, stall_after: int | None = None, cut_after: int | None = None,
+             resumable: bool = False) -> str:
+        """A route that sends |count| chunks, |delay| seconds apart. After
+        |stall_after| chunks it sends nothing more until the fixture stops;
+        after |cut_after| chunks it closes the connection. |resumable| (with
+        |cut_after|) makes it a chunked response a browser can resume, cut
+        again after every |cut_after| chunks."""
+        self.slow_routes[path] = (headers, chunk, count, delay, stall_after, cut_after, resumable)
+        return self.origin + path
+
     def __exit__(self, *exc) -> None:
+        self.stopping.set()
         self.server.shutdown()
         self.server.server_close()

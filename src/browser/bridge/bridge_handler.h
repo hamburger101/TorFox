@@ -16,6 +16,8 @@ namespace torfox {
 // bridge::Validate() using the browser process's own records (registry role,
 // main frame, committed URL) before anything is executed. Rejections return a
 // generic failure to the page and are logged for tests.
+class BrowserWindow;
+
 class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
  public:
   BridgeHandler();
@@ -52,6 +54,13 @@ class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
                       int64_t query_id,
                       CefRefPtr<Callback> callback);
   void NotifyPlaces(bool bookmarks);
+  // downloads.* commands. Returns false if |msg| is not one.
+  bool DispatchDownloads(const bridge::Validated& msg,
+                         BrowserWindow* window,
+                         int browser_id,
+                         int64_t query_id,
+                         CefRefPtr<Callback> callback);
+  void NotifyDownloads();
 
   struct Subscriber {
     int browser_id;
@@ -61,8 +70,10 @@ class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
   std::vector<Subscriber> appearance_subscribers_;
   std::vector<Subscriber> bookmarks_subscribers_;
   std::vector<Subscriber> history_subscribers_;
+  std::vector<Subscriber> downloads_subscribers_;
   int settings_observer_ = 0;
   int places_observer_ = 0;
+  int downloads_observer_ = 0;
 };
 
 }  // namespace torfox

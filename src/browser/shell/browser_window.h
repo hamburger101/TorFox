@@ -5,6 +5,7 @@
 #ifndef TORFOX_BROWSER_SHELL_BROWSER_WINDOW_H_
 #define TORFOX_BROWSER_SHELL_BROWSER_WINDOW_H_
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -17,6 +18,7 @@
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
+#include "src/browser/platform/platform.h"
 #include "src/core/browsing/shortcuts.h"
 #include "src/core/browsing/tabs.h"
 #include "src/core/json.h"
@@ -40,6 +42,17 @@ class BrowserWindow : public CefWindowDelegate {
                    CefRefPtr<BrowserWindow> requester = nullptr);
 
   bool is_private() const { return private_; }
+  // Unique for the session; never reused.
+  int id() const { return id_; }
+
+  // Asks the user before a download (Settings > Downloads > Ask before
+  // download), with a native dialog. |done| runs exactly once on the UI
+  // thread: true only if the user chose to download; false if they declined,
+  // the dialog failed, or |tab_id|'s tab or this window closed first.
+  void ConfirmDownload(int tab_id, const platform::ConfirmPrompt& prompt,
+                       std::function<void(bool)> done);
+  // A short message in the address bar.
+  void ShowNotice(const std::string& text);
 
   // ----- Called by TabClient -----
   void OnClientCreated(TabClient* client, CefRefPtr<CefBrowser> browser);
@@ -147,15 +160,18 @@ class BrowserWindow : public CefWindowDelegate {
   void FillBookmarkMenu(CefRefPtr<CefMenuModel> model, int64_t folder, int depth,
                         std::vector<std::string>* urls, int* next_submenu_id);
   Json StateJson();
+  Json DownloadsJson() const;
   Json BookmarksBarJson();
   void PushState();
   void PushBookmarksBar();
   void PushEvent(const Json& event);
-  void ShowNotice(const std::string& text);
+  // Cancels open download prompts for |tab_id|, or all of them for 0.
+  void CancelPrompts(int tab_id);
   CefRefPtr<CefBrowser> ActiveBrowser();
 
   const std::string first_url_;
   const bool private_;
+  const int id_;
   // Web tabs' context: Normal, or this window's own private context.
   CefRefPtr<CefRequestContext> web_context_;
   CefRefPtr<CefWindow> window_;
@@ -172,6 +188,9 @@ class BrowserWindow : public CefWindowDelegate {
   bool closing_window_ = false;
   int settings_observer_ = 0;
   int places_observer_ = 0;
+  int downloads_observer_ = 0;
+  // Open download prompts and the tab each belongs to.
+  std::vector<std::pair<int, std::shared_ptr<platform::PromptHandle>>> prompts_;
 
   // Find bar.
   bool find_open_ = false;

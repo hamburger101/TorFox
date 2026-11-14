@@ -47,6 +47,7 @@ add_library(torfox_core STATIC
   "${TORFOX_CORE_GEN_DIR}/psl_data.inc"
   "${TORFOX_CORE_GEN_DIR}/psl_vectors.inc"
   json.cc json.h
+  browsing/chromium_profile.cc browsing/chromium_profile.h
   browsing/context_menu.cc browsing/context_menu.h
   browsing/places.cc browsing/places.h
   browsing/shortcuts.cc browsing/shortcuts.h
@@ -54,6 +55,7 @@ add_library(torfox_core STATIC
   browsing/zoom.cc browsing/zoom.h
   bridge/validator.cc bridge/validator.h
   cmdline/policy.cc cmdline/policy.h
+  downloads/policy.cc downloads/policy.h
   settings/schema.cc settings/schema.h
   settings/store.cc settings/store.h
   url/guards.cc url/guards.h
@@ -61,6 +63,7 @@ add_library(torfox_core STATIC
   url/nav_input.cc url/nav_input.h
   url/public_suffix.cc url/public_suffix.h
   util/file_io.cc util/file_io.h
+  util/utf8.cc util/utf8.h
 )
 SET_COMMON_TARGET_PROPERTIES(torfox_core)
 target_include_directories(torfox_core PUBLIC "${CMAKE_SOURCE_DIR}")

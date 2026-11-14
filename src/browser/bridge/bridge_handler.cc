@@ -10,11 +10,13 @@
 #include "include/cef_version.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/browser_registry.h"
+#include "src/browser/app/download_service.h"
 #include "src/browser/app/places_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/app/version.h"
+#include "src/browser/platform/platform.h"
 #include "src/browser/shell/browser_window.h"
 
 namespace torfox {
@@ -49,6 +51,9 @@ BridgeHandler::BridgeHandler() {
       }
     });
   }
+  if (services.downloads) {
+    downloads_observer_ = services.downloads->AddObserver([this]() { NotifyDownloads(); });
+  }
 }
 
 BridgeHandler::~BridgeHandler() = default;
@@ -63,6 +68,11 @@ void BridgeHandler::Shutdown() {
     services.places->RemoveObserver(places_observer_);
   }
   places_observer_ = 0;
+  if (services.downloads && downloads_observer_) {
+    services.downloads->RemoveObserver(downloads_observer_);
+  }
+  downloads_observer_ = 0;
+  downloads_subscribers_.clear();
   appearance_subscribers_.clear();
   bookmarks_subscribers_.clear();
   history_subscribers_.clear();
@@ -71,6 +81,15 @@ void BridgeHandler::Shutdown() {
 void BridgeHandler::NotifyPlaces(bool bookmarks) {
   const std::string payload = DumpJson({{"changed", bookmarks ? "bookmarks" : "history"}});
   for (Subscriber& s : bookmarks ? bookmarks_subscribers_ : history_subscribers_) {
+    s.callback->Success(payload);
+  }
+}
+
+void BridgeHandler::NotifyDownloads() {
+  // Each page asks again with downloads.list, which shows only what its
+  // window may see; the push itself carries nothing.
+  const std::string payload = DumpJson({{"changed", "downloads"}});
+  for (Subscriber& s : downloads_subscribers_) {
     s.callback->Success(payload);
   }
 }
@@ -130,7 +149,8 @@ void BridgeHandler::OnQueryCanceled(CefRefPtr<CefBrowser> browser,
                                     int64_t query_id) {
   const int browser_id = browser->GetIdentifier();
   for (std::vector<Subscriber>* list :
-       {&appearance_subscribers_, &bookmarks_subscribers_, &history_subscribers_}) {
+       {&appearance_subscribers_, &bookmarks_subscribers_, &history_subscribers_,
+        &downloads_subscribers_}) {
     list->erase(std::remove_if(list->begin(), list->end(),
                                [&](const Subscriber& s) {
                                  return s.browser_id == browser_id && s.query_id == query_id;
@@ -213,6 +233,9 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     callback->Failure(kFailed, "no window");
     return;
   }
+  if (DispatchDownloads(msg, window, browser_id, query_id, callback)) {
+    return;
+  }
   // From the shell: the active tab. From an internal tab: that tab.
   const int sender_tab = entry->role == BrowserRole::kShell ? 0 : entry->tab_id;
   if (cmd == "state.subscribe") {
@@ -271,6 +294,9 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
   } else if (cmd == "app.openHistory") {
     window->OpenInternalPage("history");
     Reply(callback, Json::object());
+  } else if (cmd == "app.openDownloads") {
+    window->OpenInternalPage("downloads");
+    Reply(callback, Json::object());
   } else if (cmd == "app.focusContent") {
     window->FocusActiveContent();
     Reply(callback, Json::object());
@@ -293,6 +319,73 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     // Unreachable: the validator only admits commands listed above.
     callback->Failure(kRejected, "rejected");
   }
+}
+
+bool BridgeHandler::DispatchDownloads(const bridge::Validated& msg,
+                                      BrowserWindow* window,
+                                      int browser_id,
+                                      int64_t query_id,
+                                      CefRefPtr<Callback> callback) {
+  const std::string& cmd = msg.command;
+  if (cmd.rfind("downloads.", 0) != 0) {
+    return false;
+  }
+  DownloadService* service = GetServices().downloads;
+  // The page sees and acts on its own window's downloads only (private
+  // downloads never appear in another window).
+  const DownloadService::Viewer viewer{window->is_private(), window->id()};
+  if (cmd == "downloads.subscribe") {
+    downloads_subscribers_.push_back(Subscriber{browser_id, query_id, callback});
+    Reply(callback, {{"changed", ""}});
+    return true;
+  }
+  if (!service) {
+    callback->Failure(kFailed, "Downloads are unavailable.");
+    return true;
+  }
+  const uint32_t id = static_cast<uint32_t>(GetInt(msg.args, "id").value_or(0));
+  if (cmd == "downloads.list") {
+    const downloads::Decision decision = service->Decide();
+    Reply(callback, {{"entries", service->ListJson(viewer)},
+                     {"policy", decision == downloads::Decision::kBlock  ? "disabled"
+                                : decision == downloads::Decision::kAsk ? "ask"
+                                                                        : "allow"},
+                     {"private", viewer.private_window}});
+  } else if (cmd == "downloads.cancel") {
+    if (!service->FindVisible(id, viewer) || !service->Cancel(id)) {
+      callback->Failure(kFailed, "That download is not running.");
+      return true;
+    }
+    Reply(callback, Json::object());
+  } else if (cmd == "downloads.remove") {
+    if (!service->FindVisible(id, viewer) || !service->Remove(id)) {
+      callback->Failure(kFailed, "Only finished downloads can be removed from the list.");
+      return true;
+    }
+    Reply(callback, Json::object());
+  } else if (cmd == "downloads.clear") {
+    service->ClearFinished(viewer);
+    Reply(callback, Json::object());
+  } else if (cmd == "downloads.reveal") {
+    DownloadService::Entry* e = service->FindVisible(id, viewer);
+    if (!e || e->state != DownloadService::State::kComplete) {
+      callback->Failure(kFailed, "That file is not available.");
+      return true;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(e->path, ec)) {
+      callback->Failure(kFailed, "The file has been moved or deleted.");
+      return true;
+    }
+    test_log::Event("download_revealed", {{"id", e->id}});
+    if (!kTestHooks) {
+      platform::RevealInFolder(e->path);
+    }
+    Reply(callback, Json::object());
+  } else {
+    return false;
+  }
+  return true;
 }
 
 bool BridgeHandler::DispatchPlaces(const bridge::Validated& msg,

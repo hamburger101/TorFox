@@ -17,6 +17,8 @@ namespace {
 
 std::atomic<bool> g_skip_nav{false};
 std::atomic<bool> g_skip_resource{false};
+std::atomic<bool> g_skip_download{false};
+std::atomic<bool> g_skip_download_update{false};
 
 }  // namespace
 
@@ -35,6 +37,12 @@ void Configure(std::string_view spec) {
     } else if (item == "resource") {
       g_skip_resource = true;
       applied.push_back("resource");
+    } else if (item == "download") {
+      g_skip_download = true;
+      applied.push_back("download");
+    } else if (item == "download-update") {
+      g_skip_download_update = true;
+      applied.push_back("download-update");
     }
     start = end + 1;
   }
@@ -51,6 +59,14 @@ bool SkipResourceGuard() {
   return g_skip_resource;
 }
 
+bool SkipDownloadGuard() {
+  return g_skip_download;
+}
+
+bool SkipDownloadUpdateGuard() {
+  return g_skip_download_update;
+}
+
 }  // namespace torfox::fault_injection
 
 #else  // !TORFOX_TEST_HOOKS
@@ -64,6 +80,14 @@ bool SkipNavigationGuard() {
 }
 
 bool SkipResourceGuard() {
+  return false;
+}
+
+bool SkipDownloadGuard() {
+  return false;
+}
+
+bool SkipDownloadUpdateGuard() {
   return false;
 }
 

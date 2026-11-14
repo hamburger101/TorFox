@@ -24,6 +24,8 @@ const std::vector<std::string> kTestHookSwitches = {
     "torfox-test-start-url",
     "torfox-test-skip-guards",
     "torfox-test-menu-choice",  // File naming the menu item to pick (tests/e2e).
+    "torfox-test-dialog-choice",  // File naming the answer to the next dialog.
+    "torfox-test-download-dir",   // Folder used instead of Downloads.
 };
 
 // Evidence for each entry is in docs/STAGE0_FINDINGS.md and the quiet-startup
@@ -92,6 +94,13 @@ SwitchMap ForcedSwitches(const std::string& test_host_rules) {
       {"no-pings", ""},
       {"no-first-run", ""},
       {"no-default-browser-check", ""},
+      // The File System Access API's local pickers (showSaveFilePicker,
+      // showOpenFilePicker, showDirectoryPicker) let pages write files
+      // outside the download path, and in Alloy-style browsers a save into a
+      // folder Chromium considers sensitive hangs and closing the tab then
+      // crashes the browser (docs/STAGE3_FINDINGS.md). Firefox, Safari and
+      // Tor Browser do not offer them either. <input type=file> is unaffected.
+      {"disable-blink-features", "FileSystemAccessLocal"},
   };
   std::string rules = kOnionRule;
   if (!test_host_rules.empty()) {

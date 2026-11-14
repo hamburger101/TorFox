@@ -34,7 +34,10 @@ export const SECTIONS: Record<string, SectionLabel> = {
   downloads: {
     title: "Downloads",
     icon: icons.download,
-    note: "Download protection is still being built. Until it is finished, this build blocks every download.",
+    note:
+      "Files are saved to your Downloads folder. TorFox never opens a downloaded file for you. " +
+      "Pages that try to save a file another way (for example a “Save as” picker) are refused " +
+      "while downloads are disabled.",
   },
   tor: {
     title: "Tor Network",

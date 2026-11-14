@@ -159,10 +159,12 @@ class SettingsPageTest(unittest.TestCase):
 
     def test_only_implemented_settings_are_active(self) -> None:
         # Settings become active only once the behaviour behind them is built
-        # and tested (the bookmarks bar toggle: tests/e2e/test_places.py).
+        # and tested (the bookmarks bar toggle: tests/e2e/test_places.py;
+        # downloads: tests/e2e/test_downloads.py).
         data = json.loads(bridge_call(self.page, "settings.get")["response"])
-        self.assertEqual([s["key"] for s in data["settings"] if s["status"] == "active"],
-                         ["appearance.theme", "appearance.showBookmarksBar"])
+        self.assertEqual(sorted(s["key"] for s in data["settings"] if s["status"] == "active"),
+                         sorted(["appearance.theme", "appearance.showBookmarksBar",
+                                 "downloads.askBeforeDownload", "downloads.disableDownloads"]))
 
     def test_about_is_honest(self) -> None:
         self.page.evaluate("document.querySelector('tf-settings').section = 'about'; document.querySelector('tf-settings').updateComplete")

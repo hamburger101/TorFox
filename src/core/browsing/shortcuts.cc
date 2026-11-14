@@ -128,6 +128,8 @@ std::optional<ShortcutCommand> Windows(int key, uint32_t mods) {
         return Cmd(Command::kPreviousTab);
       case 'H':
         return Cmd(Command::kShowHistory);
+      case 'J':
+        return Cmd(Command::kShowDownloads);
     }
   }
   if (mods == (kCtrl | kShift)) {
@@ -205,6 +207,8 @@ std::optional<ShortcutCommand> Mac(int key, uint32_t mods) {
         return Cmd(Command::kNextTab);
       case 'B':
         return Cmd(Command::kShowBookmarks);
+      case 'L':
+        return Cmd(Command::kShowDownloads);
     }
   }
   return std::nullopt;

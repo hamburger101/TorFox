@@ -6,8 +6,10 @@
 #define TORFOX_BROWSER_SHELL_TAB_CLIENT_H_
 
 #include <string>
+#include <vector>
 
 #include "include/cef_client.h"
+#include "include/cef_dialog_handler.h"
 #include "include/cef_find_handler.h"
 #include "include/views/cef_browser_view.h"
 #include "include/wrapper/cef_message_router.h"
@@ -27,6 +29,7 @@ class BrowserWindow;
 //  * only internal browsers' messages ever reach the bridge router.
 class TabClient : public CefClient,
                   public CefContextMenuHandler,
+                  public CefDialogHandler,
                   public CefDisplayHandler,
                   public CefDownloadHandler,
                   public CefFindHandler,
@@ -51,6 +54,7 @@ class TabClient : public CefClient,
 
   // CefClient
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+  CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
@@ -91,8 +95,8 @@ class TabClient : public CefClient,
                         const CefString& source,
                         int line) override;
 
-  // CefDownloadHandler: downloads are blocked until Stage 3 implements the
-  // download policy (fail closed).
+  // CefDownloadHandler: Settings > Downloads (downloads::Decide), applied
+  // before the download starts, before a file is created, and while it runs.
   bool CanDownload(CefRefPtr<CefBrowser> browser,
                    const CefString& url,
                    const CefString& request_method) override;
@@ -100,6 +104,23 @@ class TabClient : public CefClient,
                         CefRefPtr<CefDownloadItem> download_item,
                         const CefString& suggested_name,
                         CefRefPtr<CefBeforeDownloadCallback> callback) override;
+  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefDownloadItem> download_item,
+                         CefRefPtr<CefDownloadItemCallback> callback) override;
+  // Which Chromium download numbering this tab's downloads use: 0 for the
+  // normal profile, the window's id for a private window (its own
+  // off-the-record profile). Fixed when the tab is created.
+  int download_context() const { return download_context_; }
+
+  // CefDialogHandler: save dialogs are refused while downloads are disabled.
+  bool OnFileDialog(CefRefPtr<CefBrowser> browser,
+                    FileDialogMode mode,
+                    const CefString& title,
+                    const CefString& default_file_path,
+                    const std::vector<CefString>& accept_filters,
+                    const std::vector<CefString>& accept_extensions,
+                    const std::vector<CefString>& accept_descriptions,
+                    CefRefPtr<CefFileDialogCallback> callback) override;
 
   // CefFindHandler
   void OnFindResult(CefRefPtr<CefBrowser> browser,
@@ -208,6 +229,7 @@ class TabClient : public CefClient,
 
   const BrowserRole role_;
   const int tab_id_;
+  const int download_context_;
   CefRefPtr<BrowserWindow> window_;  // Cleared in OnBeforeClose.
   CefRefPtr<CefMessageRouterBrowserSide> router_;  // Internal roles only.
   std::string initial_url_;

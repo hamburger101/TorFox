@@ -20,10 +20,12 @@ class BrowserWindow;
 class ContextManager;
 class PlacesService;
 class SettingsService;
+class DownloadService;
 
 struct StartupOptions {
   std::filesystem::path user_data_dir;
   std::string start_url;  // Web URL for the first tab, or empty for the new tab page.
+  std::filesystem::path download_dir;  // Test builds only; empty = the platform's.
 };
 
 // CefApp for the browser process: command-line policy, startup checks,
@@ -53,6 +55,7 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   StartupOptions options_;
   std::unique_ptr<SettingsService> settings_;
   std::unique_ptr<PlacesService> places_;
+  std::unique_ptr<DownloadService> downloads_;
   std::unique_ptr<ContextManager> contexts_;
   std::unique_ptr<BridgeHandler> bridge_;
   CefRefPtr<CefMessageRouterBrowserSide> router_;

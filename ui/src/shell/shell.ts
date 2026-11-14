@@ -45,6 +45,7 @@ type ShellEvent =
       nav: NavState;
       findOpen: boolean;
       bookmarksBar: boolean;
+      downloads: { active: number; count: number };
     }
   | { type: "bookmarksBar"; visible: boolean; items: BarItem[] }
   | { type: "find"; count: number; active: number; final: boolean }
@@ -113,6 +114,7 @@ export class TorFoxShell extends LitElement {
     barVisible: { state: true },
     barItems: { state: true },
     drag: { state: true },
+    downloads: { state: true },
   };
 
   declare tabs: TabState[];
@@ -130,6 +132,7 @@ export class TorFoxShell extends LitElement {
   declare barVisible: boolean;
   declare barItems: BarItem[];
   declare drag: Drag | null;
+  declare downloads: { active: number; count: number };
   private noticeTimer = 0;
 
   constructor() {
@@ -149,6 +152,7 @@ export class TorFoxShell extends LitElement {
     this.barVisible = false;
     this.barItems = [];
     this.drag = null;
+    this.downloads = { active: 0, count: 0 };
   }
 
   override connectedCallback(): void {
@@ -186,6 +190,7 @@ export class TorFoxShell extends LitElement {
         this.nav = e.nav;
         this.isPrivate = e.private;
         this.barVisible = e.bookmarksBar;
+        this.downloads = e.downloads ?? { active: 0, count: 0 };
         if (!e.findOpen && this.findOpen) {
           this.findText = "";
           this.findCount = -1;
@@ -508,6 +513,13 @@ export class TorFoxShell extends LitElement {
                 @click=${() => this.star()}>${nav.bookmarked ? icons.starFilled : icons.star}</button>`
             : nothing}
         </form>
+        ${this.downloads.count > 0
+          ? html`<button class="icon downloads ${this.downloads.active > 0 ? "active" : ""}" id="downloads"
+              title=${this.downloads.active > 0 ? `Downloads (${this.downloads.active} in progress)` : "Downloads"}
+              aria-label=${this.downloads.active > 0 ? `Downloads, ${this.downloads.active} in progress` : "Downloads"}
+              @click=${() => this.run("app.openDownloads")}>${icons.download}${this.downloads.active > 0
+                ? html`<span class="badge">${this.downloads.active}</span>` : nothing}</button>`
+          : nothing}
         <button class="icon" id="menu" title="Menu" aria-label="Menu"
           @click=${(e: MouseEvent) => this.run("app.menu", anchor(e.currentTarget as Element, "right"))}>${icons.menu}</button>
       </div>
@@ -518,6 +530,27 @@ export class TorFoxShell extends LitElement {
 
   // Row heights must match BrowserWindow (src/browser/shell/browser_window.cc).
   static override styles = [base, css`
+    .downloads {
+      position: relative;
+    }
+    .downloads.active {
+      color: var(--accent);
+    }
+    .downloads .badge {
+      position: absolute;
+      top: 2px;
+      right: 1px;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 3px;
+      border-radius: 7px;
+      background: var(--accent-strong);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 14px;
+      text-align: center;
+    }
     :host {
       display: flex;
       flex-direction: column;

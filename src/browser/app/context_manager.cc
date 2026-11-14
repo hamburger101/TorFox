@@ -248,6 +248,18 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
   if (!SetPrefVerified(context, name, "history.saving_disabled", BoolValue(true), error)) {
     return false;
   }
+  // Downloads (web contexts): TorFox chooses every file's path itself
+  // (TabClient::OnBeforeDownload), but Chromium writes a download's first
+  // bytes to a temporary file in this folder before that. It is TorFox's
+  // staging folder, so unconfirmed bytes never land in Downloads.
+  if (kind != Kind::kInternal && !download_dir_.empty()) {
+    if (!SetPrefVerified(context, name, "download.default_directory",
+                         StringValue(platform::PathToUtf8(download_dir_)), error) ||
+        !SetPrefVerified(context, name, "download.prompt_for_download", BoolValue(false),
+                         error)) {
+      return false;
+    }
+  }
   // Internal pages never use the network, so their context must not even
   // look for a proxy ("wpad" lookups; see BrowserApp::ApplyGlobalPrefs).
   if (kind == Kind::kInternal &&

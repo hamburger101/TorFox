@@ -102,11 +102,105 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          "  for (const PageSpec& any_page : pages) for (const CommandSpec& c : any_page.commands) {"),
     ], ["e2e:test_bridge.BridgeValidationTest.test_commands_of_other_pages",
         "e2e:test_bridge.BridgeValidationTest.test_rejections_change_nothing"]),
+    # ----- Stage 3: downloads (tests/e2e/test_downloads.py) -----
+    "downloads-disable-ignored": ([
+        ("src/core/downloads/policy.cc",
+         "  if (disable_downloads) {\n    return Decision::kBlock;\n  }\n", ""),
+    ], ["unit:DownloadPolicy.DisableOverridesAsk",
+        "e2e:test_downloads.DownloadTest.test_disabled_blocks_every_vector"]),
     "downloads-allowed-by-can-download": ([
         ("src/browser/shell/tab_client.cc",
-         "  LogBlock(\"download_blocked\", role_, url.ToString(), \"downloads not implemented yet\");\n  return false;",
+         "  if (CurrentDownloadDecision() == downloads::Decision::kBlock) {\n"
+         "    LogBlock(\"download_blocked\", role_, target, \"downloads disabled\");",
+         "  if (false) {\n"
+         "    LogBlock(\"download_blocked\", role_, target, \"downloads disabled\");"),
+    ], ["e2e:test_downloads.DownloadTest.test_disabled_blocks_every_vector"]),
+    "downloads-no-recheck-before-download": ([
+        ("src/browser/shell/tab_client.cc",
+         "  if (role_ != BrowserRole::kWebTab || !window_ || !service ||\n"
+         "      decision == downloads::Decision::kBlock) {",
+         "  if (role_ != BrowserRole::kWebTab || !window_ || !service) {"),
+    ], ["e2e:test_downloads.InnerLayerTest.test_before_download_refuses_every_vector"]),
+    "downloads-ask-skipped": ([
+        ("src/browser/shell/tab_client.cc",
+         "  if (decision == downloads::Decision::kAllow) {\n"
+         "    test_log::Event(\"download_started\", {{\"id\", id}, {\"name\", entry.name}, {\"asked\", false}});",
+         "  if (true) {\n"
+         "    test_log::Event(\"download_started\", {{\"id\", id}, {\"name\", entry.name}, {\"asked\", false}});"),
+    ], ["e2e:test_downloads.DownloadTest.test_ask_and_cancel_saves_nothing", "e2e:test_downloads.DownloadTest.test_aa_a_new_profile_asks_first"]),
+    "downloads-declined-answer-ignored": ([
+        ("src/browser/shell/tab_client.cc",
+         "    if (!ok || !e || e->cancel_requested || d->Decide() == downloads::Decision::kBlock) {",
+         "    if (!e || e->cancel_requested || d->Decide() == downloads::Decision::kBlock) {"),
+    ], ["e2e:test_downloads.DownloadTest.test_ask_and_cancel_saves_nothing"]),
+    "downloads-unconfirmed-bytes-in-downloads": ([
+        ("src/browser/app/browser_app.cc",
+         "  contexts_->SetDownloadDirectory(downloads_->StagingDirectory());",
+         "  contexts_->SetDownloadDirectory(downloads_->Directory());"),
+    ], ["e2e:test_downloads.DownloadTest.test_closing_the_tab_cancels_an_open_prompt"]),
+    "downloads-disabling-leaves-them-running": ([
+        ("src/browser/app/download_service.cc",
+         "        CancelAll(\"downloads disabled\");", "        Notify();"),
+    ], ["e2e:test_downloads.SettingsLayerTest.test_disabling_cancels_running_downloads_and_prompts"]),
+    "downloads-partial-file-has-final-name": ([
+        ("src/browser/shell/tab_client.cc",
+         "  const std::string target = platform::PathToUtf8(entry.partial);",
+         "  const std::string target = platform::PathToUtf8(entry.path);"),
+    ], ["e2e:test_downloads.DownloadTest.test_unfinished_files_never_have_their_final_name"]),
+    "downloads-tab-close-not-recorded": ([
+        ("src/browser/shell/browser_window.cc",
+         "    cancelled_downloads = d->CancelForTab(id_, tab_id, \"tab closed\");",
+         "    cancelled_downloads = 0;"),
+    ], ["e2e:test_downloads.DownloadTest.test_unfinished_files_never_have_their_final_name"]),
+    "downloads-private-visible-everywhere": ([
+        ("src/browser/app/download_service.cc",
+         "  if (viewer.private_window) {\n    return e.private_window && e.window_id == viewer.window_id;\n  }\n"
+         "  return !e.private_window;",
          "  return true;"),
-    ], ["e2e:test_stage1_defaults.Stage1DefaultsTest.test_downloads_are_blocked"]),
+    ], ["e2e:test_downloads.DownloadTest.test_private_downloads_stay_in_their_window"]),
+    "downloads-names-not-sanitized": ([
+        ("src/browser/shell/tab_client.cc",
+         "  const std::string name = downloads::SafeFileName(suggested_name.ToString());",
+         "  const std::string name = suggested_name.ToString();"),
+    ], ["e2e:test_downloads.DownloadTest.test_names_are_made_safe_and_unique"]),
+    "downloads-names-not-unique": ([
+        ("src/core/downloads/policy.cc",
+         "    if (!exists(*path)) {", "    if (true) {"),
+    ], ["unit:DownloadPath.*", "e2e:test_downloads.DownloadTest.test_names_are_made_safe_and_unique"]),
+    "file-system-access-pickers-enabled": ([
+        ("src/core/cmdline/policy.cc",
+         "      {\"disable-blink-features\", \"FileSystemAccessLocal\"},\n", ""),
+    ], ["e2e:test_downloads.DownloadTest.test_file_system_access_pickers_are_absent"]),
+    "downloads-same-name-while-waiting": ([
+        ("src/browser/shell/tab_client.cc",
+         "               std::filesystem::exists(DownloadService::PartialPath(p), e) ||\n"
+         "               service->PathInUse(p);",
+         "               std::filesystem::exists(DownloadService::PartialPath(p), e);"),
+    ], ["e2e:test_downloads.DownloadTest.test_downloads_waiting_at_the_same_time_get_different_names"]),
+    "downloads-path-too-long": ([
+        ("src/core/downloads/policy.cc",
+         "    if (path.native().size() + reserve <= kMaxPathLength) {", "    if (true) {"),
+    ], ["unit:DownloadPath.StaysWithinThePathLimit",
+        "e2e:test_downloads.DownloadTest.test_names_are_made_safe_and_unique"]),
+    "downloads-leftovers-kept": ([
+        ("src/browser/app/download_service.cc",
+         "    const bool removed = std::filesystem::remove(partial, ec);",
+         "    const bool removed = false;"),
+    ], ["e2e:test_downloads.DownloadTest.test_leftover_partial_files_are_removed"]),
+    "downloads-restart-gets-new-name": ([
+        ("src/browser/shell/tab_client.cc",
+         "  if (DownloadService::Entry* known = service->FindItem(download_context_, download_item->GetId())) {",
+         "  if (DownloadService::Entry* known = nullptr) {"),
+    ], ["e2e:test_downloads.DownloadTest.test_restarted_downloads_keep_their_name"]),
+    "chromium-download-records-kept": ([
+        ("src/core/browsing/chromium_profile.cc",
+         "      if (!ok || !Exec(db, (\"DELETE FROM \" + Quoted(table)).c_str())) {",
+         "      if (!ok || table.empty()) {"),
+    ], ["unit:ChromiumProfileTest.*", "e2e:test_downloads.DownloadRecordsTest.test_download_records_are_erased"]),
+    "downloads-program-warning-missing": ([
+        ("src/browser/shell/tab_client.cc",
+         "  if (downloads::IsDangerousType(entry.name)) {", "  if (false) {"),
+    ], ["e2e:test_downloads.DownloadTest.test_programs_are_flagged_in_the_prompt"]),
     "onion-allowed-in-web-tabs": ([
         (GUARDS, '  if ((scheme == "http" || scheme == "https") && IsOnionHost(HostOf(url))) {', "  if (false) {"),
         (GUARDS, "  if (IsHttpLike(scheme) && IsOnionHost(HostOf(url))) {", "  if (false) {"),

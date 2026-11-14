@@ -32,8 +32,10 @@ distribution. The result is the same.
 | `--torfox-test-user-data` | Throw-away profile |
 | `--torfox-test-host-rules` | Maps fixture hostnames to local servers |
 | `--torfox-test-start-url` | Start URL |
-| `--torfox-test-skip-guards=nav[,resource]` | Fault injection: turns off TorFox's navigation or resource guard so the inner layers can be tested on their own |
+| `--torfox-test-skip-guards=nav[,resource][,download][,download-update]` | Fault injection: turns off TorFox's navigation guard, resource guard, `CanDownload` refusal or the per-update download cancel, so the layers they hide can be tested on their own |
 | `--torfox-test-menu-choice=<file>` | Native menus: instead of showing a menu, log its items (`menu_shown`) and pick the item whose label path (`Folder/Item`) is in the file. The file is deleted each time; no file means the menu is dismissed |
+| `--torfox-test-dialog-choice=<file>` | Native prompts (the download prompt) and file dialogs: log what would be shown (`dialog_shown`) and answer from the file: `accept`, `cancel`, `hold` (leave it open), or `file:<path>` for a file dialog. Consumed each time; no file means the real dialog |
+| `--torfox-test-download-dir=<dir>` | Download folder used instead of the user's Downloads folder |
 
 None of this exists in a release build. The release platform test passes these switches and checks that they
 have no effect.
@@ -55,7 +57,7 @@ GoogleTest, in `tests/unit/`, covering:
 ## End-to-end tests (Windows)
 ```
 cd tests/e2e
-python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private
+python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads
 ```
 Each test starts the test build (`out/test/...`, or set `TORFOX_TEST_EXE`) with a fresh temporary profile.
 It drives TorFox over DevTools on loopback and serves fixtures from local HTTP servers. No internet access
@@ -68,16 +70,18 @@ is needed, and none is used.
 | `test_internal_pages.py` | Security headers, strict CSP, eval and inline scripts blocked, Trusted Types, no subframes |
 | `test_settings.py` | Persistence across restart, corrupt-file recovery, invalid values falling back to safe defaults |
 | `test_lifecycle.py` | Opening and closing tabs and windows, and replacing a browser when its role changes |
-| `test_stage1_defaults.py` | Downloads blocked, permissions denied, onion refused and never searched, pop-ups only on a click, DuckDuckGo search, no data in Chrome's `Default` profile |
+| `test_stage1_defaults.py` | Permissions denied, onion refused and never searched, pop-ups only on a click, DuckDuckGo search, no data in Chrome's `Default` profile |
 | `test_quiet_startup.py` | NetLog of an idle session: no connections and no proxy auto-discovery from service contexts. Onion names never reach the resolver |
 | `test_browsing.py` | Address bar and DuckDuckGo URLs, onion input, navigation controls, error pages, tabs (new, close, reopen, reorder, drag), keyboard shortcuts, find, zoom, context and app menus |
 | `test_places.py` | History recorded only by TorFox (Chromium's `History` stays empty), History page search/remove/clear leaving no bytes behind, bookmarks star/bar/manager and persistence |
 | `test_private.py` | Private windows: marking, no history, storage isolated from normal and other private windows, links stay private, nothing left on disk (with a control) |
+| `test_downloads.py` | The download bypass matrix (11 vectors × Disable / Ask-cancel / Ask-accept / Allow), prompts held and cancelled by closing the tab or turning downloads off, staging folder, partial names, safe and unique names, Mark of the Web, File System Access pickers absent, the downloads page and private-window separation, names that fit the path limit and are reserved while waiting, failed, restarted and stalled downloads, `OnBeforeDownload` on its own (`InnerLayerTest`), Chromium's download records erased after a quit and a crash (`DownloadRecordsTest`), the real Downloads folder untouched |
 
 `TORFOX_QUIET_SECONDS` sets the idle time (the default is 20; CI uses 60).
 
 Known gaps are written as `expectedFailure` tests, so a fix shows up as an unexpected success. See
-[`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) and [`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md).
+[`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md), [`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md) and
+[`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md).
 
 The tests open real windows. Don't type while they run: keystrokes can land in a test window and make it
 browse for real (this happened once and showed up in the quiet-startup test).

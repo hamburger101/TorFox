@@ -39,6 +39,7 @@ enum class Command {
   kToggleBookmarksBar,
   kShowBookmarks,
   kShowHistory,
+  kShowDownloads,
   kSettings,
 };
 

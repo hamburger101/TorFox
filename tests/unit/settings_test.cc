@@ -61,7 +61,9 @@ TEST(SettingsSchema, SaferDefaults) {
 TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
   // A setting becomes active only once its feature exists and is tested;
   // every other setting stays "planned".
-  const std::set<std::string_view> active = {"appearance.theme", "appearance.showBookmarksBar"};
+  const std::set<std::string_view> active = {"appearance.theme", "appearance.showBookmarksBar",
+                                             "downloads.askBeforeDownload",
+                                             "downloads.disableDownloads"};
   for (const Def& d : AllSettings()) {
     EXPECT_EQ(d.status, active.count(d.key) ? Status::kActive : Status::kPlanned) << d.key;
   }

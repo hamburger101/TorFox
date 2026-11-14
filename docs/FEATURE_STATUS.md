@@ -14,8 +14,8 @@ Legend:
 **macOS:** the build files and platform code exist but have never been compiled, so every macOS entry is
 ⬜ or 🟡 until CI builds and tests them.
 
-Last updated: end of Stage 2 (2026-11-14). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) and
-[`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md).
+Last updated: end of Stage 3 (2026-11-14). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
+[`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md) and [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md).
 
 | Area | Feature | Windows | macOS | Evidence |
 |---|---|---|---|---|
@@ -39,9 +39,18 @@ Last updated: end of Stage 2 (2026-11-14). The evidence is in [`STAGE1_FINDINGS.
 | Browsing | Address-bar suggestions | ⬜ | ⬜ | Stage 6 |
 | Search | Typed queries go to DuckDuckGo; `.onion` input is never searched | ✅ | ⬜ | `test_search_goes_to_duckduckgo`, `test_onion_input_is_refused_and_never_searched`, `test_onion_input_is_never_searched_or_loaded` |
 | Search | Selected text searched from the context menu; never if it mentions `.onion` | ✅ M | ⬜ | `test_selection_search_uses_duckduckgo`, `test_onion_selections_are_never_searched` |
-| Downloads | All downloads blocked (interim default until Stage 3) | ✅ M | ⬜ | `test_downloads_are_blocked` |
-| Downloads | Ask before download (default ON) | ⬜ | ⬜ | Stage 3 |
-| Downloads | Disable downloads blocks every vector | ⬜ | ⬜ | Stage 3 |
+| Downloads | Disable downloads blocks every vector (11 vectors; overrides Ask), in `CanDownload` and again in `OnBeforeDownload` | ✅ M | ⬜ | `test_disabled_blocks_every_vector`, `InnerLayerTest` (findings §3.10) |
+| Downloads | Ask before download (default ON): native prompt with name, size, origin; cancel leaves no file | ✅ M | 🟡 | `test_ask_and_cancel_saves_nothing`, `test_ask_and_accept_saves_the_file`, `test_aa_a_new_profile_asks_first`; macOS sheet never compiled |
+| Downloads | Unconfirmed bytes only in TorFox's staging folder, never in Downloads | ✅ M | ⬜ | `test_closing_the_tab_cancels_an_open_prompt` (findings §2) |
+| Downloads | Turning downloads off cancels running downloads and open prompts | ✅ M | ⬜ | `test_disabling_cancels_running_downloads_and_prompts` |
+| Downloads | Safe, unique file names; partial files never have the final name | ✅ M | ⬜ | `test_names_are_made_safe_and_unique`, `test_unfinished_files_never_have_their_final_name`, `DownloadFileName.*` |
+| Downloads | Names fit the path limit; reserved while waiting; kept across Chromium's restarts | ✅ M | ⬜ | `DownloadPath.*`, `test_downloads_waiting_at_the_same_time_get_different_names`, `test_restarted_downloads_keep_their_name` (findings §3.5, §3.6) |
+| Downloads | Failed downloads leave no partial file (TorFox's own clean-up as a backstop) | ✅ M | ⬜ | `test_failed_downloads_leave_nothing_behind`, `test_leftover_partial_files_are_removed` (findings §3.9) |
+| Downloads | Chromium's own download records (normal profile `History`, `DownloadMetadata`) erased when Chromium is not running | ✅ M | ⬜ | `ChromiumProfileTest.*`, `test_download_records_are_erased`; present on disk while TorFox runs (findings §3.8) |
+| Downloads | Mark of the Web kept on finished files | ✅ | ⬜ | `test_finished_files_are_marked_as_downloaded` |
+| Downloads | Pages cannot write files another way (File System Access pickers off) | ✅ M | ⬜ | `test_file_system_access_pickers_are_absent` (findings §3.4) |
+| Downloads | Downloads page (list, cancel, show in folder, remove, clear; no "open"), per-window for private windows | ✅ M | ⬜ | `test_downloads_page_*`, `test_private_downloads_stay_in_their_window` |
+| Downloads | Drag-out of links/images; print to PDF | 🟡 | 🟡 | Not testable by automation (findings §6) |
 | Privacy | Tracker blocking | ⬜ | ⬜ | Stage 4; WebSockets need another mechanism (findings §5) |
 | Privacy | Third-party cookie blocking | ⬜ | ⬜ | Stage 4 |
 | Privacy | HTTPS-first | ⬜ | ⬜ | Stage 4 |

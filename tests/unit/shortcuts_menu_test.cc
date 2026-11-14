@@ -29,6 +29,7 @@ TEST(Shortcuts, WindowsBrowserConventions) {
   EXPECT_EQ(Win(0x73, kCtrl), Command::kCloseTab);  // Ctrl+F4
   EXPECT_EQ(Win('W', kCtrl | kShift), Command::kCloseWindow);
   EXPECT_EQ(Win('T', kCtrl | kShift), Command::kReopenClosedTab);
+  EXPECT_EQ(Win('J', kCtrl), Command::kShowDownloads);
   EXPECT_EQ(Win('L', kCtrl), Command::kFocusAddress);
   EXPECT_EQ(Win('D', kAlt), Command::kFocusAddress);
   EXPECT_EQ(Win(0x75, 0), Command::kFocusAddress);  // F6
@@ -91,6 +92,7 @@ TEST(Shortcuts, MacConventions) {
   EXPECT_EQ(Mac('T', kCmd), Command::kNewTab);
   EXPECT_EQ(Mac('N', kCmd | kShift), Command::kNewPrivateWindow);
   EXPECT_EQ(Mac('T', kCmd | kShift), Command::kReopenClosedTab);
+  EXPECT_EQ(Mac('L', kCmd | kAlt), Command::kShowDownloads);
   EXPECT_EQ(Mac(0xDB, kCmd), Command::kBack);
   EXPECT_EQ(Mac(0xDD, kCmd), Command::kForward);
   EXPECT_EQ(Mac(0xDB, kCmd | kShift), Command::kPreviousTab);

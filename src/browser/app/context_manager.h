@@ -51,6 +51,11 @@ class ContextManager {
   // runs after Shutdown().
   void CreatePrivate(PrivateCallback done);
 
+  // Chromium's default download folder for web contexts, where it writes
+  // a download's first bytes before TorFox picks the real path
+  // (DownloadService::StagingDirectory()). Call before Initialize().
+  void SetDownloadDirectory(std::filesystem::path dir) { download_dir_ = std::move(dir); }
+
   // Drops every reference; required before CefShutdown().
   void Shutdown();
 
@@ -67,6 +72,7 @@ class ContextManager {
   CefRefPtr<CefRequestContext> normal_;
   CefRefPtr<CefSchemeHandlerFactory> scheme_factory_;
   std::filesystem::path normal_path_;
+  std::filesystem::path download_dir_;
   DoneCallback done_;
   int pending_ = 0;
   bool failed_ = false;

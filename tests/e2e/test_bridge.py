@@ -120,7 +120,7 @@ class BridgeValidationTest(unittest.TestCase):
     # Semantic checks after validation ------------------------------------------------
     def test_settings_service_refusals(self) -> None:
         for key, value, expected in (
-            ("downloads.disableDownloads", True, "not_available"),
+            ("tor.startMode", "at-launch", "not_available"),
             ("privacy.httpsFirst", False, "not_available"),
             ("appearance.theme", "purple", "invalid_value"),
             ("appearance.theme", 1, "invalid_value"),

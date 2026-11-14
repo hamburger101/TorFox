@@ -15,11 +15,18 @@ namespace torfox::fault_injection {
 // on their own:
 //   --torfox-test-skip-guards=nav            OnBeforeBrowse allows everything
 //   --torfox-test-skip-guards=nav,resource   ... and so does OnBeforeResourceLoad
+//   --torfox-test-skip-guards=download       CanDownload allows every download,
+//                                            so OnBeforeDownload's check is tested
+//   --torfox-test-skip-guards=download-update  progress updates do not cancel
+//                                            downloads when downloads are disabled,
+//                                            so the settings change itself is tested
 // In release builds Configure() does nothing and every query is false; the
 // command-line policy also drops the switch.
 void Configure(std::string_view spec);
 bool SkipNavigationGuard();
 bool SkipResourceGuard();
+bool SkipDownloadGuard();
+bool SkipDownloadUpdateGuard();
 
 }  // namespace torfox::fault_injection
 

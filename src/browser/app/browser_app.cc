@@ -11,6 +11,8 @@
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/app_common.h"
 #include "src/browser/app/context_manager.h"
+#include "src/browser/app/download_service.h"
+#include "src/core/browsing/chromium_profile.h"
 #include "src/browser/app/renderer_app.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
@@ -21,6 +23,7 @@
 #include "src/browser/platform/platform.h"
 #include "src/browser/scheme/internal_scheme.h"
 #include "src/browser/shell/browser_window.h"
+#include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
 #include "src/core/cmdline/policy.h"
 
@@ -167,6 +170,12 @@ void BrowserApp::OnContextInitialized() {
   places_ = std::make_unique<PlacesService>(options_.user_data_dir / "places.db");
   places_->Open();
   g_services.places = places_.get();
+
+  // Downloads: the policy from Settings > Downloads and the in-memory list.
+  downloads_ = std::make_unique<DownloadService>(settings_.get(), options_.download_dir,
+                                                 options_.user_data_dir / "Pending Downloads");
+  downloads_->PrepareStaging();
+  g_services.downloads = downloads_.get();
   g_services.window_opened = [this](BrowserWindow* w) { windows_.insert(w); };
   g_services.window_destroyed = [this](BrowserWindow* w) {
     windows_.erase(w);
@@ -181,6 +190,7 @@ void BrowserApp::OnContextInitialized() {
   g_services.router = router_;
 
   contexts_ = std::make_unique<ContextManager>();
+  contexts_->SetDownloadDirectory(downloads_->StagingDirectory());
   g_services.contexts = contexts_.get();
   CefRefPtr<BrowserApp> self = this;
   contexts_->Initialize(options_.user_data_dir / "User Data", CreateInternalSchemeFactory(),
@@ -239,6 +249,7 @@ void BrowserApp::Shutdown() {
   }
   contexts_.reset();
   g_services = Services();
+  downloads_.reset();
   places_.reset();
   settings_.reset();
   windows_.clear();
@@ -266,6 +277,12 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
       test_log::InstallCrashTrace();
       fault_injection::Configure(raw->GetSwitchValue("torfox-test-skip-guards").ToString());
       menus::ConfigureTestChoice(raw->GetSwitchValue("torfox-test-menu-choice").ToString());
+      dialogs::ConfigureTestChoice(raw->GetSwitchValue("torfox-test-dialog-choice").ToString());
+      const std::string download_dir =
+          raw->GetSwitchValue("torfox-test-download-dir").ToString();
+      if (!download_dir.empty()) {
+        options.download_dir = platform::PathFromUtf8(download_dir);
+      }
       const std::string start = raw->GetSwitchValue("torfox-test-start-url").ToString();
       if (cmdline::IsAbsoluteHttpUrl(start)) {
         options.start_url = start;
@@ -317,6 +334,16 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   }
   test_log::Event("startup", {{"sandbox_info", sandbox_info != nullptr},
                               {"user_data", platform::PathToUtf8(options.user_data_dir)}});
+  // Chromium's own record of downloads (docs/STAGE3_FINDINGS.md), erased
+  // while Chromium is not running: now, and again after CefShutdown. The
+  // normal profile's folder is the one ContextManager gives it.
+  const std::filesystem::path normal_profile = options.user_data_dir / "User Data" / "Normal";
+  {
+    const chromium_profile::ScrubResult scrub = chromium_profile::ScrubDownloadRecords(normal_profile);
+    test_log::Event("download_records_erased", {{"ok", scrub.ok},
+                                                {"rows", scrub.rows},
+                                                {"metadata", scrub.metadata_removed}});
+  }
 
   CefSettings settings;
   settings.no_sandbox = false;
@@ -348,6 +375,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   browser_app = nullptr;
   app = nullptr;
   CefShutdown();
+  chromium_profile::ScrubDownloadRecords(normal_profile);
   return 0;
 }
 
