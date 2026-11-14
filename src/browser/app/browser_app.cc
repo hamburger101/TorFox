@@ -21,6 +21,7 @@
 #include "src/browser/app/places_service.h"
 #include "src/browser/app/privacy_service.h"
 #include "src/browser/app/test_log.h"
+#include "src/browser/app/tor_service.h"
 #include "src/browser/bridge/bridge_handler.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/scheme/internal_scheme.h"
@@ -29,6 +30,7 @@
 #include "src/browser/shell/menus.h"
 #include "src/core/cmdline/policy.h"
 #include "src/core/settings/store.h"
+#include "src/core/util/file_io.h"
 
 namespace torfox {
 
@@ -239,6 +241,36 @@ void BrowserApp::OnContextInitialized() {
   });
   privacy_->SetCookiePolicyListener([this](bool block) { ApplyCookiePolicy(block); });
   g_services.contexts = contexts_.get();
+
+  // Tor. Nothing runs until a Tor window opens (or at launch, if Settings >
+  // Tor says so).
+  {
+    TorService::Options tor_options;
+    tor_options.state_dir = options_.user_data_dir / "Tor";
+    tor_options.paths = platform::BundledTorPaths();
+    tor_options.test_exe = options_.tor_test_exe;
+    tor_options.test_args = options_.tor_test_args;
+    tor_options.notice_log = kTestHooks;
+    tor_ = std::make_shared<TorService>(tor_options, [this](int port) {
+      std::string err;
+      const bool ok = contexts_ && contexts_->SetTorPort(port, &err);
+      test_log::Event("tor_port_applied", {{"port", port}, {"ok", ok}, {"error", err}});
+      return ok;
+    });
+    std::weak_ptr<TorService> weak_tor = tor_;
+    contexts_->SetTorGate([weak_tor] {
+      std::shared_ptr<TorService> t = weak_tor.lock();
+      return t && t->connected();
+    });
+    g_services.tor = tor_;
+    g_services.tor_start = [this] { StartTor(); };
+    g_services.tor_new_identity = [this](BrowserWindow* w) { NewTorIdentity(w); };
+    tor_settings_observer_ = settings_->AddObserver([this](const std::string& key) {
+      if (key.rfind("tor.bridges.", 0) == 0) {
+        RestartTorIfRunning();
+      }
+    });
+  }
   CefRefPtr<BrowserApp> self = this;
   contexts_->Initialize(options_.user_data_dir / "User Data", CreateInternalSchemeFactory(),
                         [self](bool ok, const std::string& err) {
@@ -247,7 +279,69 @@ void BrowserApp::OnContextInitialized() {
                             return;
                           }
                           BrowserWindow::Open(self->options_.start_url);
+                          if (self->settings_ &&
+                              self->settings_->store().GetString("tor.startMode") == "at-launch") {
+                            self->StartTor();
+                          }
                         });
+}
+
+namespace {
+
+TorService::BridgeConfig BridgeSettings(const settings::Store& store) {
+  TorService::BridgeConfig c;
+  c.mode = store.GetString("tor.bridges.mode");
+  c.builtin_type = store.GetString("tor.bridges.builtinType");
+  c.custom = store.GetString("tor.bridges.custom");
+  return c;
+}
+
+}  // namespace
+
+void BrowserApp::StartTor() {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !tor_ || !settings_) {
+    return;
+  }
+  tor_->Start(BridgeSettings(settings_->store()));
+}
+
+void BrowserApp::RestartTorIfRunning() {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !tor_ || !settings_ || tor_->status().state == TorService::State::kOff) {
+    return;
+  }
+  test_log::Event("tor_bridges_changed");
+  tor_->Restart(BridgeSettings(settings_->store()));
+}
+
+void BrowserApp::NewTorIdentity(BrowserWindow* requester) {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !contexts_ || !tor_) {
+    return;
+  }
+  // The Tor windows open now share the Tor context (cookies, cache, open
+  // connections): all of them close. The next Tor window gets a new context,
+  // and tor builds new circuits for it.
+  std::vector<CefRefPtr<BrowserWindow>> old;
+  for (BrowserWindow* w : windows_) {
+    if (w->is_tor()) {
+      old.emplace_back(w);
+    }
+  }
+  contexts_->DropTor();
+  tor_->NewIdentity([](bool ok) { test_log::Event("tor_newnym", {{"ok", ok}}); });
+  // The new window opens first, so closing the old ones never leaves TorFox
+  // without a window (which would quit).
+  BrowserWindow::OpenTor("", requester && !requester->is_tor() ? CefRefPtr<BrowserWindow>(requester)
+                                                              : nullptr,
+                         [old](CefRefPtr<BrowserWindow> created) {
+                           test_log::Event("tor_new_identity", {{"closed", old.size()},
+                                                                {"opened", created != nullptr}});
+                           for (const CefRefPtr<BrowserWindow>& w : old) {
+                             w->Close();
+                           }
+                         });
 }
 
 bool BrowserApp::OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine> command_line,
@@ -328,6 +422,14 @@ void BrowserApp::Shutdown() {
   }
   bridge_.reset();
   router_ = nullptr;
+  // tor first: it stops before the Tor context's network goes away.
+  if (settings_ && tor_settings_observer_) {
+    settings_->RemoveObserver(tor_settings_observer_);
+    tor_settings_observer_ = 0;
+  }
+  if (tor_) {
+    tor_->Shutdown();
+  }
   if (contexts_) {
     contexts_->Shutdown();
   }
@@ -346,6 +448,7 @@ void BrowserApp::Shutdown() {
     settings_->RemoveObserver(proxy_observer_);
     proxy_observer_ = 0;
   }
+  tor_.reset();
   privacy_.reset();
   downloads_.reset();
   places_.reset();
@@ -387,6 +490,26 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
         if (AllDigits(p.http) && AllDigits(p.https)) {
           options.https_test_ports = std::move(p);
         }
+      }
+      const std::string tor_command = raw->GetSwitchValue("torfox-test-tor-command").ToString();
+      if (!tor_command.empty()) {
+        const ReadResult r = ReadFileLimited(platform::PathFromUtf8(tor_command), 64 * 1024);
+        std::optional<Json> j =
+            r.status == ReadStatus::kOk ? ParseJson(r.data, 64 * 1024, 4) : std::nullopt;
+        if (j && j->is_object()) {
+          if (std::optional<std::string> exe = GetString(*j, "exe")) {
+            options.tor_test_exe = platform::PathFromUtf8(*exe);
+          }
+          if (j->contains("args") && (*j)["args"].is_array()) {
+            for (const Json& a : (*j)["args"]) {
+              if (a.is_string()) {
+                options.tor_test_args.push_back(a.get<std::string>());
+              }
+            }
+          }
+        }
+        test_log::Event("tor_test_command", {{"exe", platform::PathToUtf8(options.tor_test_exe)},
+                                             {"args", options.tor_test_args.size()}});
       }
       const std::string start = raw->GetSwitchValue("torfox-test-start-url").ToString();
       if (cmdline::IsAbsoluteHttpUrl(start)) {

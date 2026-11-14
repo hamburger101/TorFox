@@ -44,8 +44,11 @@ export const SECTIONS: Record<string, SectionLabel> = {
     title: "Tor Network",
     icon: icons.onion,
     note:
-      "Tor is not available in this build. Onion addresses are refused and are never sent " +
-      "to a search engine or resolved through ordinary DNS.",
+      "Tor windows send every connection through the Tor network, using the official Tor " +
+      "client that comes with TorFox, and wait while Tor is not connected. Onion addresses " +
+      "open only in Tor windows and are never searched for or looked up with ordinary DNS. " +
+      "TorFox is not Tor Browser: it lacks Tor Browser's protections against fingerprinting, " +
+      "and it keeps sites apart only by giving each site address its own Tor circuits.",
   },
   appearance: { title: "Appearance", icon: icons.appearance },
   updates: {
@@ -63,6 +66,8 @@ export interface SettingLabel {
   description?: string;
   values?: Record<string, string>;
   group?: string;
+  // Shown instead of the generic message when the value is refused.
+  invalid?: string;
 }
 
 const PERMISSION_VALUES = { deny: "Block", ask: "Ask" };
@@ -142,7 +147,7 @@ export const SETTINGS: Record<string, SettingLabel> = {
   },
   "tor.startMode": {
     title: "Connect to Tor",
-    values: { "on-demand": "When I open a Tor tab", "at-launch": "When TorFox starts" },
+    values: { "on-demand": "When I open a Tor window", "at-launch": "When TorFox starts" },
   },
   "tor.bridges.mode": {
     title: "Bridges",
@@ -157,8 +162,13 @@ export const SETTINGS: Record<string, SettingLabel> = {
   },
   "tor.bridges.custom": {
     title: "Custom bridges",
-    description: "One bridge line per line.",
+    description:
+      "Used when Bridges is Custom: one bridge line per line, as bridges.torproject.org gives " +
+      "them (obfs4, WebTunnel, Snowflake, meek, or a plain address). Lines starting with # are ignored.",
     group: "Bridges",
+    invalid:
+      "One of these lines is not a bridge line TorFox can use. Check that each line was copied " +
+      "completely; nothing was saved.",
   },
   "appearance.theme": {
     title: "Theme",

@@ -30,6 +30,8 @@ struct Def {
   std::string_view default_string;
   std::span<const std::string_view> enum_values;  // kEnum only
   std::size_t max_length = 0;                     // kString only
+  // kString only: a further check of the text (for example, bridge lines).
+  bool (*check)(std::string_view text) = nullptr;
 };
 
 // Every setting TorFox knows about, in display order. Defaults are always the

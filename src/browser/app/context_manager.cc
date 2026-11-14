@@ -9,8 +9,10 @@
 #include "include/cef_request_context_handler.h"
 #include "include/cef_values.h"
 #include "include/wrapper/cef_helpers.h"
+#include "src/browser/app/fault_injection.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/platform/platform.h"
+#include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
 
 namespace torfox {
@@ -37,6 +39,21 @@ CefRefPtr<CefValue> ProxyValue(const char* mode) {
   return value;
 }
 
+// The Tor context's only route: tor's SOCKS port. Chromium resolves names
+// at the proxy for socks5:// (the hostname goes to tor, never to local DNS),
+// and with a single proxy and no "DIRECT" entry it never falls back to a
+// direct connection. "<-loopback>" removes the implicit loopback bypass, so
+// even 127.0.0.1 and localhost go to tor, which refuses them.
+CefRefPtr<CefValue> TorProxyValue(int port) {
+  CefRefPtr<CefDictionaryValue> dict = CefDictionaryValue::Create();
+  dict->SetString("mode", "fixed_servers");
+  dict->SetString("server", "socks5://127.0.0.1:" + std::to_string(port));
+  dict->SetString("bypass_list", "<-loopback>");
+  CefRefPtr<CefValue> value = CefValue::Create();
+  value->SetDictionary(dict);
+  return value;
+}
+
 CefRefPtr<CefValue> BoolValue(bool v) {
   CefRefPtr<CefValue> value = CefValue::Create();
   value->SetBool(v);
@@ -51,6 +68,8 @@ const char* KindName(ContextManager::Kind kind) {
       return "normal";
     case ContextManager::Kind::kPrivate:
       return "private";
+    case ContextManager::Kind::kTor:
+      return "tor";
   }
   return "unknown";
 }
@@ -93,17 +112,65 @@ class ContextManager::Handler : public CefRequestContextHandler {
   IMPLEMENT_REFCOUNTING(Handler);
 };
 
+// Cancels the Tor context's requests that no tab made, while tor is not
+// connected, and any to this computer or the local network.
+class TorGate : public CefResourceRequestHandler {
+ public:
+  explicit TorGate(std::function<bool()> allowed) : allowed_(std::move(allowed)) {}
+
+  ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser,
+                                   CefRefPtr<CefFrame> frame,
+                                   CefRefPtr<CefRequest> request,
+                                   CefRefPtr<CefCallback> callback) override {
+    const std::string url = request->GetURL().ToString();
+    std::string why = guards::ResourceBlockReason(guards::Role::kTorTab, url);
+    if (why.empty() && !fault_injection::SkipTorGuard() && !(allowed_ && allowed_())) {
+      why = "tor not connected";
+    }
+    if (!why.empty()) {
+      test_log::Event("tor_blocked", {{"role", "context"}, {"url", url.substr(0, 300)}, {"why", why}});
+      return RV_CANCEL;
+    }
+    return RV_CONTINUE;
+  }
+
+ private:
+  const std::function<bool()> allowed_;
+  IMPLEMENT_REFCOUNTING(TorGate);
+};
+
 class ContextManager::PrivateHandler : public CefRequestContextHandler {
  public:
-  PrivateHandler(ContextManager* owner, PrivateCallback done)
-      : owner_(owner), done_(std::move(done)) {}
+  PrivateHandler(ContextManager* owner, PrivateCallback done, bool tor = false,
+                 std::function<bool()> tor_gate = nullptr)
+      : owner_(owner),
+        done_(std::move(done)),
+        tor_(tor),
+        gate_(tor ? new TorGate(std::move(tor_gate)) : nullptr) {}
+
+  // Only reached for requests no browser's client handles (CEF asks the
+  // browser's client first, and TorFox's tabs always answer).
+  CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefRefPtr<CefRequest> request,
+      bool is_navigation,
+      bool is_download,
+      const CefString& request_initiator,
+      bool& disable_default_handling) override {
+    return gate_;
+  }
 
   void OnRequestContextInitialized(CefRefPtr<CefRequestContext> context) override {
     CEF_REQUIRE_UI_THREAD();
     if (owner_) {
       ContextManager* owner = owner_;
       owner_ = nullptr;
-      owner->OnPrivateInitialized(this, context);
+      if (tor_) {
+        owner->OnTorInitialized(this, context);
+      } else {
+        owner->OnPrivateInitialized(this, context);
+      }
     }
   }
 
@@ -118,6 +185,8 @@ class ContextManager::PrivateHandler : public CefRequestContextHandler {
  private:
   ContextManager* owner_;
   PrivateCallback done_;
+  const bool tor_;
+  CefRefPtr<TorGate> gate_;
   IMPLEMENT_REFCOUNTING(PrivateHandler);
 };
 
@@ -133,6 +202,83 @@ void ContextManager::CreatePrivate(PrivateCallback done) {
   settings.persist_session_cookies = false;
   CefRefPtr<PrivateHandler> handler = new PrivateHandler(this, std::move(done));
   pending_private_[handler.get()] = CefRequestContext::CreateContext(settings, handler);
+}
+
+void ContextManager::CreateTor(int socks_port, PrivateCallback done) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!internal_ || !normal_) {
+    done(nullptr, "TorFox is not ready to open a Tor window.");
+    return;
+  }
+  if (socks_port > 0) {
+    tor_port_ = socks_port;
+  }
+  if (tor_) {
+    done(tor_, std::string());
+    return;
+  }
+  tor_waiting_.push_back(std::move(done));
+  if (tor_pending_) {
+    return;
+  }
+  tor_pending_ = true;
+  CefRequestContextSettings settings;
+  settings.persist_session_cookies = false;
+  CefRefPtr<PrivateHandler> handler = new PrivateHandler(this, nullptr, true, tor_gate_);
+  pending_private_[handler.get()] = CefRequestContext::CreateContext(settings, handler);
+}
+
+void ContextManager::OnTorInitialized(PrivateHandler* handler,
+                                      CefRefPtr<CefRequestContext> context) {
+  pending_private_.erase(handler);
+  tor_pending_ = false;
+  std::vector<PrivateCallback> waiting;
+  waiting.swap(tor_waiting_);
+  std::string error;
+  if (!CheckStorage(Kind::kTor, context, &error) || !ApplyPrefs(Kind::kTor, context, &error)) {
+    test_log::Event("tor_context_failed", {{"error", error}});
+    for (PrivateCallback& done : waiting) {
+      done(nullptr, error);
+    }
+    return;
+  }
+  tor_ = context;
+  test_log::Event("context_ready", {{"kind", "tor"}, {"socks_port", tor_port_}});
+  for (PrivateCallback& done : waiting) {
+    done(context, std::string());
+  }
+}
+
+bool ContextManager::SetTorPort(int socks_port, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  tor_port_ = socks_port;
+  if (!tor_) {
+    return true;
+  }
+  return SetPrefVerified(tor_, "tor", "proxy", TorProxyValue(tor_port_), error);
+}
+
+void ContextManager::DropTor() {
+  CEF_REQUIRE_UI_THREAD();
+  if (tor_) {
+    old_tor_.push_back(tor_);
+  }
+  tor_ = nullptr;
+}
+
+bool ContextManager::IsTor(CefRefPtr<CefRequestContext> context) const {
+  if (!context) {
+    return false;
+  }
+  if (tor_ && tor_->IsSame(context)) {
+    return true;
+  }
+  for (const auto& old : old_tor_) {
+    if (old->IsSame(context)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ContextManager::OnPrivateInitialized(PrivateHandler* handler,
@@ -209,7 +355,7 @@ bool ContextManager::CheckStorage(Kind kind,
   // for could not be created. Confirm each context is the one requested.
   const std::string actual = context->GetCachePath().ToString();
   bool ok = !context->IsGlobal();
-  if (kind == Kind::kInternal || kind == Kind::kPrivate) {
+  if (kind == Kind::kInternal || kind == Kind::kPrivate || kind == Kind::kTor) {
     ok = ok && actual.empty();  // Off the record: nothing on disk.
   } else {
     std::error_code ec;
@@ -234,15 +380,18 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
   if (!SetPrefVerified(context, name, "net.network_prediction_options", IntValue(2), error)) {
     return false;
   }
-  // Third-party cookies: always blocked for internal pages; web contexts
-  // follow Settings > Privacy & Security.
-  const int cookie_mode = kind == Kind::kInternal || block_third_party_cookies_ ? 1 : 0;
+  // Third-party cookies: always blocked for internal pages and Tor windows;
+  // normal and private windows follow Settings > Privacy & Security.
+  const int cookie_mode =
+      kind == Kind::kInternal || kind == Kind::kTor || block_third_party_cookies_ ? 1 : 0;
   if (!SetPrefVerified(context, name, "profile.cookie_controls_mode", IntValue(cookie_mode),
                        error)) {
     return false;
   }
-  const char* webrtc = kind == Kind::kInternal ? "disable_non_proxied_udp"
-                                               : "default_public_interface_only";
+  // Tor: SOCKS cannot carry UDP, so WebRTC may use no other route.
+  const char* webrtc = kind == Kind::kInternal || kind == Kind::kTor
+                           ? "disable_non_proxied_udp"
+                           : "default_public_interface_only";
   if (!SetPrefVerified(context, name, "webrtc.ip_handling_policy", StringValue(webrtc), error)) {
     return false;
   }
@@ -274,6 +423,10 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
       return false;
     }
   }
+  // Tor: tor's SOCKS port and nothing else.
+  if (kind == Kind::kTor) {
+    return SetPrefVerified(context, name, "proxy", TorProxyValue(tor_port_), error);
+  }
   // Web contexts: direct unless the user chose the system's proxy settings.
   if (kind != Kind::kInternal &&
       !SetPrefVerified(context, name, "proxy",
@@ -297,6 +450,9 @@ bool ContextManager::SetBlockThirdPartyCookies(bool block, std::string* error) {
 
 bool ContextManager::ApplyCookiePolicy(CefRefPtr<CefRequestContext> context, std::string* error) {
   CEF_REQUIRE_UI_THREAD();
+  if (IsTor(context)) {
+    return true;  // Always blocked in the Tor context.
+  }
   const std::string name = context == normal_ ? "normal" : "private";
   return SetPrefVerified(context, name, "profile.cookie_controls_mode",
                          IntValue(block_third_party_cookies_ ? 1 : 0), error);
@@ -310,6 +466,12 @@ bool ContextManager::SetUseSystemProxy(bool use_system, std::string* error) {
 
 bool ContextManager::ApplyProxyMode(CefRefPtr<CefRequestContext> context, std::string* error) {
   CEF_REQUIRE_UI_THREAD();
+  if (IsTor(context)) {
+    // Never: the Tor context's proxy is tor's SOCKS port, whatever the
+    // system proxy setting says.
+    test_log::Event("proxy_mode_refused", {{"context", "tor"}});
+    return true;
+  }
   const std::string name = context == normal_ ? "normal" : "private";
   return SetPrefVerified(context, name, "proxy",
                          ProxyValue(use_system_proxy_ ? "system" : "direct"), error);
@@ -358,6 +520,9 @@ void ContextManager::Shutdown() {
   }
   internal_ = nullptr;
   normal_ = nullptr;
+  tor_ = nullptr;
+  old_tor_.clear();
+  tor_waiting_.clear();
   for (auto& [handler, context] : pending_private_) {
     handler->Detach();
   }

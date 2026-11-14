@@ -46,9 +46,79 @@ HTTPS = PRIV + ".HttpsFirstTest"
 PERM = PRIV + ".PermissionTest"
 EXT = PRIV + ".ExternalProtocolTest"
 CLEAR = PRIV + ".ClearOnExitTest"
+TOR = "e2e:test_tor"
+CTX = "src/browser/app/context_manager.cc"
 
 # name -> ([(file, old, new), ...], [checks that must each fail])
 MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
+    # ----- Tor windows (Stage 5) -----
+    # Layer 1: a Tor tab's own guard holds requests back until tor is connected.
+    "tor-tab-guard-off": ([
+        (TAB, "  return !(tor_service_ && tor_service_->connected());\n}", "  return false;\n}"),
+    ], [TOR + ".TorWindowTest.test_tor_window_waits_for_tor_then_loads_through_tor_only",
+        TOR + ".TorFailsClosedTest.test_when_tor_dies_nothing_loads_until_it_is_back"]),
+    # Layer 2: the Tor context's gate, for requests no tab makes.
+    "tor-context-gate-off": ([
+        (CTX, "    if (why.empty() && !fault_injection::SkipTorGuard() && !(allowed_ && allowed_())) {",
+         "    if (false) {"),
+    ], [TOR + ".TorContextGateTest"]),
+    "tor-context-gate-allows-local-addresses": ([
+        (CTX, "    std::string why = guards::ResourceBlockReason(guards::Role::kTorTab, url);",
+         "    std::string why;"),
+    ], [TOR + ".TorContextGateTest"]),
+    # Layer 3: the proxy never falls back to a direct connection.
+    "tor-proxy-falls-back-to-direct": ([
+        (CTX, '  dict->SetString("server", "socks5://127.0.0.1:" + std::to_string(port));',
+         '  dict->SetString("server", "socks5://127.0.0.1:" + std::to_string(port) + ",direct://");'),
+    ], [TOR + ".ProxyLayerTest", TOR + ".ProxyLayerAfterDeathTest"]),
+    "tor-context-follows-system-proxy": ([
+        (CTX, "  if (IsTor(context)) {\n    // Never: the Tor context's proxy", "  if (false) {\n    // Never: the Tor context's proxy"),
+    ], [TOR + ".TorContextIsolationTest.test_system_proxy_setting_never_changes_the_tor_context"]),
+    "tor-local-addresses-allowed": ([
+        (GUARDS, '  if ((scheme == "http" || scheme == "https") && role == Role::kTorTab &&\n      IsLocalNetworkHost(HostOf(url))) {',
+         "  if (false) {"),
+        (GUARDS, "  if (IsHttpLike(scheme) && role == Role::kTorTab && IsLocalNetworkHost(HostOf(url))) {",
+         "  if (false) {"),
+    ], ["unit:TorGuards.TorTabsAllowOnionHostsAndRefuseLocalAddresses",
+        TOR + ".TorWindowTest.test_tor_windows_refuse_this_computer_and_the_local_network"]),
+    "tor-webrtc-not-restricted": ([
+        (CTX, "  const char* webrtc = kind == Kind::kInternal || kind == Kind::kTor\n",
+         "  const char* webrtc = kind == Kind::kInternal\n"),
+    ], [TOR + ".TorContextIsolationTest.test_webrtc_in_tor_windows_reveals_no_address"]),
+    "tor-camera-and-clipboard-asked": ([
+        (TAB, '  if (tor_) {\n    return deny("tor window");\n  }\n  if (requested_permissions & ~(kCamera | kMicrophone)) {',
+         "  if (requested_permissions & ~(kCamera | kMicrophone)) {"),
+        (TAB, '  if (tor_) {\n    return deny("tor window");\n  }\n  if (requested_permissions != CEF_PERMISSION_TYPE_CLIPBOARD) {',
+         "  if (requested_permissions != CEF_PERMISSION_TYPE_CLIPBOARD) {"),
+    ], [TOR + ".TorSecureContextTest.test_permissions_and_other_apps_are_refused"]),
+    "tor-other-apps-allowed": ([
+        (TAB, "    if (tor_) {\n      // Another app would open the link without Tor.", "    if (false) {\n      // Another app would open the link without Tor."),
+    ], [TOR + ".TorSecureContextTest.test_permissions_and_other_apps_are_refused"]),
+    "tor-links-open-in-private-windows": ([
+        (TAB, "    if (!tor_) {\n      model->AddItem(kOpenLinkInPrivateWindow", "    if (true) {\n      model->AddItem(kOpenLinkInPrivateWindow"),
+    ], [TOR + ".TorWindowTest.test_link_menu_never_leaves_tor"]),
+    "tor-searches-use-clearnet-duckduckgo": ([
+        ("src/core/tor/onion.cc", "  if (url.substr(0, kClearnet.size()) != kClearnet) {", "  if (true) {"),
+    ], ["unit:TorOnion.TorSearchesUseDuckDuckGosOnionService",
+        TOR + ".TorWindowTest.test_searches_in_tor_windows_use_duckduckgos_onion_service"]),
+    "onion-checksum-not-checked": ([
+        ("src/core/tor/onion.cc", "  if (digest[0] != bytes[32] || digest[1] != bytes[33]) {", "  if (false) {"),
+    ], ["unit:TorOnion.ChecksVersion3AddressesIncludingTheirChecksum",
+        TOR + ".TorWindowTest.test_mistyped_onion_addresses_are_refused_and_never_searched"]),
+    "tor-new-identity-keeps-the-context": ([
+        (APP, "  contexts_->DropTor();\n  tor_->NewIdentity(", "  tor_->NewIdentity("),
+    ], [TOR + ".NewIdentityTest"]),
+    "tor-not-in-a-kill-on-close-job": ([
+        ("src/browser/platform/platform_win.cc", "  if (!::AssignProcessToJobObject(job, pi.hProcess)) {", "  if (false) {"),
+    ], [TOR + ".TorProcessTest.test_the_job_alone_ends_tor_if_torfox_is_killed"]),
+    "tor-custom-bridges-unchecked": ([
+        ("src/core/tor/bridges.cc", "  return ParseBridgeLines(text).errors.empty();", "  return true;"),
+    ], ["unit:SettingsSchema.ValidatesTypesAndConstraints", TOR + ".BridgeSettingsTest.test_invalid_custom_bridges_are_refused"]),
+    "tor-per-destination-circuits-off": ([
+        ("src/core/tor/torrc.cc", '  t += "SocksPort 127.0.0.1:auto ExtendedErrors IsolateDestAddr\\n";',
+         '  t += "SocksPort 127.0.0.1:auto ExtendedErrors\\n";'),
+    ], ["unit:Torrc.ListensOnLoopbackOnlyWithCookieAuthAndExitsWithTorFox",
+        TOR + ".TorWindowTest.test_torrc_and_control_session"]),
     # Layer: TorFox's navigation guard (OnBeforeBrowse) for web tabs.
     "nav-guard-allows-privileged-schemes": ([
         (GUARDS,
@@ -209,8 +279,9 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          "  if (downloads::IsDangerousType(entry.name)) {", "  if (false) {"),
     ], ["e2e:test_downloads.DownloadTest.test_programs_are_flagged_in_the_prompt"]),
     "onion-allowed-in-web-tabs": ([
-        (GUARDS, '  if ((scheme == "http" || scheme == "https") && IsOnionHost(HostOf(url))) {', "  if (false) {"),
-        (GUARDS, "  if (IsHttpLike(scheme) && IsOnionHost(HostOf(url))) {", "  if (false) {"),
+        (GUARDS, '  if ((scheme == "http" || scheme == "https") && role != Role::kTorTab &&\n      IsOnionHost(HostOf(url))) {',
+         "  if (false) {"),
+        (GUARDS, "  if (IsHttpLike(scheme) && role != Role::kTorTab && IsOnionHost(HostOf(url))) {", "  if (false) {"),
     ], ["unit:GuardsTest.WebTabsNeverReachOnionHosts",
         "e2e:test_stage1_defaults.Stage1DefaultsTest.test_onion_subresources_and_navigation_are_blocked"]),
     # The forced host-resolver rule: the only layer that stops onion
@@ -265,9 +336,9 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         "e2e:test_private.PrivateWindowTest.test_nothing_from_a_private_window_reaches_the_disk"]),
     "private-windows-share-normal-context": ([
         ("src/browser/shell/browser_window.cc",
-         "        CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url, true, context));",
+         "        CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url, true, false, context));",
          "        CefWindow::CreateTopLevelWindow(new BrowserWindow(\n"
-         "            first_url, true, GetServices().contexts->Get(ContextManager::Kind::kNormal)));"),
+         "            first_url, true, false, GetServices().contexts->Get(ContextManager::Kind::kNormal)));"),
     ], ["e2e:test_private.PrivateWindowTest.test_storage_is_isolated_between_windows",
         "e2e:test_private.PrivateWindowTest.test_nothing_from_a_private_window_reaches_the_disk"]),
     "onion-selections-searchable": ([
@@ -308,9 +379,14 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         PRIV + ".TrackerTest.test_tracker_sites_work_when_visited_directly"]),
     "third-party-cookies-allowed": ([
         ("src/browser/app/context_manager.cc",
-         "  const int cookie_mode = kind == Kind::kInternal || block_third_party_cookies_ ? 1 : 0;",
-         "  const int cookie_mode = 0;"),
+         "      kind == Kind::kInternal || kind == Kind::kTor || block_third_party_cookies_ ? 1 : 0;",
+         "      kind == Kind::kInternal || kind == Kind::kTor ? 1 : 0;"),
     ], [PRIV + ".CookieTest.test_third_party_cookies_are_blocked"]),
+    "tor-third-party-cookies-follow-the-setting": ([
+        ("src/browser/app/context_manager.cc",
+         "      kind == Kind::kInternal || kind == Kind::kTor || block_third_party_cookies_ ? 1 : 0;",
+         "      kind == Kind::kInternal || block_third_party_cookies_ ? 1 : 0;"),
+    ], [TOR + ".TorSecureContextTest.test_third_party_cookies_are_always_blocked"]),
     "popups-without-click-allowed": ([
         (TAB, "  if (!user_gesture && (!privacy || privacy->block_popups())) {",
          "  if (!user_gesture && privacy == nullptr) {"),

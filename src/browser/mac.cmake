@@ -60,6 +60,24 @@ set_target_properties(${CEF_TARGET} PROPERTIES
 # CefScopedLibraryLoader, as the macOS sandbox requires).
 COPY_MAC_FRAMEWORK("${CEF_TARGET}" "${CEF_BINARY_DIR}" "${CEF_APP}")
 
+# ----- Tor -------------------------------------------------------------------
+# The official Tor Expert Bundle for this architecture (OpenPGP-verified, then
+# pinned by SHA-256 in deps.lock.json), in Contents/Helpers/tor so the app's
+# signature covers it. tor-gencert is a relay tool: left out.
+if(PROJECT_ARCH STREQUAL "arm64")
+  torfox_verified_dep(TORFOX_TOR_DIR tor macos-aarch64)
+else()
+  torfox_verified_dep(TORFOX_TOR_DIR tor macos-x86_64)
+endif()
+set(_tor_out "${CEF_APP}/Contents/Helpers/tor")
+add_custom_command(TARGET ${CEF_TARGET} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_tor_out}/data" "${_tor_out}/docs"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/tor" "${_tor_out}"
+  COMMAND ${CMAKE_COMMAND} -E rm -f "${_tor_out}/tor-gencert"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORFOX_TOR_DIR}/data/geoip" "${TORFOX_TOR_DIR}/data/geoip6" "${_tor_out}/data"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/docs" "${_tor_out}/docs"
+  VERBATIM)
+
 # ----- Helper app bundles ----------------------------------------------------
 foreach(_suffix_list ${CEF_HELPER_APP_SUFFIXES})
   string(REPLACE ":" ";" _suffix_list ${_suffix_list})

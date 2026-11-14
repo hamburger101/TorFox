@@ -6,6 +6,8 @@
 
 #include <array>
 
+#include "src/core/tor/bridges.h"
+
 namespace torfox::settings {
 
 namespace {
@@ -51,8 +53,10 @@ constexpr Def Enum(std::string_view key,
 constexpr Def String(std::string_view key,
                      std::string_view section,
                      Status status,
-                     std::size_t max_length) {
+                     std::size_t max_length,
+                     bool (*check)(std::string_view) = nullptr) {
   Def d{};
+  d.check = check;
   d.key = key;
   d.section = section;
   d.type = Type::kString;
@@ -88,10 +92,10 @@ const std::array<Def, 26> kSettings = {
     Bool("downloads.askBeforeDownload", "downloads", A, true),
     Bool("downloads.disableDownloads", "downloads", A, false),
     // Tor Network
-    Enum("tor.startMode", "tor", P, kTorStart),
-    Enum("tor.bridges.mode", "tor", P, kBridgeModes),
-    Enum("tor.bridges.builtinType", "tor", P, kBridgeTypes),
-    String("tor.bridges.custom", "tor", P, 16384),
+    Enum("tor.startMode", "tor", A, kTorStart),
+    Enum("tor.bridges.mode", "tor", A, kBridgeModes),
+    Enum("tor.bridges.builtinType", "tor", A, kBridgeTypes),
+    String("tor.bridges.custom", "tor", A, 16384, &tor::BridgeTextIsValid),
     // Appearance
     Enum("appearance.theme", "appearance", A, kThemes),
     Bool("appearance.showBookmarksBar", "appearance", A, false),
@@ -194,7 +198,7 @@ bool IsValid(const Def& def, const Json& value) {
           return false;
         }
       }
-      return true;
+      return !def.check || def.check(s);
     }
   }
   return false;

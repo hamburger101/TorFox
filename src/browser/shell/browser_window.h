@@ -32,7 +32,10 @@ class TabClient;
 // a panel holding one BrowserView per tab, of which only the active one is
 // visible. A private window owns its own off-the-record request context, so
 // its web tabs share nothing with Normal windows or other private windows,
-// and it never records history. All methods run on the UI thread.
+// and it never records history. A Tor window is a private window whose
+// context is the Tor context (shared by all Tor windows until New Identity):
+// its tabs go through tor only, and wait while tor is not connected. All
+// methods run on the UI thread.
 class BrowserWindow : public CefWindowDelegate {
  public:
   // Creates and shows a new window whose first tab loads |first_url| (a web
@@ -41,8 +44,17 @@ class BrowserWindow : public CefWindowDelegate {
   // the user why.
   static void Open(const std::string& first_url, bool private_window = false,
                    CefRefPtr<BrowserWindow> requester = nullptr);
+  // A Tor window; starts tor if it is not running. |first_url| may be an
+  // onion URL. |opened| (optional) gets the new window, or null if none
+  // could be opened.
+  static void OpenTor(const std::string& first_url,
+                      CefRefPtr<BrowserWindow> requester = nullptr,
+                      std::function<void(CefRefPtr<BrowserWindow>)> opened = nullptr);
 
+  // True for Tor windows too: they are private windows.
   bool is_private() const { return private_; }
+  bool is_tor() const { return tor_; }
+  void Close();
   // Unique for the session; never reused.
   int id() const { return id_; }
 
@@ -79,6 +91,8 @@ class BrowserWindow : public CefWindowDelegate {
   void OnPageLoaded(int tab_id, const std::string& url);
   void OnFindResult(int tab_id, int count, int active, bool final_update);
   void OnRendererCrashed(TabClient* client);
+  // A Tor window's tab could not load because tor is not connected yet.
+  void OnTorHeldBack(int tab_id);
   void OpenWebUrlInNewTab(std::string url, bool foreground, int opener_tab_id);
   void HandleCommand(browsing::ShortcutCommand command);
 
@@ -129,7 +143,7 @@ class BrowserWindow : public CefWindowDelegate {
   void ApplyTheme();
 
  private:
-  BrowserWindow(std::string first_url, bool private_window,
+  BrowserWindow(std::string first_url, bool private_window, bool tor,
                 CefRefPtr<CefRequestContext> web_context);
 
   struct Tab {
@@ -174,6 +188,9 @@ class BrowserWindow : public CefWindowDelegate {
   void FillBookmarkMenu(CefRefPtr<CefMenuModel> model, int64_t folder, int depth,
                         std::vector<std::string>* urls, int* next_submenu_id);
   Json StateJson();
+  Json TorJson() const;
+  // Tor's state changed: show it, and load what was waiting for it.
+  void OnTorStatus();
   Json DownloadsJson() const;
   Json BookmarksBarJson();
   void PushState();
@@ -186,6 +203,7 @@ class BrowserWindow : public CefWindowDelegate {
 
   const std::string first_url_;
   const bool private_;
+  const bool tor_;
   const int id_;
   // Web tabs' context: Normal, or this window's own private context.
   CefRefPtr<CefRequestContext> web_context_;
@@ -204,6 +222,7 @@ class BrowserWindow : public CefWindowDelegate {
   int settings_observer_ = 0;
   int places_observer_ = 0;
   int downloads_observer_ = 0;
+  int tor_observer_ = 0;
   // Open prompts and the tab each belongs to.
   struct Prompt {
     int tab_id;

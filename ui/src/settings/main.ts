@@ -92,7 +92,9 @@ export class TorFoxSettings extends LitElement {
       const result = await call<{ value: Value }>("settings.set", { key: setting.key, value });
       this.updateValue(setting.key, result.value);
     } catch (err) {
-      this.errors = { ...this.errors, [setting.key]: errorText(err) };
+      const custom = err instanceof BridgeError && err.message === "invalid_value"
+        ? SETTINGS[setting.key]?.invalid : undefined;
+      this.errors = { ...this.errors, [setting.key]: custom ?? errorText(err) };
       // Show the stored value again, not what the user tried to choose.
       this.requestUpdate();
     }

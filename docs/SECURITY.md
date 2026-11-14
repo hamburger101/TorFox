@@ -16,7 +16,8 @@ vulnerability. Include the TorFox version, the platform, and the steps to reprod
 | A shortcut or launcher weakening TorFox with command-line switches | Release builds ignore switches (two independent layers) | Verified on Windows |
 | `.onion` names leaking to DNS from regular tabs | Navigation and resource guards, plus a resolver rule that maps `*.onion` to "not found" | Verified on Windows |
 | Unrequested connections (telemetry, background services) | No crash reporter or metrics; Chromium background services turned off; no proxy auto-discovery unless the user turns on the system's proxy settings | Verified for an idle session on Windows |
-| Network observers linking `.onion` browsing to you | Bundled Tor, an isolated Tor context, fail closed | Not built yet (Stage 5) |
+| Network observers seeing what you browse in Tor windows, or local DNS revealing it | Bundled official tor; Tor windows use their own context whose only route is tor's SOCKS port (host names resolved by tor); fail closed in three independent layers | Verified on Windows with a scripted tor, and live with the bundled tor ([`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md)) |
+| A Tor window revealing your address through WebRTC, local-network requests, other apps or device access | No WebRTC route but the proxy; local addresses, other apps, camera, microphone and clipboard refused in Tor windows | Verified on Windows |
 | Tampered or downgraded updates | Ed25519 (minisign) signed manifest, SHA-256 per asset, anti-rollback | Not built yet (Stage 7) |
 | Trackers, third-party cookies, HTTP downgrade | EasyPrivacy domain list, third-party cookie blocking, HTTPS-first with a question before http | Verified on Windows; tracker WebSockets and http form posts are not covered ([`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md) §6) |
 | Sites using the camera, microphone or clipboard, or opening other apps | Denied by default; *Ask* asks every time; only checked `mailto:`/`tel:` links reach the OS, after a click and a question | Verified on Windows, except the final hand-off to the mail or phone app |
@@ -25,8 +26,11 @@ vulnerability. Include the TorFox version, the platform, and the steps to reprod
 ## What TorFox does not defend against
 - **Malware on your machine.** Anything running under your account (or as administrator) can read
   TorFox's profile and change its files.
-- **Browser fingerprinting.** TorFox is **not** Tor Browser. Sites can fingerprint it, and in Tor tabs it
-  doesn't give Tor Browser's anonymity. Tor circuits are isolated per destination, not per first-party site.
+- **Browser fingerprinting.** TorFox is **not** Tor Browser. Sites can fingerprint it, and Tor windows
+  don't give Tor Browser's anonymity. Tor circuits are isolated per destination address, not per
+  first-party site, and all Tor windows share one context (cookies included) until *New identity*.
+- **Files opened after downloading them in a Tor window.** They can connect to the internet without Tor;
+  the download prompt says so.
 - **Bugs in Chromium or CEF.** These are fixed only by updating to a newer CEF build. TorFox is only as current as the CEF it ships.
 - **Certificate revocation between releases.** TorFox turns off Chromium's component updater, which also
   delivers revocation lists (CRLSets). See [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) §3.

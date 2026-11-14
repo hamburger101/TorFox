@@ -190,3 +190,59 @@ def resolved_hosts(log: dict) -> set[str]:
             if isinstance(value, str) and value:
                 hosts.add((_host_of(value) or value).lower())
     return hosts
+
+
+# Chromium's host resolver task types (TaskType in
+# net/dns/host_resolver_manager_job.h): SYSTEM 0, DNS 1, SECURE_DNS 2, MDNS 3,
+# CACHE_LOOKUP 4, INSECURE_CACHE_LOOKUP 5, SECURE_CACHE_LOOKUP 6,
+# CONFIG_PRESET 7, NAT64 8, HOSTS 9. Only the cache and the hosts file are
+# answered without anything leaving the computer.
+LOCAL_TASKS = {4, 5, 6, 9}
+
+
+def resolver_requests(log: dict) -> list[dict]:
+    """Every host resolver request, in order: {"host", "nak", "tasks"}.
+    "tasks" is the task sequence Chromium planned for it (None if the request
+    was answered before one was planned, e.g. an IP literal)."""
+    types, _ = _names(log)
+    out: list[dict] = []
+    open_by_source: dict[int, dict] = {}
+    for ev in log.get("events", []):
+        name = types.get(ev.get("type"), "")
+        source = ev["source"]["id"]
+        params = ev.get("params") or {}
+        if name == "HOST_RESOLVER_MANAGER_REQUEST" and ev.get("phase") == 1:
+            host = params.get("host", "")
+            if isinstance(host, dict):
+                host = host.get("host", "")
+            entry = {"host": (_host_of(str(host)) or str(host)).lower(),
+                     "nak": str(params.get("network_anonymization_key", "")), "tasks": None}
+            out.append(entry)
+            open_by_source[source] = entry
+        elif name == "HOST_RESOLVER_MANAGER_TASK_SEQUENCE_CREATED" and source in open_by_source:
+            open_by_source.pop(source)["tasks"] = list(params.get("tasks", []))
+    return out
+
+
+def network_lookups(log: dict) -> set[str]:
+    """Hosts a lookup that could leave this computer was started for: a
+    resolver job (the system resolver, DNS, DNS over HTTPS or mDNS) or a DNS
+    transaction. Answers from the cache, the hosts file or an IP literal never
+    start one."""
+    types, sources = _names(log)
+    hosts: set[str] = set()
+    for ev in log.get("events", []):
+        source_type = sources.get(ev["source"].get("type"), "")
+        name = types.get(ev.get("type"), "")
+        if source_type not in ("HOST_RESOLVER_IMPL_JOB", "DNS_TRANSACTION", "DNS_OVER_HTTPS") and \
+                name not in ("HOST_RESOLVER_MANAGER_JOB", "HOST_RESOLVER_MANAGER_CREATE_JOB",
+                             "HOST_RESOLVER_SYSTEM_TASK", "HOST_RESOLVER_DNS_TASK"):
+            continue
+        params = ev.get("params") or {}
+        for key in ("host", "hostname"):
+            value = params.get(key)
+            if isinstance(value, dict):
+                value = value.get("host")
+            if isinstance(value, str) and value:
+                hosts.add((_host_of(value) or value).lower().rstrip("."))
+    return hosts

@@ -258,6 +258,18 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     window->HandleCommand({cmd == "window.new" ? browsing::Command::kNewWindow
                                                : browsing::Command::kNewPrivateWindow});
     Reply(callback, Json::object());
+  } else if (cmd == "window.newTor") {
+    window->HandleCommand({browsing::Command::kNewTorWindow});
+    Reply(callback, Json::object());
+  } else if (cmd == "tor.newIdentity") {
+    window->HandleCommand({browsing::Command::kNewTorIdentity});
+    Reply(callback, Json::object());
+  } else if (cmd == "tor.connect") {
+    // "Try again" after an error; does nothing while tor is running.
+    if (GetServices().tor_start) {
+      GetServices().tor_start();
+    }
+    Reply(callback, Json::object());
   } else if (cmd == "nav.go") {
     window_result(window->Navigate(sender_tab, GetString(msg.args, "input").value_or("")));
   } else if (cmd == "nav.open") {

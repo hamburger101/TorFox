@@ -6,6 +6,11 @@
 
 #import <Cocoa/Cocoa.h>
 #include <crt_externs.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <utility>
 
@@ -211,6 +216,116 @@ std::shared_ptr<PromptHandle> ShowConfirmPrompt(CefRefPtr<CefWindow> window,
                   }
                 }];
   return handle;
+}
+
+
+// ----- Tor --------------------------------------------------------------------
+
+namespace {
+
+class MacChildProcess : public ChildProcess {
+ public:
+  explicit MacChildProcess(pid_t pid) : pid_(pid) {}
+  ~MacChildProcess() override { Kill(); }
+  long pid() const override { return static_cast<long>(pid_); }
+  bool Exited(int* exit_code) override {
+    if (reaped_) {
+      if (exit_code) *exit_code = code_;
+      return true;
+    }
+    int status = 0;
+    if (::waitpid(pid_, &status, WNOHANG) == pid_) {
+      reaped_ = true;
+      code_ = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+      if (exit_code) *exit_code = code_;
+      return true;
+    }
+    return false;
+  }
+  bool WaitForExit(int ms) override {
+    for (int waited = 0; waited <= ms; waited += 50) {
+      if (Exited(nullptr)) {
+        return true;
+      }
+      ::usleep(50 * 1000);
+    }
+    return Exited(nullptr);
+  }
+  void Kill() override {
+    if (!Exited(nullptr)) {
+      ::kill(pid_, SIGTERM);
+      if (!WaitForExit(3000)) {
+        ::kill(pid_, SIGKILL);
+        WaitForExit(2000);
+      }
+    }
+  }
+
+ private:
+  pid_t pid_;
+  bool reaped_ = false;
+  int code_ = 0;
+};
+
+}  // namespace
+
+std::unique_ptr<ChildProcess> LaunchHidden(const std::filesystem::path& exe,
+                                           const std::vector<std::string>& args,
+                                           const std::filesystem::path& working_dir,
+                                           std::string* error) {
+  std::vector<std::string> storage;
+  storage.push_back(exe.string());
+  for (const std::string& a : args) storage.push_back(a);
+  std::vector<char*> argv;
+  for (std::string& a : storage) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+  posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
+  posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
+  posix_spawn_file_actions_addchdir_np(&actions, working_dir.c_str());
+  posix_spawnattr_t attr;
+  posix_spawnattr_init(&attr);
+  // No file descriptor of TorFox's reaches tor.
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+  pid_t pid = 0;
+  const int rc = posix_spawn(&pid, exe.c_str(), &actions, &attr, argv.data(), *_NSGetEnviron());
+  posix_spawn_file_actions_destroy(&actions);
+  posix_spawnattr_destroy(&attr);
+  if (rc != 0) {
+    if (error) *error = "tor could not be started";
+    return nullptr;
+  }
+  return std::make_unique<MacChildProcess>(pid);
+}
+
+long CurrentProcessId() {
+  return static_cast<long>(::getpid());
+}
+
+TorPaths BundledTorPaths() {
+  TorPaths p;
+  @autoreleasepool {
+    // Inside the app bundle: Contents/Helpers/tor (signed with the app).
+    std::filesystem::path bundle([[[NSBundle mainBundle] bundlePath] fileSystemRepresentation]);
+    p.dir = bundle / "Contents" / "Helpers" / "tor";
+  }
+  p.exe = p.dir / "tor";
+  p.pt_client = "pluggable_transports/lyrebird";
+  p.geoip = p.dir / "data" / "geoip";
+  p.geoip6 = p.dir / "data" / "geoip6";
+  p.pt_config = p.dir / "pluggable_transports" / "pt_config.json";
+  return p;
+}
+
+std::filesystem::path AsciiPath(const std::filesystem::path& path) {
+  for (unsigned char c : path.native()) {
+    if (c < 0x20 || c >= 0x7F) {
+      return {};  // macOS has no short names; tor gets an error instead.
+    }
+  }
+  return path;
 }
 
 }  // namespace torfox::platform

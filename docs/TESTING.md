@@ -60,11 +60,17 @@ GoogleTest, in `tests/unit/`, covering:
 ## End-to-end tests (Windows)
 ```
 cd tests/e2e
-python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy
+python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor
 ```
 Each test starts the test build (`out/test/...`, or set `TORFOX_TEST_EXE`) with a fresh temporary profile.
 It drives TorFox over DevTools on loopback and serves fixtures from local HTTP servers. No internet access
-is needed, and none is used.
+is needed, and none is used: the Tor tests use a scripted tor (`fake_tor.py`).
+
+The tests that run the bundled tor use the Tor network, so they run only when asked:
+```
+TORFOX_LIVE_TESTS=1 python -m unittest -v test_tor.RealTorTest test_tor.RealTorNonAsciiProfileTest test_tor.LiveTorTest
+```
+`LiveTorTest` is skipped, not failed, if tor cannot finish bootstrapping from where it runs.
 
 | File | Covers |
 |---|---|
@@ -79,6 +85,7 @@ is needed, and none is used.
 | `test_places.py` | History recorded only by TorFox (Chromium's `History` stays empty), History page search/remove/clear leaving no bytes behind, bookmarks star/bar/manager and persistence |
 | `test_private.py` | Private windows: marking, no history, storage isolated from normal and other private windows, links stay private, nothing left on disk (with a control) |
 | `test_privacy.py` | Stage 4: trackers, HTTPS-first, third-party cookies, pop-ups, site permissions, email and phone links, WebRTC addresses, and clear-on-exit across real restarts (normal exit, crash, and a control). Fixture sites get real hostnames (`sites.py`) so that site and public-suffix rules apply |
+| `test_tor.py` | Stage 5, with a scripted tor (`fake_tor.py`) that implements tor's control port and records every SOCKS request: Tor windows wait for tor, then load only through it (host names, no local lookups); the `torrc` and control session; onion addresses and searches; local addresses, other apps, permissions, link menus, cookies and WebRTC in Tor windows; tor dying and restarting; each fail-closed layer on its own; service workers; new identity; the job object; bridges; non-ASCII profile folders |
 | `test_downloads.py` | The download bypass matrix (11 vectors × Disable / Ask-cancel / Ask-accept / Allow), prompts held and cancelled by closing the tab or turning downloads off, staging folder, partial names, safe and unique names, Mark of the Web, File System Access pickers absent, the downloads page and private-window separation, names that fit the path limit and are reserved while waiting, failed, restarted and stalled downloads, `OnBeforeDownload` on its own (`InnerLayerTest`), Chromium's download records erased after a quit and a crash (`DownloadRecordsTest`), the real Downloads folder untouched |
 
 `TORFOX_QUIET_SECONDS` sets the idle time (the default is 20; CI uses 60).

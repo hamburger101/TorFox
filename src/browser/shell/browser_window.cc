@@ -18,12 +18,15 @@
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
+#include "src/browser/app/tor_service.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
 #include "src/browser/shell/tab_client.h"
 #include "src/core/browsing/context_menu.h"
 #include "src/core/browsing/zoom.h"
+#include "src/core/tor/onion.h"
+#include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
 #include "src/core/url/nav_input.h"
 
@@ -41,8 +44,8 @@ constexpr cef_color_t kDarkBackground = 0xFF1C1B22;
 constexpr cef_color_t kLightBackground = 0xFFF6F5F9;
 
 constexpr char kBookmarksBarSetting[] = "appearance.showBookmarksBar";
-constexpr char kOnionRefused[] =
-    "Onion sites open only in Tor tabs, and Tor support is not available yet.";
+constexpr char kTorLocalRefused[] =
+    "Tor windows cannot open addresses on this computer or your local network.";
 
 // Native menu command ids.
 constexpr int kAppMenuBase = 1000;  // + browsing::Command
@@ -122,7 +125,7 @@ void BrowserWindow::Open(const std::string& first_url, bool private_window,
   }
   if (!private_window) {
     CefWindow::CreateTopLevelWindow(new BrowserWindow(
-        first_url, false, services.contexts->Get(ContextManager::Kind::kNormal)));
+        first_url, false, false, services.contexts->Get(ContextManager::Kind::kNormal)));
     return;
   }
   // A private window may only exist once its own context is verified.
@@ -135,14 +138,56 @@ void BrowserWindow::Open(const std::string& first_url, bool private_window,
           }
           return;
         }
-        CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url, true, context));
+        CefWindow::CreateTopLevelWindow(new BrowserWindow(first_url, true, false, context));
       });
 }
 
-BrowserWindow::BrowserWindow(std::string first_url, bool private_window,
+void BrowserWindow::OpenTor(const std::string& first_url,
+                            CefRefPtr<BrowserWindow> requester,
+                            std::function<void(CefRefPtr<BrowserWindow>)> opened) {
+  CEF_REQUIRE_UI_THREAD();
+  Services& services = GetServices();
+  auto failed = [requester, opened](const std::string& error) {
+    test_log::Event("tor_window_failed", {{"error", error}});
+    if (requester) {
+      requester->ShowNotice("TorFox could not open a Tor window: " + error);
+    }
+    if (opened) {
+      opened(nullptr);
+    }
+  };
+  if (!services.contexts || !services.tor) {
+    failed("Tor is not available.");
+    return;
+  }
+  if (services.tor_start) {
+    services.tor_start();
+  }
+  services.contexts->CreateTor(
+      0, [first_url, failed, opened](CefRefPtr<CefRequestContext> context, const std::string& error) {
+        if (!context) {
+          failed(error);
+          return;
+        }
+        CefRefPtr<BrowserWindow> window = new BrowserWindow(first_url, true, true, context);
+        CefWindow::CreateTopLevelWindow(window);
+        if (opened) {
+          opened(window);
+        }
+      });
+}
+
+void BrowserWindow::Close() {
+  if (window_ && !closing_window_) {
+    window_->Close();
+  }
+}
+
+BrowserWindow::BrowserWindow(std::string first_url, bool private_window, bool tor,
                              CefRefPtr<CefRequestContext> web_context)
     : first_url_(std::move(first_url)),
-      private_(private_window),
+      private_(private_window || tor),
+      tor_(tor),
       id_([] {
         static int next_id = 1;
         return next_id++;
@@ -209,11 +254,12 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   window->AddChildView(content_);
   layout->SetFlexForView(content_, 1);
 
-  if (first_url_.empty()) {
-    AddTab(BrowserRole::kInternalTab, InternalPageUrl("newtab"), true);
-  } else {
-    AddTab(BrowserRole::kWebTab, first_url_, true);
-  }
+  // The first tab always starts as the new-tab page. A web address given
+  // for it is loaded once the window is shown (below): a web browser created
+  // before its window is shown stays "hidden" to Chromium (pages see
+  // document.visibilityState "hidden", timers are throttled, and permission
+  // requests wait forever), found by test_stage1_defaults.py.
+  AddTab(BrowserRole::kInternalTab, InternalPageUrl("newtab"), true);
 
   CefRefPtr<BrowserWindow> self = this;
   if (services.settings) {
@@ -245,7 +291,10 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
       self->PushState();
     });
   }
-  window->SetTitle("TorFox");
+  if (tor_ && services.tor) {
+    tor_observer_ = services.tor->AddObserver([self]() { self->OnTorStatus(); });
+  }
+  window->SetTitle(tor_ ? "TorFox Tor" : "TorFox");
   window->CenterWindow(GetPreferredSize(window));
   window->Layout();
   {
@@ -263,7 +312,12 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   }
   window->Show();
   ApplyTheme();
-  test_log::Event("window_created", {{"private", private_}});
+  test_log::Event("window_created", {{"private", private_}, {"tor", tor_}, {"id", id_}});
+  if (!first_url_.empty()) {
+    if (Tab* first = ActiveTab()) {
+      LoadInTab(*first, BrowserRole::kWebTab, first_url_);
+    }
+  }
 }
 
 void BrowserWindow::ApplyTheme() {
@@ -530,16 +584,37 @@ BrowserWindow::Result BrowserWindow::Navigate(int tab_id, const std::string& inp
   switch (d.kind) {
     case NavKind::kRejected:
       return {false, d.reason};
-    case NavKind::kOnion:
-      // Never searched, never loaded outside Tor. Tor tabs arrive in Stage 5.
-      return {false, kOnionRefused};
+    case NavKind::kOnion: {
+      // Never searched, never loaded outside Tor: from other windows it
+      // opens in a Tor window.
+      const tor::OnionInput onion = tor::OnionUrlFromInput(d.url);
+      if (!onion.error.empty()) {
+        return {false, onion.error};
+      }
+      if (!tor_) {
+        OpenTor(onion.url, this);
+        return {};
+      }
+      LoadInTab(*tab, BrowserRole::kWebTab, onion.url);
+      return {};
+    }
     case NavKind::kInternal:
       LoadInTab(*tab, BrowserRole::kInternalTab, d.url);
       return {};
     case NavKind::kWebUrl:
-    case NavKind::kSearch:
-      LoadInTab(*tab, BrowserRole::kWebTab, d.url);
+    case NavKind::kSearch: {
+      std::string url = d.url;
+      if (tor_) {
+        if (d.kind == NavKind::kSearch) {
+          url = tor::TorSearchUrl(url);  // DuckDuckGo's onion service.
+        }
+        if (!guards::NavigationBlockReason(guards::Role::kTorTab, url).empty()) {
+          return {false, kTorLocalRefused};
+        }
+      }
+      LoadInTab(*tab, BrowserRole::kWebTab, url);
       return {};
+    }
   }
   return {false, "unsupported input"};
 }
@@ -552,7 +627,19 @@ BrowserWindow::Result BrowserWindow::OpenUrl(int tab_id, const std::string& url,
   }
   NavDecision d = ClassifyNavInput(url);
   if (d.kind == NavKind::kOnion) {
-    return {false, kOnionRefused};
+    const tor::OnionInput onion = tor::OnionUrlFromInput(d.url);
+    if (!onion.error.empty()) {
+      return {false, onion.error};
+    }
+    if (!tor_) {
+      OpenTor(onion.url, this);
+      return {};
+    }
+    d.kind = NavKind::kWebUrl;
+    d.url = onion.url;
+  }
+  if (tor_ && !guards::NavigationBlockReason(guards::Role::kTorTab, d.url).empty()) {
+    return {false, kTorLocalRefused};
   }
   if (d.kind != NavKind::kWebUrl) {
     return {false, "This address cannot be opened."};
@@ -776,7 +863,7 @@ void BrowserWindow::ShowAppMenu(int x, int y) {
   CefRefPtr<BrowserWindow> self = this;
   CefRefPtr<menus::Delegate> delegate = new menus::Delegate([self](int id, cef_event_flags_t) {
     const int c = id - kAppMenuBase;
-    if (c >= 0 && c <= static_cast<int>(Command::kSettings)) {
+    if (c >= 0 && c <= static_cast<int>(Command::kLastCommand)) {
       self->HandleCommand({static_cast<Command>(c)});
     }
   });
@@ -793,6 +880,16 @@ void BrowserWindow::ShowAppMenu(int x, int y) {
   add(Command::kNewTab, "New tab", 'T');
   add(Command::kNewWindow, "New window", 'N');
   add(Command::kNewPrivateWindow, "New private window", 'N', true);
+  {
+    const int tor_id = kAppMenuBase + static_cast<int>(Command::kNewTorWindow);
+    model->AddItem(tor_id, "New Tor window");
+#if defined(OS_WIN)
+    model->SetAccelerator(tor_id, 'N', true, false, true);  // Alt+Shift+N
+#endif
+  }
+  if (tor_) {
+    add(Command::kNewTorIdentity, "New Tor identity");
+  }
   model->AddSeparator();
   add(Command::kShowHistory, "History", 'H');
   add(Command::kShowBookmarks, "Bookmarks", 'O', true);
@@ -905,6 +1002,14 @@ void BrowserWindow::HandleCommand(browsing::ShortcutCommand command) {
       break;
     case Command::kNewPrivateWindow:
       Open("", true, this);
+      break;
+    case Command::kNewTorWindow:
+      OpenTor("", this);
+      break;
+    case Command::kNewTorIdentity:
+      if (GetServices().tor_new_identity) {
+        GetServices().tor_new_identity(this);
+      }
       break;
     case Command::kCloseTab:
       if (active_tab_id_) {
@@ -1153,6 +1258,34 @@ void BrowserWindow::OnPageLoaded(int tab_id, const std::string& url) {
   }
 }
 
+void BrowserWindow::OnTorHeldBack(int tab_id) {
+  if (Tab* t = FindTab(tab_id)) {
+    t->loading = false;
+    PushState();
+  }
+}
+
+void BrowserWindow::OnTorStatus() {
+  if (closing_window_) {
+    return;
+  }
+  PushState();
+  Services& services = GetServices();
+  if (!services.tor || !services.tor->connected()) {
+    return;
+  }
+  for (Tab& t : tabs_) {
+    if (!t.client || !t.client->tor() || !t.client->browser()) {
+      continue;
+    }
+    const std::string url = t.client->TakeTorPendingUrl();
+    if (!url.empty()) {
+      test_log::Event("tor_pending_loaded", {{"tab", t.id}});
+      t.client->browser()->GetMainFrame()->LoadURL(url);
+    }
+  }
+}
+
 void BrowserWindow::OnRendererCrashed(TabClient* client) {
   if (client == shell_client_.get() && client->browser() && !closing_window_) {
     // The shell must always work: reload it.
@@ -1205,6 +1338,10 @@ void BrowserWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
     services.settings->RemoveObserver(settings_observer_);
     settings_observer_ = 0;
   }
+  if (services.tor && tor_observer_) {
+    services.tor->RemoveObserver(tor_observer_);
+    tor_observer_ = 0;
+  }
   if (services.places && places_observer_) {
     services.places->RemoveObserver(places_observer_);
     places_observer_ = 0;
@@ -1220,7 +1357,7 @@ void BrowserWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
   // A private window's context (its whole off-the-record profile) goes with
   // the window.
   web_context_ = nullptr;
-  test_log::Event("window_destroyed", {{"private", private_}});
+  test_log::Event("window_destroyed", {{"private", private_}, {"tor", tor_}, {"id", id_}});
   if (services.window_destroyed) {
     services.window_destroyed(this);
   }
@@ -1233,7 +1370,7 @@ void BrowserWindow::UpdateTitle() {
     return;
   }
   Tab* t = ActiveTab();
-  const std::string name = private_ ? "TorFox Private" : "TorFox";
+  const std::string name = tor_ ? "TorFox Tor" : private_ ? "TorFox Private" : "TorFox";
   std::string title = t && !t->title.empty() ? t->title + " \xE2\x80\x94 " + name : name;
   if (kTestHooks) {
     title += " (TEST BUILD)";  // Test-hook builds must never pass for a release.
@@ -1283,12 +1420,27 @@ Json BrowserWindow::StateJson() {
   }
   return {{"type", "state"},
           {"private", private_},
+          {"tor", tor_ ? TorJson() : Json(nullptr)},
           {"tabs", tabs},
           {"activeId", active_tab_id_},
           {"nav", nav},
           {"findOpen", find_open_},
           {"bookmarksBar", BookmarksBarVisible()},
           {"downloads", DownloadsJson()}};
+}
+
+Json BrowserWindow::TorJson() const {
+  Services& services = GetServices();
+  if (!services.tor) {
+    return {{"state", "error"}, {"progress", 0}, {"message", "Tor is not available."},
+            {"retry", false}, {"connected", false}};
+  }
+  const TorService::Status s = services.tor->status();
+  return {{"state", TorService::StateName(s.state)},
+          {"progress", s.progress},
+          {"message", s.message.substr(0, 300)},
+          {"retry", s.retry},
+          {"connected", services.tor->connected()}};
 }
 
 Json BrowserWindow::BookmarksBarJson() {

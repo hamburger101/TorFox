@@ -29,8 +29,13 @@ class LifecycleTest(unittest.TestCase):
                 self.assertTrue(bridge_call(shell, "app.openSettings")["ok"])
                 wait_for(lambda: tab_count(tf) == 5, 10, "five tabs")
                 self.assertEqual(tf.close(), 0)
-                closed = tf.events("browser_closed")
-                self.assertEqual(len(closed), 6)  # Five tabs and the shell.
+                # Every browser TorFox created was closed: the shell, the five
+                # tabs, and the new-tab page the first tab started as (it is
+                # replaced when the window's start address loads).
+                created = {e["browser"] for e in tf.events("browser_created")}
+                closed = [e["browser"] for e in tf.events("browser_closed")]
+                self.assertEqual(len(created), 7)
+                self.assertEqual(sorted(closed), sorted(created))
                 self.assertTrue(tf.events("window_destroyed"))
 
     def test_opening_and_closing_tabs_repeatedly(self) -> None:

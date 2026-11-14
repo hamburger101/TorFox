@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "include/cef_app.h"
 #include "include/wrapper/cef_message_router.h"
@@ -25,6 +26,7 @@ class PlacesService;
 class PrivacyService;
 class SettingsService;
 class DownloadService;
+class TorService;
 
 struct StartupOptions {
   std::filesystem::path user_data_dir;
@@ -32,6 +34,9 @@ struct StartupOptions {
   std::filesystem::path download_dir;  // Test builds only; empty = the platform's.
   // Test builds only: the local test sites' http and https ports.
   std::optional<https_first::TestPorts> https_test_ports;
+  // Test builds only: run this (a fake tor) instead of the bundled tor.
+  std::filesystem::path tor_test_exe;
+  std::vector<std::string> tor_test_args;
 };
 
 // CefApp for the browser process: command-line policy, startup checks,
@@ -65,6 +70,10 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   bool ApplyGlobalPrefs(std::string* error);
   void ApplyCookiePolicy(bool block);
   void ApplyProxyMode(bool use_system);
+  // Tor (Settings > Tor).
+  void StartTor();
+  void RestartTorIfRunning();
+  void NewTorIdentity(BrowserWindow* requester);
 
   StartupOptions options_;
   std::unique_ptr<SettingsService> settings_;
@@ -72,6 +81,8 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   std::unique_ptr<DownloadService> downloads_;
   std::unique_ptr<PrivacyService> privacy_;
   std::unique_ptr<ContextManager> contexts_;
+  std::shared_ptr<TorService> tor_;
+  int tor_settings_observer_ = 0;
   std::unique_ptr<BridgeHandler> bridge_;
   CefRefPtr<CefMessageRouterBrowserSide> router_;
   std::set<BrowserWindow*> windows_;

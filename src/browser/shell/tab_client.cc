@@ -17,6 +17,7 @@
 #include "src/browser/app/privacy_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/test_log.h"
+#include "src/browser/app/tor_service.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/shell/browser_window.h"
 #include "src/browser/shell/dialogs.h"
@@ -27,6 +28,7 @@
 #include "src/core/downloads/policy.h"
 #include "src/core/privacy/external_protocols.h"
 #include "src/core/privacy/trackers.h"
+#include "src/core/tor/onion.h"
 #include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
 #include "src/core/url/nav_input.h"
@@ -45,6 +47,7 @@ void LogBlock(const char* what, BrowserRole role, const std::string& url, const 
 enum WebMenuCommand {
   kOpenLinkInNewTab = MENU_ID_USER_FIRST,
   kOpenLinkInPrivateWindow,
+  kOpenLinkInTorWindow,
   kCopyLinkAddress,
   kOpenImageInNewTab,
   kCopyImageAddress,
@@ -73,9 +76,28 @@ TabClient::TabClient(BrowserRole role,
     : role_(role),
       tab_id_(tab_id),
       download_context_(window && window->is_private() ? window->id() : 0),
+      tor_(window && window->is_tor()),
+      tor_service_(tor_ ? GetServices().tor : nullptr),
       window_(window),
       router_(IsInternalRole(role) ? router : nullptr),
       initial_url_(std::move(initial_url)) {}
+
+std::string TabClient::TakeTorPendingUrl() {
+  std::string url = std::move(tor_pending_url_);
+  tor_pending_url_.clear();
+  return url;
+}
+
+guards::Role TabClient::GuardRoleOf() const {
+  return tor_ && role_ == BrowserRole::kWebTab ? guards::Role::kTorTab : GuardRole(role_);
+}
+
+bool TabClient::TorHoldsBack() const {
+  if (!tor_ || role_ != BrowserRole::kWebTab || fault_injection::SkipTorGuard()) {
+    return false;
+  }
+  return !(tor_service_ && tor_service_->connected());
+}
 
 void TabClient::Close() {
   CEF_REQUIRE_UI_THREAD();
@@ -146,7 +168,16 @@ void TabClient::BuildWebMenu(CefRefPtr<CefContextMenuParams> params,
   const std::string link = params->GetLinkUrl().ToString();
   if ((type & CM_TYPEFLAG_LINK) && IsWebUrl(link) && NavigationBlockReason(link).empty()) {
     model->AddItem(kOpenLinkInNewTab, "Open link in new tab");
-    model->AddItem(kOpenLinkInPrivateWindow, "Open link in private window");
+    // From a Tor window, never into a window that does not use Tor.
+    if (!tor_) {
+      model->AddItem(kOpenLinkInPrivateWindow, "Open link in private window");
+    }
+    model->AddItem(kOpenLinkInTorWindow, tor_ ? "Open link in new Tor window" : "Open link in Tor window");
+    model->AddItem(kCopyLinkAddress, "Copy link address");
+  } else if ((type & CM_TYPEFLAG_LINK) && IsWebUrl(link) && !tor_ &&
+             guards::IsOnionHost(guards::HostOf(link))) {
+    // An onion link in a normal window: it can only be opened in Tor.
+    model->AddItem(kOpenLinkInTorWindow, "Open link in Tor window");
     model->AddItem(kCopyLinkAddress, "Copy link address");
   }
 
@@ -238,7 +269,22 @@ bool TabClient::OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
         OpenInNewTab(link, false);
       }
       return true;
+    case kOpenLinkInTorWindow:
+      // Allowed in a Tor window: the same policy as Tor tabs (onion hosts
+      // yes, local addresses no).
+      if (IsWebUrl(link) && guards::NavigationBlockReason(guards::Role::kTorTab, link).empty()) {
+        CefRefPtr<BrowserWindow> window = window_;
+        CefPostTask(TID_UI, base::BindOnce(
+                                [](std::string url, CefRefPtr<BrowserWindow> w) {
+                                  BrowserWindow::OpenTor(url, w);
+                                },
+                                link, window));
+      }
+      return true;
     case kOpenLinkInPrivateWindow:
+      if (tor_) {
+        return true;  // Never offered in Tor windows.
+      }
       if (allowed(link)) {
         CefPostTask(TID_UI, base::BindOnce(
                                 [](std::string url) { BrowserWindow::Open(url, true); }, link));
@@ -261,7 +307,7 @@ bool TabClient::OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
       return true;
     case kSearchSelection:
       if (auto url = browsing::SelectionSearchUrl(params->GetSelectionText().ToString())) {
-        OpenInNewTab(*url, true);
+        OpenInNewTab(tor_ ? tor::TorSearchUrl(*url) : *url, true);
       }
       return true;
     case kBookmarkPage:
@@ -460,6 +506,11 @@ bool TabClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
   if (downloads::IsDangerousType(entry.name)) {
     prompt.warning = "This type of file can run programs on your computer. Download it only if "
                      "you trust where it comes from.";
+  }
+  if (tor_) {
+    prompt.warning += std::string(prompt.warning.empty() ? "" : "\n") +
+                      "Downloaded over Tor. Opening it can reveal your real address: documents "
+                      "and media may load things from the internet without Tor.";
   }
   prompt.accept = "Download";
   prompt.cancel = "Cancel";
@@ -829,6 +880,9 @@ bool TabClient::OnRequestMediaAccessPermission(CefRefPtr<CefBrowser> browser,
   if (role_ != BrowserRole::kWebTab || !privacy) {
     return deny("not a web tab");
   }
+  if (tor_) {
+    return deny("tor window");
+  }
   if (requested_permissions & ~(kCamera | kMicrophone)) {
     return deny("screen capture");
   }
@@ -883,6 +937,9 @@ bool TabClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
   if (role_ != BrowserRole::kWebTab || !privacy) {
     return deny("not a web tab");
   }
+  if (tor_) {
+    return deny("tor window");
+  }
   if (requested_permissions != CEF_PERMISSION_TYPE_CLIPBOARD) {
     return deny("not available");
   }
@@ -930,11 +987,11 @@ void TabClient::OnDismissPermissionPrompt(CefRefPtr<CefBrowser> browser,
 // ----- Requests --------------------------------------------------------------
 
 std::string TabClient::NavigationBlockReason(const std::string& url) const {
-  return guards::NavigationBlockReason(GuardRole(role_), url);
+  return guards::NavigationBlockReason(GuardRoleOf(), url);
 }
 
 std::string TabClient::ResourceBlockReason(const std::string& url) const {
-  return guards::ResourceBlockReason(GuardRole(role_), url);
+  return guards::ResourceBlockReason(GuardRoleOf(), url);
 }
 
 bool TabClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -948,13 +1005,42 @@ bool TabClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
   // mailto:/tel: may open the mail or phone app once the user agrees.
   // Every other scheme is refused by the guard below.
   if (role_ == BrowserRole::kWebTab && !external_protocols::LaunchableScheme(url).empty()) {
+    if (tor_) {
+      // Another app would open the link without Tor.
+      LogBlock("protocol_blocked", role_, url, "tor window");
+      if (window_ && user_gesture) {
+        window_->ShowNotice("Links that open other apps do not work in Tor windows.");
+      }
+      return true;
+    }
     OpenExternalApp(browser, url, user_gesture);
     return true;
   }
   const std::string why = NavigationBlockReason(url);
   if (!why.empty() && !fault_injection::SkipNavigationGuard()) {
     LogBlock("nav_blocked", role_, url, why);
+    if (window_ && frame->IsMain() && user_gesture && role_ == BrowserRole::kWebTab) {
+      if (!tor_ && guards::IsOnionHost(guards::HostOf(url))) {
+        window_->ShowNotice("Onion sites open only in Tor windows: right-click the link and "
+                            "choose Open link in Tor window.");
+      } else if (tor_ && guards::IsLocalNetworkHost(guards::HostOf(url))) {
+        window_->ShowNotice("Tor windows cannot open addresses on this computer or your local "
+                            "network.");
+      }
+    }
     return true;  // Cancel.
+  }
+  // Fail closed: nothing leaves a Tor window until tor is connected. The
+  // page is loaded once it is.
+  if (TorHoldsBack()) {
+    LogBlock("tor_blocked", role_, url, "tor not connected");
+    if (frame->IsMain()) {
+      tor_pending_url_ = url;
+      if (window_) {
+        window_->OnTorHeldBack(tab_id_);
+      }
+    }
+    return true;
   }
   if (role_ == BrowserRole::kWebTab && frame->IsMain() &&
       HttpsFirst(frame, url, request->GetMethod().ToString(), is_redirect)) {
@@ -1093,6 +1179,10 @@ CefResourceRequestHandler::ReturnValue TabClient::OnBeforeResourceLoad(
   const std::string why = ResourceBlockReason(url);
   if (!why.empty() && !fault_injection::SkipResourceGuard()) {
     LogBlock("resource_blocked", role_, url, why);
+    return RV_CANCEL;
+  }
+  if (TorHoldsBack()) {
+    LogBlock("tor_blocked", role_, url, "tor not connected");
     return RV_CANCEL;
   }
   // Tracker blocking: requests a page makes to a listed domain of another

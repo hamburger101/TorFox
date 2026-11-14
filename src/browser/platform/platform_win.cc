@@ -276,4 +276,184 @@ std::shared_ptr<PromptHandle> ShowConfirmPrompt(CefRefPtr<CefWindow> window,
   return handle;
 }
 
+
+// ----- Tor --------------------------------------------------------------------
+
+namespace {
+
+// One argument quoted the way CommandLineToArgvW (and the C runtime) read
+// it back: backslashes are literal except before a quote.
+void AppendQuoted(std::wstring& out, const std::wstring& arg) {
+  if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring::npos) {
+    out += arg;
+    return;
+  }
+  out.push_back(L'"');
+  for (std::size_t i = 0;; ++i) {
+    std::size_t backslashes = 0;
+    while (i < arg.size() && arg[i] == L'\\') {
+      ++i;
+      ++backslashes;
+    }
+    if (i == arg.size()) {
+      out.append(backslashes * 2, L'\\');
+      break;
+    }
+    if (arg[i] == L'"') {
+      out.append(backslashes * 2 + 1, L'\\');
+    } else {
+      out.append(backslashes, L'\\');
+    }
+    out.push_back(arg[i]);
+  }
+  out.push_back(L'"');
+}
+
+class WinChildProcess : public ChildProcess {
+ public:
+  WinChildProcess(HANDLE process, HANDLE job, DWORD pid) : process_(process), job_(job), pid_(pid) {}
+  ~WinChildProcess() override {
+    Kill();
+    ::CloseHandle(process_);
+    ::CloseHandle(job_);  // Kill-on-close: anything tor started ends too.
+  }
+  long pid() const override { return static_cast<long>(pid_); }
+  bool Exited(int* exit_code) override {
+    if (::WaitForSingleObject(process_, 0) != WAIT_OBJECT_0) {
+      return false;
+    }
+    DWORD code = 0;
+    ::GetExitCodeProcess(process_, &code);
+    if (exit_code) {
+      *exit_code = static_cast<int>(code);
+    }
+    return true;
+  }
+  bool WaitForExit(int ms) override {
+    return ::WaitForSingleObject(process_, static_cast<DWORD>(ms)) == WAIT_OBJECT_0;
+  }
+  void Kill() override {
+    if (::WaitForSingleObject(process_, 0) != WAIT_OBJECT_0) {
+      ::TerminateJobObject(job_, 1);
+      ::WaitForSingleObject(process_, 5000);
+    }
+  }
+
+ private:
+  HANDLE process_;
+  HANDLE job_;
+  DWORD pid_;
+};
+
+std::filesystem::path ExecutableDir() {
+  std::wstring buf(MAX_PATH, L'\0');
+  for (;;) {
+    const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+    if (n == 0) {
+      return {};
+    }
+    if (n < buf.size()) {
+      buf.resize(n);
+      break;
+    }
+    buf.resize(buf.size() * 2);
+  }
+  return std::filesystem::path(buf).parent_path();
+}
+
+}  // namespace
+
+std::unique_ptr<ChildProcess> LaunchHidden(const std::filesystem::path& exe,
+                                           const std::vector<std::string>& args,
+                                           const std::filesystem::path& working_dir,
+                                           std::string* error) {
+  auto fail = [&](const char* why) -> std::unique_ptr<ChildProcess> {
+    if (error) {
+      *error = why;
+    }
+    return nullptr;
+  };
+  std::wstring command;
+  AppendQuoted(command, exe.native());
+  for (const std::string& a : args) {
+    command.push_back(L' ');
+    AppendQuoted(command, Widen(a));
+  }
+  HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
+  if (!job) {
+    return fail("could not create a job object");
+  }
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+  limits.BasicLimitInformation.LimitFlags =
+      JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+  if (!::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+    ::CloseHandle(job);
+    return fail("could not configure the job object");
+  }
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi = {};
+  // Suspended until it is in the job, so it cannot start anything outside it.
+  if (!::CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, nullptr,
+                        working_dir.c_str(), &si, &pi)) {
+    ::CloseHandle(job);
+    return fail("tor could not be started");
+  }
+  if (!::AssignProcessToJobObject(job, pi.hProcess)) {
+    ::TerminateProcess(pi.hProcess, 1);
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(job);
+    return fail("tor could not be tied to TorFox's lifetime");
+  }
+  ::ResumeThread(pi.hThread);
+  ::CloseHandle(pi.hThread);
+  return std::make_unique<WinChildProcess>(pi.hProcess, job, pi.dwProcessId);
+}
+
+long CurrentProcessId() {
+  return static_cast<long>(::GetCurrentProcessId());
+}
+
+TorPaths BundledTorPaths() {
+  TorPaths p;
+  p.dir = ExecutableDir() / L"tor";
+  p.exe = p.dir / L"tor.exe";
+  p.pt_client = "pluggable_transports\\lyrebird.exe";
+  p.geoip = p.dir / L"data" / L"geoip";
+  p.geoip6 = p.dir / L"data" / L"geoip6";
+  p.pt_config = p.dir / L"pluggable_transports" / L"pt_config.json";
+  return p;
+}
+
+std::filesystem::path AsciiPath(const std::filesystem::path& path) {
+  const std::wstring& w = path.native();
+  bool ascii = true;
+  for (wchar_t c : w) {
+    ascii = ascii && c < 0x7F && c >= 0x20;
+  }
+  if (ascii) {
+    return path;
+  }
+  const DWORD n = ::GetShortPathNameW(w.c_str(), nullptr, 0);
+  if (n == 0) {
+    return {};
+  }
+  std::wstring out(n, L'\0');
+  const DWORD m = ::GetShortPathNameW(w.c_str(), out.data(), n);
+  if (m == 0 || m >= n) {
+    return {};
+  }
+  out.resize(m);
+  for (wchar_t c : out) {
+    if (c >= 0x7F || c < 0x20) {
+      return {};  // 8.3 names are off on this volume.
+    }
+  }
+  return std::filesystem::path(out);
+}
+
 }  // namespace torfox::platform

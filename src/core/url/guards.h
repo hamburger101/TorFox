@@ -19,6 +19,7 @@ enum class Role {
   kShell,        // The window's tab strip and toolbar (torfox://shell/ only).
   kInternalTab,  // A tab showing a TorFox page (newtab, settings).
   kWebTab,       // A tab showing web content.
+  kTorTab,       // A tab showing web content in a Tor window (through tor only).
 };
 
 bool IsInternal(Role role);
@@ -33,6 +34,13 @@ std::string HostOf(std::string_view url);
 // "x.onion" and "a.b.onion." are onion hosts; "onion" and "onion.com" are not.
 bool IsOnionHost(std::string_view host);
 
+// Hosts on this computer or the local network: localhost and *.localhost,
+// and loopback, private, link-local, carrier-grade NAT and unspecified
+// IPv4/IPv6 literals (|host| as HostOf returns it). Tor windows never
+// request them: through tor they would fail anyway, and a page must not be
+// able to probe the user's own network from a Tor window.
+bool IsLocalNetworkHost(std::string_view host);
+
 // Schemes web content must never reach, whatever Chromium's own checks say.
 bool IsPrivilegedScheme(std::string_view scheme);
 
@@ -40,7 +48,9 @@ bool IsPrivilegedScheme(std::string_view scheme);
 //   Internal browsers: only known torfox:// pages, and only the page that
 //   matches the role (the shell shows torfox://shell/, tabs never do).
 //   Web tabs: http(s), data:, blob:, about:blank and about:srcdoc only; never
-//   a privileged scheme, never an onion host (until Tor tabs exist).
+//   a privileged scheme, never an onion host.
+//   Tor tabs: as web tabs, but onion hosts are allowed and local-network
+//   hosts are not.
 std::string NavigationBlockReason(Role role, std::string_view url);
 
 // Why a subresource request must be cancelled; "" to allow.

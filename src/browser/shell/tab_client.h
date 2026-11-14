@@ -23,6 +23,7 @@
 namespace torfox {
 
 class BrowserWindow;
+class TorService;
 
 // The CefClient for exactly one browser. Its role (shell, internal tab, web
 // tab) is fixed at construction and decides every policy below. Policies
@@ -30,7 +31,9 @@ class BrowserWindow;
 //  * internal browsers may only show their own torfox:// pages and may not
 //    load anything from the network;
 //  * web browsers may never navigate to, frame or fetch torfox:// URLs,
-//    other privileged schemes, or .onion hosts;
+//    other privileged schemes, or .onion hosts (outside Tor windows);
+//  * a Tor window's web browsers send nothing while tor is not connected,
+//    and never ask for this computer or the local network;
 //  * only internal browsers' messages ever reach the bridge router.
 class TabClient : public CefClient,
                   public CefContextMenuHandler,
@@ -56,6 +59,11 @@ class TabClient : public CefClient,
   CefRefPtr<CefBrowser> browser() const { return browser_; }
   bool closing() const { return closing_; }
   void Close();
+  // A tab in a Tor window (its context is the Tor context).
+  bool tor() const { return tor_; }
+  // The main-frame URL held back because tor was not connected (UI
+  // thread); the window loads it once tor connects.
+  std::string TakeTorPendingUrl();
 
   // CefClient
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
@@ -227,6 +235,9 @@ class TabClient : public CefClient,
 
  private:
   bool IsInternal() const { return IsInternalRole(role_); }
+  guards::Role GuardRoleOf() const;
+  // Tor windows' web tabs: true unless tor is connected (any thread).
+  bool TorHoldsBack() const;
   // Navigation policy, shared by OnBeforeBrowse and OnBeforeResourceLoad.
   // Returns an empty string if |url| is allowed, else the reason.
   std::string NavigationBlockReason(const std::string& url) const;
@@ -253,6 +264,9 @@ class TabClient : public CefClient,
   const BrowserRole role_;
   const int tab_id_;
   const int download_context_;
+  const bool tor_;
+  const std::shared_ptr<TorService> tor_service_;  // Tor windows only.
+  std::string tor_pending_url_;
   CefRefPtr<BrowserWindow> window_;  // Cleared in OnBeforeClose.
   CefRefPtr<CefMessageRouterBrowserSide> router_;  // Internal roles only.
   std::string initial_url_;

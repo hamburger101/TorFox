@@ -67,7 +67,8 @@ TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
       "privacy.blockThirdPartyCookies", "privacy.blockPopups", "privacy.useSystemProxy",
       "privacy.clearOnExit.history",
       "privacy.clearOnExit.cookies", "privacy.clearOnExit.cache", "permissions.camera",
-      "permissions.microphone", "permissions.clipboard"};
+      "permissions.microphone", "permissions.clipboard", "tor.startMode", "tor.bridges.mode",
+      "tor.bridges.builtinType", "tor.bridges.custom"};
   for (const Def& d : AllSettings()) {
     EXPECT_EQ(d.status, active.count(d.key) ? Status::kActive : Status::kPlanned) << d.key;
   }
@@ -88,7 +89,13 @@ TEST(SettingsSchema, ValidatesTypesAndConstraints) {
   EXPECT_FALSE(IsValid(*ask, Json(0)));
 
   const Def* custom = Find("tor.bridges.custom");
-  EXPECT_TRUE(IsValid(*custom, Json("obfs4 192.0.2.1:443 ABCD cert=x iat-mode=0\n")));
+  EXPECT_TRUE(IsValid(*custom, Json("")));
+  EXPECT_TRUE(IsValid(*custom, Json("# my bridges\nobfs4 192.0.2.1:443 "
+                                    "0123456789ABCDEF0123456789ABCDEF01234567 cert=x iat-mode=0\n")));
+  // Custom bridges are bridge lines: anything else is refused before tor
+  // could read it (tor_test.cc covers the bridge-line rules).
+  EXPECT_FALSE(IsValid(*custom, Json("obfs4 192.0.2.1:443 ABCD cert=x iat-mode=0\n")));
+  EXPECT_FALSE(IsValid(*custom, Json("obfs4 192.0.2.1:443\nUseBridges 0\n")));
   EXPECT_FALSE(IsValid(*custom, Json(std::string(custom->max_length + 1, 'a'))));
   EXPECT_FALSE(IsValid(*custom, Json(std::string("a\x01b"))));
   EXPECT_FALSE(IsValid(*custom, Json(std::string("bad\xFF"))));

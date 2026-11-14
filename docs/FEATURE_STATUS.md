@@ -14,9 +14,11 @@ Legend:
 **macOS:** the build files and platform code exist but have never been compiled, so every macOS entry is
 ⬜ or 🟡 until CI builds and tests them.
 
-Last updated: end of Stage 4 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
-[`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md), [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md) and
-[`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md).
+Last updated: end of Stage 5 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
+[`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md), [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md),
+[`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md) and [`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md). Unless a row
+says otherwise, Tor rows are verified with a scripted tor (`tests/e2e/fake_tor.py`); *live* marks checks
+made with the bundled tor on the real Tor network.
 
 | Area | Feature | Windows | macOS | Evidence |
 |---|---|---|---|---|
@@ -38,7 +40,7 @@ Last updated: end of Stage 4 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.
 | Browsing | Clearing history also forgets per-site zoom levels | ✅ M | ⬜ | `test_clearing_history_forgets_zoomed_sites` (Stage 4 findings §3.5) |
 | Browsing | Native menus: app, star, bookmark folders, page context menu (no save/inspect items) | ✅ | 🟡 | `test_app_menu`, `test_web_context_menu_has_no_save_or_inspect`, via the menu test hook |
 | Browsing | Address-bar suggestions | ⬜ | ⬜ | Stage 6 |
-| Search | Typed queries go to DuckDuckGo; `.onion` input is never searched | ✅ | ⬜ | `test_search_goes_to_duckduckgo`, `test_onion_input_is_refused_and_never_searched`, `test_onion_input_is_never_searched_or_loaded` |
+| Search | Typed queries go to DuckDuckGo (its onion service in Tor windows); `.onion` input is never searched | ✅ M | ⬜ | `test_search_goes_to_duckduckgo`, `test_searches_in_tor_windows_use_duckduckgos_onion_service`, `test_mistyped_onion_addresses_are_refused_and_never_searched` |
 | Search | Selected text searched from the context menu; never if it mentions `.onion` | ✅ M | ⬜ | `test_selection_search_uses_duckduckgo`, `test_onion_selections_are_never_searched` |
 | Downloads | Disable downloads blocks every vector (11 vectors; overrides Ask), in `CanDownload` and again in `OnBeforeDownload` | ✅ M | ⬜ | `test_disabled_blocks_every_vector`, `InnerLayerTest` (findings §3.10) |
 | Downloads | Ask before download (default ON): native prompt with name, size, origin; cancel leaves no file | ✅ M | 🟡 | `test_ask_and_cancel_saves_nothing`, `test_ask_and_accept_saves_the_file`, `test_aa_a_new_profile_asks_first`; macOS sheet never compiled |
@@ -72,9 +74,21 @@ Last updated: end of Stage 4 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.
 | Permissions | Location, notifications, screen capture and all others always denied | ✅ | ⬜ | `test_location_and_notifications_are_always_denied`, `test_screen_capture_is_always_denied`, `test_permission_requests_are_denied` |
 | Network | WebRTC exposes no local addresses | ✅ | ⬜ | `WebRtcTest` (two layers; the test shows the outcome, Stage 4 findings §6) |
 | Tor | Regular tabs never resolve or connect to `.onion` (incl. WebSockets) | ✅ M | ⬜ | `OnionResolverTest`, `test_onion_subresources_and_navigation_are_blocked` |
-| Tor | Bundled tor managed automatically | ⬜ | ⬜ | Stage 5 |
-| Tor | Onion traffic only via Tor; no DNS leak; fail closed | ⬜ | ⬜ | Stage 5 (Spike C only) |
-| Tor | Status indicator | ⬜ | ⬜ | Stage 5 |
+| Tor | Bundled tor started, controlled (SAFECOOKIE, TAKEOWNERSHIP) and restarted after a crash | ✅ M | ⬜ | `test_torrc_and_control_session`, `TorFailsClosedTest`, `TorController.*`; live: `RealTorTest` (tor 0.4.9.16) |
+| Tor | tor ends with TorFox, also when TorFox is killed (job object) | ✅ M | 🟡 | `test_tor_runs_in_a_job_and_exits_with_torfox`, `test_the_job_alone_ends_tor_if_torfox_is_killed`; macOS relies on `__OwningControllerProcess` and TAKEOWNERSHIP, untested there |
+| Tor | Every Tor-window request goes to tor's SOCKS port with the host name; nothing direct; no lookup that could leave the computer | ✅ M | ⬜ | `test_tor_window_waits_for_tor_then_loads_through_tor_only`, `TorDnsTest` (with a control) |
+| Tor | Fail closed while tor connects or after it stops: tab guard, context gate and proxy, each on its own | ✅ M | ⬜ | `TorWindowTest`, `TorFailsClosedTest`, `TorContextGateTest`, `ProxyLayerTest`, `ProxyLayerAfterDeathTest` |
+| Tor | A Tor window's traffic leaves through Tor and reaches onion services | ✅ live | ⬜ | `LiveTorTest`: check.torproject.org says `IsTor`, DuckDuckGo's onion service loads |
+| Tor | Onion addresses: v3 with checksum, typos and mixed input refused, opened in a Tor window from normal windows | ✅ M | ⬜ | `TorOnion.*`, `test_mistyped_onion_addresses_are_refused_and_never_searched`, `test_onion_addresses_from_a_normal_window_open_in_a_tor_window` |
+| Tor | Tor windows refuse local addresses (incl. workers), other apps, camera/microphone/clipboard and private-window links | ✅ M | ⬜ | `test_tor_windows_refuse_this_computer_and_the_local_network`, `TorContextGateTest`, `TorSecureContextTest`, `test_link_menu_never_leaves_tor` |
+| Tor | Tor windows: third-party cookies always blocked; WebRTC gathers no candidates; system proxy setting ignored | ✅ M | ⬜ | `test_third_party_cookies_are_always_blocked` (with a control), `test_webrtc_in_tor_windows_reveals_no_address`, `test_system_proxy_setting_never_changes_the_tor_context` |
+| Tor | Status indicator state (Connecting n%, Connected, Not connected with the reason); the *Try again* button is not tested | ✅ | ⬜ | `TorWindowTest`, `TorFailsClosedTest`, `test_custom_mode_without_bridges_never_starts_tor` |
+| Tor | New identity: Tor windows closed, new context, `SIGNAL NEWNYM` | ✅ M | ⬜ | `NewIdentityTest` |
+| Tor | Bridges (none, built-in, custom): validated, written to `torrc`, tor restarted on change | ✅ M | ⬜ | `BridgeSettingsTest`, `TorBridges.*`, `Torrc.*` |
+| Tor | Bridges over the real network | 🟡 | 🟡 | Not exercised: this machine reaches Tor without them (Stage 5 findings §6) |
+| Tor | Profile folders whose names tor cannot read (8.3 path) | ✅ | — | `NonAsciiProfileTest`; live: `RealTorNonAsciiProfileTest` |
+| Tor | Downloads in Tor windows | 🟡 | 🟡 | Same context as every request; no test downloads in a Tor window |
+| Tor | Tor Browser's fingerprinting resistance; per-site circuit isolation | ⛔ | ⛔ | TorFox is not Tor Browser; circuits are per destination (`IsolateDestAddr`) because Chromium's SOCKS client has no authentication |
 | Settings | Store: atomic writes, validation, corrupt-file backup and reset | ✅ | ⬜ | `SettingsStore.*`, `SettingsSchema.*`, `test_settings.py` |
 | Settings | Theme persists across restart | ✅ | ⬜ | `test_theme_persists_across_restart` |
 | Settings | All 8 sections active and persistent | ⬜ | ⬜ | Sections exist and are labelled "planned"; Stage 6 |

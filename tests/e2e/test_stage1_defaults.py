@@ -97,6 +97,12 @@ class Stage1DefaultsTest(unittest.TestCase):
             self.assertTrue(result[name].startswith("error:"), (name, result))
         self.assertTrue(self.tf.events("permission_denied"))
 
+    def test_a_window_opened_on_an_address_shows_it_as_visible(self) -> None:
+        # TorFox opened this window on the fixture page (its start URL). Its
+        # first tab used to be created before the window was shown, and
+        # Chromium then treated the page as hidden.
+        self.assertEqual(self.web.evaluate("document.visibilityState"), "visible")
+
     def test_media_permission_refused_by_torfox(self) -> None:
         # NotFoundError would mean "no device" rather than a refusal; require
         # TorFox's handler to have refused the request.
@@ -113,11 +119,15 @@ class Stage1DefaultsTest(unittest.TestCase):
 
     # Onion addresses -----------------------------------------------------------------------
     def test_onion_input_is_refused_and_never_searched(self) -> None:
-        for text in (ONION, "http://" + ONION + "/", "https://" + ONION + "/path?q=1",
-                     "search " + ONION, "WWW." + ONION.upper()):
+        # Valid onion addresses open in a Tor window (tests/e2e/test_tor.py,
+        # with a scripted tor). Everything else that names one is refused:
+        # it is never searched for and never loaded here.
+        typo = ONION[:10] + ("b" if ONION[10] == "a" else "a") + ONION[11:]
+        for text in ("search " + ONION, typo, "ftp://" + ONION + "/", "expyuzz4wqqyqhjn.onion"):
             r = bridge_call(self.shell, "nav.go", {"input": text})
             self.assertFalse(r["ok"], (text, r))
-            self.assertIn("Tor", r["message"])
+            self.assertTrue(r["message"], (text, r))
+        self.assertFalse(self.tf.events("window_created", tor=True))
         time.sleep(0.5)
         urls = [t["url"] for t in self.tf.browser.targets()]
         self.assertFalse([u for u in urls if "onion" in u.lower() or "duckduckgo" in u], urls)

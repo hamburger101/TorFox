@@ -66,6 +66,7 @@ add_library(torfox_core STATIC
   browsing/zoom.cc browsing/zoom.h
   bridge/validator.cc bridge/validator.h
   cmdline/policy.cc cmdline/policy.h
+  crypto/os_crypto.cc crypto/os_crypto.h
   downloads/policy.cc downloads/policy.h
   privacy/clear_data.cc privacy/clear_data.h
   privacy/external_protocols.cc privacy/external_protocols.h
@@ -73,6 +74,12 @@ add_library(torfox_core STATIC
   privacy/trackers.cc privacy/trackers.h
   settings/schema.cc settings/schema.h
   settings/store.cc settings/store.h
+  tor/bridges.cc tor/bridges.h
+  tor/control.cc tor/control.h
+  tor/controller.cc tor/controller.h
+  tor/loopback_channel.cc
+  tor/onion.cc tor/onion.h
+  tor/torrc.cc tor/torrc.h
   url/guards.cc url/guards.h
   url/internal_url.cc url/internal_url.h
   url/nav_input.cc url/nav_input.h
@@ -85,6 +92,12 @@ target_include_directories(torfox_core PUBLIC "${CMAKE_SOURCE_DIR}")
 target_include_directories(torfox_core SYSTEM PUBLIC "${TORFOX_JSON_DIR}")
 target_include_directories(torfox_core PUBLIC "${TORFOX_CORE_GEN_DIR}")
 target_link_libraries(torfox_core PUBLIC torfox_sqlite)
+if(WIN32)
+  # Sockets (tor's control port) and CNG (HMAC, random numbers).
+  target_link_libraries(torfox_core PUBLIC ws2_32 bcrypt)
+elseif(APPLE)
+  target_link_libraries(torfox_core PUBLIC "-framework Security")
+endif()
 target_compile_definitions(torfox_core PUBLIC
   JSON_NOEXCEPTION=1
   JSON_USE_IMPLICIT_CONVERSIONS=0

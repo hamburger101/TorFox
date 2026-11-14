@@ -29,6 +29,14 @@ interface NavState {
   zoom?: number;
 }
 
+interface TorStatus {
+  state: "off" | "starting" | "connecting" | "connected" | "error";
+  progress: number;
+  message: string;
+  retry: boolean;
+  connected: boolean;
+}
+
 interface BarItem {
   id: number;
   title: string;
@@ -40,6 +48,7 @@ type ShellEvent =
   | {
       type: "state";
       private: boolean;
+      tor: TorStatus | null;
       tabs: TabState[];
       activeId: number;
       nav: NavState;
@@ -65,12 +74,26 @@ function displayUrl(nav: NavState): string {
   return nav.url;
 }
 
-type Security = "internal" | "secure" | "insecure" | "none";
+type Security = "internal" | "onion" | "secure" | "insecure" | "none";
+
+function isOnionUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/\.$/, "");
+    return host.endsWith(".onion");
+  } catch {
+    return false;
+  }
+}
 
 function securityOf(nav: NavState): Security {
   const url = nav.url ?? "";
   if (nav.internal) {
     return "internal";
+  }
+  // Onion services are reached only through Tor, which encrypts the whole
+  // way to the service, http:// included.
+  if ((url.startsWith("http://") || url.startsWith("https://")) && isOnionUrl(url)) {
+    return "onion";
   }
   if (url.startsWith("https://")) {
     return "secure";
@@ -103,6 +126,7 @@ export class TorFoxShell extends LitElement {
     activeId: { state: true },
     nav: { state: true },
     isPrivate: { state: true },
+    tor: { state: true },
     editing: { state: true },
     draft: { state: true },
     notice: { state: true },
@@ -121,6 +145,7 @@ export class TorFoxShell extends LitElement {
   declare activeId: number;
   declare nav: NavState;
   declare isPrivate: boolean;
+  declare tor: TorStatus | null;
   declare editing: boolean;
   declare draft: string;
   declare notice: string;
@@ -141,6 +166,7 @@ export class TorFoxShell extends LitElement {
     this.activeId = 0;
     this.nav = {};
     this.isPrivate = false;
+    this.tor = null;
     this.editing = false;
     this.draft = "";
     this.notice = "";
@@ -189,6 +215,11 @@ export class TorFoxShell extends LitElement {
         this.activeId = e.activeId;
         this.nav = e.nav;
         this.isPrivate = e.private;
+        // Tor stopped working: say why, once.
+        if (e.tor && e.tor.state === "error" && this.tor?.state !== "error" && e.tor.message) {
+          this.showNotice(e.tor.message);
+        }
+        this.tor = e.tor ?? null;
         this.barVisible = e.bookmarksBar;
         this.downloads = e.downloads ?? { active: 0, count: 0 };
         if (!e.findOpen && this.findOpen) {
@@ -455,6 +486,8 @@ export class TorFoxShell extends LitElement {
     switch (securityOf(this.nav)) {
       case "internal":
         return html`<span class="badge internal" title="TorFox page">TorFox</span>`;
+      case "onion":
+        return html`<span class="badge onion" title="Onion site: reached only through Tor, which encrypts the connection all the way to the site">${icons.onion}<span>Onion</span></span>`;
       case "secure":
         return html`<span class="badge secure" title="Connection is encrypted (HTTPS)">${icons.lock}</span>`;
       case "insecure":
@@ -464,16 +497,45 @@ export class TorFoxShell extends LitElement {
     }
   }
 
+  private renderTor(t: TorStatus) {
+    const busy = !t.connected && t.state !== "error";
+    const label = t.connected ? "Connected"
+      : t.state === "error" ? "Not connected"
+      : t.state === "off" ? "Not started"
+      : `Connecting ${t.progress}%`;
+    const title = t.connected
+      ? "Tor window: every connection goes through Tor. Nothing is kept after the last Tor window closes."
+      : t.message ? `Tor: ${t.message}`
+      : "Tor is starting. Pages in this window wait until Tor is connected.";
+    return html`
+      <span class="tor-badge ${t.connected ? "ok" : t.state === "error" ? "error" : "busy"}"
+        id="tor-status" role="status" title=${title}>
+        ${icons.onion}<span>Tor</span><span class="tor-state">${label}</span>
+        ${busy
+          ? html`<span class="tor-progress" aria-hidden="true"><span class="tor-progress-fill"
+              style=${styleMap({ width: `${Math.max(4, Math.min(100, t.progress))}%` })}></span></span>`
+          : nothing}
+      </span>
+      ${t.state === "error" && !t.retry
+        ? html`<button class="tor-action" id="tor-retry" @click=${() => this.run("tor.connect")}>Try again</button>`
+        : nothing}
+      <button class="icon tor-identity" id="tor-identity"
+        title="New identity: closes every Tor window and starts again with new Tor circuits"
+        aria-label="New identity" @click=${() => this.run("tor.newIdentity")}>${icons.broom}</button>`;
+  }
+
   override render() {
     const nav = this.nav;
     const value = this.editing ? this.draft : displayUrl(nav);
     const zoom = nav.zoom ?? 100;
     return html`
-      <div class="strip ${this.isPrivate ? "private" : ""}" role="tablist" aria-label="Tabs">
+      <div class="strip ${this.tor ? "tor" : this.isPrivate ? "private" : ""}" role="tablist" aria-label="Tabs">
         ${this.tabs.map((t) => this.renderTab(t))}
         <button class="icon new-tab" title="New tab" aria-label="New tab"
           @click=${() => call("tab.new")}>${icons.plus}</button>
-        ${this.isPrivate
+        ${this.tor
+          ? this.renderTor(this.tor)
+          : this.isPrivate
           ? html`<span class="private-badge" title="Private window: no history, and cookies and site data are forgotten when it closes">${icons.mask}<span>Private</span></span>`
           : nothing}
       </div>
@@ -493,7 +555,7 @@ export class TorFoxShell extends LitElement {
           ${this.renderSecurity()}
           <input id="address" type="text" spellcheck="false" autocomplete="off"
             aria-label="Address and search bar"
-            placeholder="Search with DuckDuckGo or enter an address"
+            placeholder=${this.tor ? "Search with DuckDuckGo over Tor or enter an address" : "Search with DuckDuckGo or enter an address"}
             .value=${value}
             @input=${this.onInput}
             @keydown=${this.onKeyDown}
@@ -575,6 +637,74 @@ export class TorFoxShell extends LitElement {
     }
     .strip.private {
       background: var(--strip-private);
+    }
+    .strip.tor {
+      background: var(--strip-tor);
+    }
+    .tor-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      align-self: center;
+      margin-left: auto;
+      padding: 3px 10px;
+      border-radius: 12px;
+      background: var(--tor-soft);
+      color: var(--tor);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tor-badge svg {
+      width: 14px;
+      height: 14px;
+    }
+    .tor-state {
+      font-weight: 500;
+      color: var(--fg-muted);
+    }
+    .tor-badge.ok .tor-state {
+      color: var(--ok);
+    }
+    .tor-badge.error .tor-state {
+      color: var(--danger);
+    }
+    .tor-progress {
+      width: 48px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      overflow: hidden;
+    }
+    .tor-progress-fill {
+      display: block;
+      height: 100%;
+      background: var(--tor);
+      transition: width 200ms ease;
+    }
+    .tor-action {
+      align-self: center;
+      height: 24px;
+      margin-left: 6px;
+      padding: 0 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      background: transparent;
+      font-size: 12px;
+    }
+    .tor-action:hover {
+      background: var(--field-hover);
+    }
+    .tor-identity {
+      align-self: center;
+      margin-left: 4px;
+      width: 28px;
+      height: 28px;
+      color: var(--tor);
+    }
+    .tor-action:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .private-badge {
       display: inline-flex;
@@ -767,6 +897,16 @@ export class TorFoxShell extends LitElement {
     }
     .badge.insecure {
       color: var(--danger);
+    }
+    .badge.onion {
+      background: var(--tor-soft);
+      color: var(--tor);
+      font-weight: 600;
+      padding: 0 9px;
+    }
+    .badge.onion svg {
+      width: 14px;
+      height: 14px;
     }
     .badge.secure svg,
     .badge.search svg {

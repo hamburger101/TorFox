@@ -113,6 +113,9 @@ std::optional<ShortcutCommand> Windows(int key, uint32_t mods) {
   if (auto c = Common(key, mods, kCtrl)) {
     return c;
   }
+  if (mods == (kAlt | kShift) && key == 'N') {
+    return Cmd(Command::kNewTorWindow);
+  }
   if (mods == kCtrl) {
     switch (key) {
       case kF4:
@@ -178,6 +181,9 @@ std::optional<ShortcutCommand> Windows(int key, uint32_t mods) {
 std::optional<ShortcutCommand> Mac(int key, uint32_t mods) {
   if (auto c = Common(key, mods, kCmd)) {
     return c;
+  }
+  if (mods == (kCmd | kAlt) && key == 'N') {
+    return Cmd(Command::kNewTorWindow);
   }
   if (mods == kCmd) {
     switch (key) {

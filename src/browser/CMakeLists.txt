@@ -60,6 +60,7 @@ set(TORFOX_BROWSER_SOURCES
   app/privacy_service.cc app/privacy_service.h
   app/settings_service.cc app/settings_service.h
   app/test_log.cc app/test_log.h
+  app/tor_service.cc app/tor_service.h
   bridge/bridge_handler.cc bridge/bridge_handler.h
   platform/platform.h
   scheme/internal_scheme.cc scheme/internal_scheme.h
@@ -104,6 +105,19 @@ if(OS_WINDOWS)
   COPY_FILES("${CEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
   # Lets the AppContainer-sandboxed network service read the install folder.
   SET_LPAC_ACLS("${CEF_TARGET}")
+
+  # The official Tor Expert Bundle (OpenPGP-verified, then pinned by SHA-256
+  # in deps.lock.json): tor, its pluggable transports, the GeoIP files and
+  # the licences, in <TorFox>/tor. tor-gencert is a relay tool: left out.
+  torfox_verified_dep(TORFOX_TOR_DIR tor windows-x86_64)
+  set(_tor_out "${CEF_TARGET_OUT_DIR}/tor")
+  add_custom_command(TARGET ${CEF_TARGET} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_tor_out}/data" "${_tor_out}/docs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/tor" "${_tor_out}"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${_tor_out}/tor-gencert.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORFOX_TOR_DIR}/data/geoip" "${TORFOX_TOR_DIR}/data/geoip6" "${_tor_out}/data"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/docs" "${_tor_out}/docs"
+    VERBATIM)
 elseif(OS_MAC)
   include(mac.cmake)
 endif()

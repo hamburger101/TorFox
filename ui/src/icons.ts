@@ -36,6 +36,8 @@ export const icons = {
   globe: base(svg`<circle cx="8" cy="8" r="5.6"/><path d="M2.6 8h10.8M8 2.4c1.6 1.6 2.3 3.5 2.3 5.6S9.6 12 8 13.6M8 2.4C6.4 4 5.7 5.9 5.7 8S6.4 12 8 13.6"/>`),
   history: base(svg`<path d="M3 8a5 5 0 1 0 1.5-3.6"/><path d="M3 3.2v2.4h2.4"/><path d="M8 5.3V8l1.9 1.3"/>`),
   mask: base(svg`<path d="M2 6.2c0-1 .8-1.7 1.8-1.7h8.4c1 0 1.8.7 1.8 1.7v.6c0 2.2-1.6 3.8-3.5 3.8-1 0-1.6-.5-2.5-1.6-.9 1.1-1.5 1.6-2.5 1.6C3.6 10.6 2 9 2 6.8v-.6Z"/><circle cx="5.3" cy="7" r=".7" fill="currentColor"/><circle cx="10.7" cy="7" r=".7" fill="currentColor"/>`),
+  // New identity (Tor windows): a broom.
+  broom: base(svg`<path d="M11.8 2.2 8.4 7.4"/><path d="M5.4 7.4h5.2l1.3 6.1H4.1l1.3-6.1Z"/><path d="M6.7 10.2v3.3M9.3 10.2v3.3"/>`),
   chevronUp: base(svg`<path d="m4 10 4-4 4 4"/>`),
   chevronDown: base(svg`<path d="m4 6 4 4 4-4"/>`),
   edit: base(svg`<path d="M10.6 3.2 12.8 5.4 6 12.2l-2.9.7.7-2.9 6.8-6.8Z"/>`),

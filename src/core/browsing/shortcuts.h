@@ -41,6 +41,9 @@ enum class Command {
   kShowHistory,
   kShowDownloads,
   kSettings,
+  kNewTorWindow,
+  kNewTorIdentity,  // Closes the Tor windows; new circuits and a fresh Tor context.
+  kLastCommand = kNewTorIdentity,
 };
 
 struct ShortcutCommand {

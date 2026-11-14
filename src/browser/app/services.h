@@ -6,6 +6,7 @@
 #define TORFOX_BROWSER_APP_SERVICES_H_
 
 #include <functional>
+#include <memory>
 #include <string>
 
 #include "include/wrapper/cef_message_router.h"
@@ -17,6 +18,7 @@ class DownloadService;
 class PlacesService;
 class PrivacyService;
 class SettingsService;
+class TorService;
 class BrowserWindow;
 
 // Browser-process services shared by windows and handlers. Owned by
@@ -30,6 +32,14 @@ struct Services {
   // Settings > Privacy & Security. Also read on the IO thread (tracker
   // blocking): set before the first window opens, cleared after the last.
   PrivacyService* privacy = nullptr;
+  // TorFox's tor. Tor windows' tabs keep their own reference and read
+  // connected() on the IO thread.
+  std::shared_ptr<TorService> tor;
+  // Starts tor with the bridges from Settings > Tor, if it is not running.
+  std::function<void()> tor_start;
+  // New identity: closes every Tor window, forgets the Tor context and asks
+  // tor for new circuits; then opens a fresh Tor window.
+  std::function<void(BrowserWindow* requester)> tor_new_identity;
   // Shown once in the first window (for example: clearing data failed).
   std::string startup_notice;
   CefRefPtr<CefMessageRouterBrowserSide> router;

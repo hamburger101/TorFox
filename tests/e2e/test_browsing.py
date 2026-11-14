@@ -141,12 +141,16 @@ class BrowsingTest(unittest.TestCase):
         wait_state(self.shell, lambda s: s["tabs"][0]["title"] == "Page two", "page title")
 
     def test_onion_input_is_never_searched_or_loaded(self) -> None:
+        # A valid onion address opens a Tor window (tests/e2e/test_tor.py);
+        # these are refused without loading or searching anything.
         before = len(self.tf.events("load_start"))
-        for text in (ONION, f"http://{ONION}/", f"look up {ONION}"):
+        typo = ONION[:30] + ("b" if ONION[30] == "a" else "a") + ONION[31:]
+        for text in (typo, f"http://{typo}/", f"look up {ONION}"):
             result = bridge_call(self.shell, "nav.go", {"input": text})
             self.assertFalse(result["ok"], text)
-            self.assertIn("Tor", result["message"])
+            self.assertTrue(result["message"], text)
         time.sleep(0.5)
+        self.assertFalse(self.tf.events("window_created", tor=True))
         self.assertEqual(len(self.tf.events("load_start")), before)
         self.assertEqual(shell_state(self.shell)["nav"]["url"], self.one)
 
@@ -375,8 +379,8 @@ class BrowsingTest(unittest.TestCase):
             menus[selector] = labels
             for banned in ("save", "print", "source", "inspect", "download"):
                 self.assertFalse([l for l in labels if banned in l.lower()], (selector, labels))
-        self.assertEqual(menus["#plain"][:3], ["Open link in new tab", "Open link in private window",
-                                               "Copy link address"])
+        self.assertEqual(menus["#plain"][:4], ["Open link in new tab", "Open link in private window",
+                                               "Open link in Tor window", "Copy link address"])
         self.assertEqual(menus["#img"][:2], ["Open image in new tab", "Copy image address"])
         self.assertEqual(menus["#empty"][:3], ["Back", "Forward", "Reload"])
 

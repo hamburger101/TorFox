@@ -17,6 +17,9 @@ namespace torfox::fault_injection {
 //   --torfox-test-skip-guards=nav,resource   ... and so does OnBeforeResourceLoad
 //   --torfox-test-skip-guards=download       CanDownload allows every download,
 //                                            so OnBeforeDownload's check is tested
+//   --torfox-test-skip-guards=tor            Tor windows' requests are not held
+//                                            back while tor is not connected, so
+//                                            the Tor context's proxy is tested
 //   --torfox-test-skip-guards=download-update  progress updates do not cancel
 //                                            downloads when downloads are disabled,
 //                                            so the settings change itself is tested
@@ -27,6 +30,7 @@ bool SkipNavigationGuard();
 bool SkipResourceGuard();
 bool SkipDownloadGuard();
 bool SkipDownloadUpdateGuard();
+bool SkipTorGuard();
 
 }  // namespace torfox::fault_injection
 

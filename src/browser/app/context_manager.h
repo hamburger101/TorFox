@@ -31,7 +31,7 @@ namespace torfox {
 // failure is fatal (fail closed).
 class ContextManager {
  public:
-  enum class Kind { kInternal, kNormal, kPrivate };
+  enum class Kind { kInternal, kNormal, kPrivate, kTor };
 
   using DoneCallback = std::function<void(bool ok, const std::string& error)>;
   // |context| is null on failure, with |error| set.
@@ -55,6 +55,27 @@ class ContextManager {
   // a download's first bytes before TorFox picks the real path
   // (DownloadService::StagingDirectory()). Call before Initialize().
   void SetDownloadDirectory(std::filesystem::path dir) { download_dir_ = std::move(dir); }
+
+  // The Tor context, shared by every Tor window until New Identity drops
+  // it: off the record, and its only route out is tor's SOCKS port
+  // (fixed_servers, socks5://127.0.0.1:<port>, never DIRECT, loopback
+  // included). Before tor has reported a port it is kTorPlaceholderPort,
+  // where nothing should listen, so a request that got past the Tor
+  // windows' guards would fail rather than leave directly. |done| runs once
+  // the context and its preferences have been read back. While the context
+  // exists, later calls get the same one.
+  void CreateTor(int socks_port, PrivateCallback done);
+  // Points the Tor context (if any, and any created later) at |socks_port|.
+  bool SetTorPort(int socks_port, std::string* error);
+  // Forgets the Tor context: windows that still hold it keep it until they
+  // close; the next CreateTor() makes a new one (New Identity).
+  void DropTor();
+  bool IsTor(CefRefPtr<CefRequestContext> context) const;
+  // Requests in the Tor context that no tab makes (service workers, for
+  // example) are cancelled unless |allowed| returns true. Called on the IO
+  // thread; set before the first Tor context is created.
+  void SetTorGate(std::function<bool()> allowed) { tor_gate_ = std::move(allowed); }
+  static constexpr int kTorPlaceholderPort = 9;
 
   // Settings > Privacy & Security > Block third-party cookies, for web
   // contexts: applied to Normal now (if it exists) and to every context
@@ -86,9 +107,16 @@ class ContextManager {
   bool ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context, std::string* error);
   void Finish(bool ok, const std::string& error);
   void OnPrivateInitialized(PrivateHandler* handler, CefRefPtr<CefRequestContext> context);
+  void OnTorInitialized(PrivateHandler* handler, CefRefPtr<CefRequestContext> context);
 
   CefRefPtr<CefRequestContext> internal_;
   CefRefPtr<CefRequestContext> normal_;
+  CefRefPtr<CefRequestContext> tor_;
+  std::vector<CefRefPtr<CefRequestContext>> old_tor_;  // Dropped, possibly still in use.
+  int tor_port_ = kTorPlaceholderPort;
+  bool tor_pending_ = false;
+  std::vector<PrivateCallback> tor_waiting_;
+  std::function<bool()> tor_gate_;
   CefRefPtr<CefSchemeHandlerFactory> scheme_factory_;
   std::filesystem::path normal_path_;
   std::filesystem::path download_dir_;

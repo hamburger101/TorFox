@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "include/cef_command_line.h"
 #include "include/views/cef_window.h"
@@ -82,6 +83,48 @@ std::shared_ptr<PromptHandle> ShowConfirmPrompt(CefRefPtr<CefWindow> window,
 // UTF-8 <-> native path helpers.
 std::filesystem::path PathFromUtf8(const std::string& utf8);
 std::string PathToUtf8(const std::filesystem::path& path);
+
+// ----- Tor --------------------------------------------------------------------
+
+// A program TorFox started (tor). It cannot outlive TorFox: on Windows it
+// runs in a job object that kills it when TorFox exits, however TorFox ends;
+// on macOS tor's own __OwningControllerProcess check ends it.
+class ChildProcess {
+ public:
+  virtual ~ChildProcess() = default;  // Kills the process if it is running.
+  virtual long pid() const = 0;
+  // True once the process has exited, with its |exit_code|.
+  virtual bool Exited(int* exit_code) = 0;
+  // Waits up to |ms| milliseconds for it to exit.
+  virtual bool WaitForExit(int ms) = 0;
+  virtual void Kill() = 0;
+};
+
+// Starts |exe| with |args| (UTF-8) in |working_dir|, without a console
+// window, with no handles inherited. Null, with |error|, on failure.
+std::unique_ptr<ChildProcess> LaunchHidden(const std::filesystem::path& exe,
+                                           const std::vector<std::string>& args,
+                                           const std::filesystem::path& working_dir,
+                                           std::string* error);
+
+long CurrentProcessId();
+
+// Where the bundled tor lives. |dir| is tor's working directory: it holds
+// the tor executable and pluggable_transports/; |pt_client| is lyrebird's
+// path relative to it.
+struct TorPaths {
+  std::filesystem::path dir;
+  std::filesystem::path exe;
+  std::string pt_client;
+  std::filesystem::path geoip;
+  std::filesystem::path geoip6;
+  std::filesystem::path pt_config;
+};
+TorPaths BundledTorPaths();
+
+// |path| (which must exist) in a form torrc can carry: unchanged if it is
+// ASCII; on Windows its short (8.3) form otherwise. Empty if neither works.
+std::filesystem::path AsciiPath(const std::filesystem::path& path);
 
 }  // namespace torfox::platform
 

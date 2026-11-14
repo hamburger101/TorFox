@@ -53,16 +53,22 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
 |---|---|---|---|
 | Base (global) | Disk, never hosts content | Proxy pref `direct` (also in Local State) | Holds the strict baseline prefs |
 | Internal | Off-the-record (OTR) | None; http(s) requests are cancelled; proxy pref `direct` | Only context with the `torfox` scheme handler |
-| Normal | Disk profile | Direct, or the system's proxy settings if the user turns that on | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled and offered in a Tor tab |
+| Normal | Disk profile | Direct, or the system's proxy settings if the user turns that on | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled; typed onion addresses open in a Tor window |
 | Private | Its own OTR profile, one per private window | As Normal | No history; its downloads list is its own and is dropped with the window |
-| Tor | Its own OTR profile | SOCKS5 to tor only | See below |
+| Tor | Its own OTR profile, shared by all Tor windows until New identity | SOCKS5 to tor only | See below |
 
 The Tor context:
 - **Proxy:** the proxy pref is applied in `OnRequestContextInitialized` and read back before any browser is created.
-  It is `fixed_servers`, never DIRECT, with bypass list `<-loopback>`.
-- **Traffic:** every request goes through Tor: onion and clearnet subresources alike.
-- **Hardening:** `webrtc.ip_handling_policy = disable_non_proxied_udp` and prediction off.
-  Camera, mic, location, notifications and external protocols are hard-denied, and history is never recorded.
+  It is `fixed_servers`, never DIRECT, with bypass list `<-loopback>`. Until tor reports its SOCKS port, the
+  port is a placeholder (9) that nothing listens on.
+- **Traffic:** every request goes through Tor: onion and clearnet subresources alike. Chromium sends the host
+  name to tor (SOCKS5 address type 3), so nothing is resolved locally.
+- **Hardening:** `webrtc.ip_handling_policy = disable_non_proxied_udp`, prediction off, third-party cookies
+  always blocked. Camera, microphone, clipboard, location, notifications and other apps are refused without
+  asking, local addresses are refused, and history is never recorded. The system-proxy setting never applies.
+- **Fail closed, three layers:** the Tor tab's guard (`TabClient::TorHoldsBack`), the context's `TorGate` for
+  requests no tab makes (service workers), and the proxy itself. Each is tested on its own
+  ([`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md) §1).
 
 A tab changes context only by replacing its browser. Popups inherit the opener's context.
 
@@ -170,15 +176,23 @@ Each layer is also tested end-to-end with the outer layers switched off (test bu
     Stage 2 commands are reachable through shortcuts and the in-window app menu. macOS is built only by CI.
 
 ## Tor
-- **Client:** the official Tor Expert Bundle (C tor). Bundles are GPG-verified against the Tor Browser
-  Developers key `EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290` in CI, then pinned by SHA-256.
-- **`TorService`:**
-  - writes `torrc` at runtime: random loopback SOCKS and control ports, cookie auth, `__OwningControllerProcess`, `ClientOnly`;
-  - takes ownership over the control port;
-  - tracks bootstrap and exposes `Disconnected / Connecting(n%) / Connected / Error` to the UI;
-  - supports bridges (obfs4, Snowflake, WebTunnel).
-- **Fail closed:** Tor-context requests are cancelled unless tor is Connected, and the proxy config has no
-  DIRECT fallback.
+- **Client:** the official Tor Expert Bundle (C tor; 16.0.1, tor 0.4.9.16). Bundles are GPG-verified
+  against the Tor Browser Developers key `EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290` in CI, then
+  pinned by SHA-256. tor and its pluggable transports are copied to `<TorFox>/tor` (Windows) or
+  `Contents/Helpers/tor` (macOS); `tor-gencert` is left out.
+- **Tor windows:** private windows whose context is the Tor context. A normal window never shows a Tor
+  page, and a Tor window never shows a non-Tor page; links between them open the other kind of window.
+- **`TorService`** (`src/browser/app/tor_service.cc`, protocol code in `src/core/tor/`):
+  - writes `torrc` before each start (`src/core/tor/torrc.cc`): loopback SOCKS and control ports chosen by
+    tor, cookie auth, `__OwningControllerProcess`, `ClientOnly`, `IsolateDestAddr`, bridges;
+  - authenticates with SAFECOOKIE (checking tor's HMAC first), takes ownership, and follows bootstrap
+    through `STATUS_CLIENT` events;
+  - on Windows, starts tor suspended inside a kill-on-close job object;
+  - exposes `off / starting / connecting(n%) / connected / error` to the UI, and restarts tor after 2, 5
+    and 15 s when it stops unexpectedly;
+  - restarts tor when a bridge setting changes; *New identity* drops the context and sends `SIGNAL NEWNYM`.
+- **Fail closed:** see the Tor context above. A Tor tab's request starts only while tor is connected, and
+  the proxy config has no DIRECT fallback.
 - **Circuit isolation:** Chromium's SOCKS5 client has no authentication, so per-tab isolation via SOCKS
   credentials is impossible. TorFox uses `IsolateDestAddr`, which is weaker than Tor Browser's first-party isolation.
 
