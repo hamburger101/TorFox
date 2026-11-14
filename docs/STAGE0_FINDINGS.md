@@ -87,6 +87,25 @@ Every pref below could be set (`CanSetPreference` true) and read back:
   → TorFox implements its own HTTPS-first policy with an explicit interstitial, and disables Chromium's
   built-in upgrade so the behaviour is deterministic and testable with local fixtures.
 
+## Tor bundle
+- `*.torproject.org` connections are reset during the TLS handshake on the development network, so the
+  bundles are fetched by `.github/workflows/fetch-tor.yml`.
+- The Tor Browser 16.0.1 expert bundles (windows-x86_64, macos-x86_64, macos-aarch64) carry valid
+  signatures whose primary key is `EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290` (signing subkey
+  `022D A248 432D 2A0E 0F54 E65E 316C 1FAC D62D 07D9`). They were verified twice:
+  - in CI, using the key from WKD;
+  - again locally, using the key from keys.openpgp.org.
+
+  They are pinned by SHA-256 in `deps.lock.json`.
+- `tor.exe --version` reports **Tor 0.4.9.16**, with Libevent 2.1.13, OpenSSL 3.5.9 and Zlib 1.4.
+- **Licensing:** this tor build says it is covered by the **GPL-3.0**. TorFox (MPL-2.0) runs tor as a separate
+  program, which is aggregation. Release packages must still include the GPL text and a pointer to the
+  corresponding tor source.
+- The bundle contains `lyrebird`, `conjure-client`, `pt_config.json` and the geoip files.
+  - `lyrebird` now provides meek_lite, obfs4, WebTunnel **and Snowflake**.
+  - `pt_config.json` ships built-in bridges: 7 obfs4, 2 Snowflake, 1 meek, with obfs4 as the recommended default.
+  - This is enough for Settings → Tor Network → Built-in bridges.
+
 ## Plan changes from these findings
 1. Add `--enable-features=NetworkServiceSandbox` and `--disable-extensions`, merging into CEF's feature switches.
 2. The installer applies the LPAC ACL to the install directory.
