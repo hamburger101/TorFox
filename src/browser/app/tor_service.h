@@ -79,6 +79,8 @@ class TorService : public std::enable_shared_from_this<TorService> {
   void NewIdentity(std::function<void(bool ok)> done);
 
   static const char* StateName(State state);
+  // tor's own version, once TorFox has taken control of it (empty before).
+  std::string version() const;
 
   // Any thread.
   bool connected() const { return connected_.load(); }
@@ -104,6 +106,7 @@ class TorService : public std::enable_shared_from_this<TorService> {
   mutable std::mutex lock_;  // Guards status_, alive_, controller_ and writes to connected_.
   Status status_;
   bool alive_ = false;  // An authenticated control connection is open.
+  std::string version_;
   std::shared_ptr<tor::Controller> controller_;
 
   std::map<int, std::function<void()>> observers_;

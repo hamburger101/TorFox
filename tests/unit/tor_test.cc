@@ -500,14 +500,6 @@ TEST(TorOnion, TypedOnionAddressesBecomeUrlsAndAreNeverSearched) {
   }
 }
 
-TEST(TorOnion, TorSearchesUseDuckDuckGosOnionService) {
-  EXPECT_EQ(tor::TorSearchUrl("https://duckduckgo.com/?q=a%20b"),
-            "https://" + std::string(tor::kDuckDuckGoOnion) + "/?q=a%20b");
-  EXPECT_EQ(tor::TorSearchUrl("https://example.com/?q=a"), "https://example.com/?q=a");
-  EXPECT_EQ(tor::TorSearchUrl("https://duckduckgo.com.evil/?q=a"),
-            "https://duckduckgo.com.evil/?q=a");
-}
-
 // ----- Tor tabs' navigation policy ---------------------------------------------
 
 TEST(TorGuards, TorTabsAllowOnionHostsAndRefuseLocalAddresses) {

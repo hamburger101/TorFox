@@ -94,6 +94,16 @@ checks that it stays empty of browsing data.
   that context.
 - **Pages:** `torfox://bookmarks/` and `torfox://history/` reach the data only through their own bridge
   commands (`bookmarks.*`, `history.*`). The shell keeps only the commands it needs (star, folder menus).
+- **Saved tabs** (*Settings > General > On startup > Restore previous tabs*): the tabs of Normal windows,
+  in `<user data>/session.json`, written atomically a second after they change (so a crash keeps them) and
+  only while the choice is on and *Clear when TorFox closes > History* is off. Otherwise the file is removed:
+  when either setting changes, at start and at exit. Private and Tor windows are never saved; only http(s)
+  URLs without an onion host and TorFox's own pages are kept, and a damaged or foreign file restores nothing
+  (`src/core/browsing/session.cc`). A save that would leave no window is skipped, so the file keeps the
+  windows that were open when the last one closed.
+- **Search** (*Settings > Search engine*): DuckDuckGo, DuckDuckGo HTML (`html.duckduckgo.com/html/`) or
+  DuckDuckGo Lite (`lite.duckduckgo.com/lite/`); in Tor windows the same page on DuckDuckGo's onion service
+  (`src/core/url/search.cc`). Used by the address bar, the new tab page and the page menu's selection search.
 
 ## Privacy (web contexts)
 All of it is decided in the browser process (`TabClient`, `PrivacyService`), from Settings > Privacy &

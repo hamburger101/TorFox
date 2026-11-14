@@ -41,6 +41,43 @@ def png_pixel() -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
+class SearchEngineTest(unittest.TestCase):
+    """Settings > Search engine: each choice is used at once, by the address
+    bar and the new tab page."""
+
+    ENGINES = (("duckduckgo-html", "https://html.duckduckgo.com/html/?q="),
+               ("duckduckgo-lite", "https://lite.duckduckgo.com/lite/?q="),
+               ("duckduckgo", "https://duckduckgo.com/?q="))
+
+    def test_the_chosen_engine_gets_the_search(self) -> None:
+        rules = HOST_RULES + ", MAP html.duckduckgo.com ~NOTFOUND, MAP lite.duckduckgo.com ~NOTFOUND"
+        with TorFox(host_rules=rules) as tf:
+            shell = tf.shell()
+            self.assertTrue(bridge_call(shell, "app.openSettings")["ok"])
+            settings = tf.page_at("torfox://settings/")
+            for engine, prefix in self.ENGINES:
+                r = bridge_call(settings, "settings.set", {"key": "search.engine", "value": engine})
+                self.assertTrue(r["ok"], r)
+                # From the address bar of a new tab...
+                self.assertTrue(bridge_call(shell, "tab.new")["ok"])
+                self.assertTrue(bridge_call(shell, "nav.go", {"input": "privacy browser"})["ok"])
+                wait_state(shell, lambda s: s["nav"].get("url") == prefix + "privacy%20browser",
+                           f"{engine} search")
+            # ...and from the new tab page's own search box.
+            before = {t["targetId"] for t in tf.browser.targets()}
+            self.assertTrue(bridge_call(shell, "tab.new")["ok"])
+            page = tf.page(lambda t: t["url"] == "torfox://newtab/" and t.get("targetId") not in before, 10)
+            self.assertTrue(bridge_call(settings, "settings.set",
+                                        {"key": "search.engine", "value": "duckduckgo-lite"})["ok"])
+            # Typed and submitted like a user would (the page is replaced by
+            # the search, so no reply would come back from a bridge call).
+            page.evaluate("""(() => { const r = document.querySelector('tf-newtab').shadowRoot;
+                r.querySelector('#q').value = 'lite words';
+                r.querySelector('form').requestSubmit(); return true; })()""", user_gesture=True)
+            wait_state(shell, lambda s: s["nav"].get("url") == "https://lite.duckduckgo.com/lite/?q=lite%20words",
+                       "new tab page search")
+
+
 class BrowsingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

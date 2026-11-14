@@ -8,6 +8,8 @@
 
 namespace torfox {
 inline constexpr char kTorFoxVersion[] = "@PROJECT_VERSION@";
+// The Tor Expert Bundle TorFox ships (deps.lock.json).
+inline constexpr char kTorBundleVersion[] = "@TORFOX_TOR_BUNDLE_VERSION@";
 }  // namespace torfox
 
 #endif  // TORFOX_BROWSER_APP_VERSION_H_

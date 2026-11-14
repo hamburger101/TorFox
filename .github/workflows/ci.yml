@@ -78,7 +78,7 @@ jobs:
         working-directory: tests/e2e
         env:
           TORFOX_QUIET_SECONDS: "60"
-        run: python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor
+        run: python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup
 
       # The bundled tor itself (needs the network; LiveTorTest is skipped,
       # not failed, if tor cannot finish bootstrapping from the runner).

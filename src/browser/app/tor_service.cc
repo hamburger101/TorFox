@@ -30,6 +30,11 @@ void Sleep(int ms) {
 
 }  // namespace
 
+std::string TorService::version() const {
+  std::lock_guard<std::mutex> guard(lock_);
+  return version_;
+}
+
 const char* TorService::StateName(State state) {
   switch (state) {
     case State::kOff:
@@ -350,6 +355,7 @@ bool TorService::Session(int generation, const BridgeConfig& cfg) {
   {
     std::lock_guard<std::mutex> guard(lock_);
     alive_ = !Stopping();
+    version_ = setup.tor_version;
   }
   auto status_of = [](const tor::Bootstrap& b) {
     Status s;

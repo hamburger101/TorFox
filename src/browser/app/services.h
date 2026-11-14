@@ -45,9 +45,15 @@ struct Services {
   CefRefPtr<CefMessageRouterBrowserSide> router;
   std::function<void(BrowserWindow*)> window_opened;
   std::function<void(BrowserWindow*)> window_destroyed;
+  // A normal window's tabs changed (Settings > General > On startup).
+  std::function<void()> session_changed;
 };
 
 Services& GetServices();
+
+// |search_url| (a DuckDuckGoSearchUrl search) for the engine chosen in
+// Settings > Search, on DuckDuckGo's onion service if |tor|.
+std::string SearchUrlFor(const std::string& search_url, bool tor);
 
 }  // namespace torfox
 

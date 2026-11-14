@@ -86,7 +86,12 @@ bool SetPrefVerified(CefRefPtr<CefPreferenceManager> context,
   bool ok = context->CanSetPreference(name) && context->SetPreference(name, value, err);
   CefRefPtr<CefValue> readback = ok ? context->GetPreference(name) : nullptr;
   bool verified = ok && readback && readback->IsEqual(value);
-  test_log::Event("pref", {{"context", context_name}, {"name", name}, {"ok", verified}});
+  test_log::Event("pref", {{"context", context_name},
+                          {"name", name},
+                          {"ok", verified},
+                          {"value", readback && readback->GetType() == VTYPE_STRING
+                                        ? readback->GetString().ToString()
+                                        : std::string()}});
   if (!verified) {
     *error = "Could not apply the privacy preference \"" + name + "\" to the " + context_name +
              " context" + (err.empty() ? "" : (": " + err.ToString())) + ".";

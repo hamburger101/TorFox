@@ -343,6 +343,13 @@ class TorWindowTest(TorBase):
         wait_for(lambda: [s for s in self.rec("socks") if s["host"] == DDG], 20, "search through tor")
         self.assertIn((DDG, 443), {(s["host"], s["port"]) for s in self.rec("socks")})
         self.assertFalse([s for s in self.rec("socks") if s["host"] == "duckduckgo.com"])
+        # Settings > Search engine picks the page on the onion service too.
+        for engine, path in (("duckduckgo-html", "/html/"), ("duckduckgo-lite", "/lite/")):
+            self.assertTrue(self.set_setting("search.engine", engine)["ok"])
+            self.assertTrue(self.go(shell, f"{engine} words")["ok"])
+            wait_for(lambda: shell_state(shell)["nav"].get("url") ==
+                     f"https://{DDG}{path}?q={engine}%20words", 20, f"{engine} over tor")
+        self.assertFalse([s for s in self.rec("socks") if "duckduckgo.com" in s["host"]])
 
     def test_tor_windows_refuse_this_computer_and_the_local_network(self) -> None:
         shell = self.open_tor()
@@ -624,19 +631,56 @@ class TorContextIsolationTest(TorBase):
         setTimeout(done, 8000);
     })"""
 
-    def test_webrtc_in_tor_windows_reveals_no_address(self) -> None:
+    def test_webrtc_in_tor_windows_sends_nothing_and_reveals_no_address(self) -> None:
+        # A STUN server the page can reach, on this computer's default-route
+        # address (Chromium sends nothing to one on loopback): any UDP a page
+        # sends arrives here.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("192.0.2.1", 9))  # Picks the route; sends nothing.
+        local = probe.getsockname()[0]
+        probe.close()
+        stun = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(stun.close)
+        stun.bind((local, 0))
+        stun.settimeout(0.3)
+        script = self.GATHER.replace("stun:192.0.2.1:3478", f"stun:{local}:{stun.getsockname()[1]}")
+
+        def received() -> int:
+            count = 0
+            while True:
+                try:
+                    stun.recvfrom(4096)
+                    count += 1
+                except (socket.timeout, ConnectionResetError):
+                    return count
+
+        # Control: whether a normal window's page sends anything. On the
+        # development machine it does not (no candidate at all, in any
+        # window), so there the policy below is checked as configuration only.
+        control = self.load(self.normal, self.url("/page"))
+        control.evaluate(script, user_gesture=True, timeout=20)
+        sent = received()
+        print(f"\n[WebRTC] control: a normal window's page sent {sent} STUN packet(s)", end=" ")
+
         shell = self.open_tor()
         self.wait_connected(shell)
         page = self.load(shell, self.url("/page"), "Tor page")
-        result = page.evaluate(self.GATHER, user_gesture=True, timeout=20)
-        addresses = {socket.gethostbyname(socket.gethostname())}
+        result = page.evaluate(script, user_gesture=True, timeout=20)
+        # SOCKS cannot carry UDP: nothing may leave outside Tor.
+        self.assertEqual(received(), 0, "a Tor window's page sent UDP")
+        self.assertEqual(result["candidates"], [])
+        addresses = {socket.gethostbyname(socket.gethostname()), local}
         for info in socket.getaddrinfo(socket.gethostname(), None):
             addresses.add(info[4][0].split("%")[0])
         addresses -= {"127.0.0.1", "::1"}
-        # SOCKS cannot carry UDP: no candidate at all may be gathered.
-        self.assertEqual(result["candidates"], [])
         for address in addresses:
             self.assertNotIn(address, result["sdp"])
+        # The policy that makes it so, as Chromium read it back for the Tor
+        # context: no UDP except through the proxy (which has none).
+        policy = [e for e in self.tf.events("pref", context="tor")
+                  if e.get("name") == "webrtc.ip_handling_policy"]
+        self.assertTrue(policy)
+        self.assertEqual({(e["ok"], e["value"]) for e in policy}, {(True, "disable_non_proxied_udp")})
 
 
 class TorSecureContextTest(TorBase):

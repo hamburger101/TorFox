@@ -19,6 +19,7 @@
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
 #include "src/browser/platform/platform.h"
+#include "src/core/browsing/session.h"
 #include "src/core/browsing/shortcuts.h"
 #include "src/core/browsing/tabs.h"
 #include "src/core/json.h"
@@ -50,6 +51,16 @@ class BrowserWindow : public CefWindowDelegate {
   static void OpenTor(const std::string& first_url,
                       CefRefPtr<BrowserWindow> requester = nullptr,
                       std::function<void(CefRefPtr<BrowserWindow>)> opened = nullptr);
+  // A normal window reopening a saved session's tabs (|urls|, restorable
+  // URLs, with |active| selected); |extra_url| (a web URL, optional) opens
+  // after them as the selected tab.
+  static void OpenRestored(std::vector<std::string> urls, std::size_t active,
+                           const std::string& extra_url);
+
+  // This window's tabs for the saved session (normal windows only).
+  browsing::SessionWindow SessionTabs() const;
+  // True once the window has started closing.
+  bool closing() const { return closing_window_; }
 
   // True for Tor windows too: they are private windows.
   bool is_private() const { return private_; }
@@ -170,6 +181,8 @@ class BrowserWindow : public CefWindowDelegate {
   int AddTab(BrowserRole role, const std::string& url, bool select, int index = -1,
              int opener = 0);
   void LoadInTab(Tab& tab, BrowserRole role, const std::string& url);
+  // The saved session's tabs or the start address, after the window shows.
+  void OpenFirstTabs();
   void StartClose(CefRefPtr<TabClient> client, CefRefPtr<CefBrowserView> view,
                   CefRefPtr<CefPanel> parent);
   Tab* FindTab(int tab_id);
@@ -202,6 +215,9 @@ class BrowserWindow : public CefWindowDelegate {
   CefRefPtr<CefBrowser> ActiveBrowser();
 
   const std::string first_url_;
+  // Tabs to reopen (OpenRestored), loaded once the window is shown.
+  std::vector<std::string> restore_urls_;
+  std::size_t restore_active_ = 0;
   const bool private_;
   const bool tor_;
   const int id_;

@@ -161,10 +161,12 @@ class SettingsPageTest(unittest.TestCase):
         # Settings become active only once the behaviour behind them is built
         # and tested (the bookmarks bar toggle: tests/e2e/test_places.py;
         # downloads: tests/e2e/test_downloads.py; privacy and permissions:
-        # tests/e2e/test_privacy.py; Tor: tests/e2e/test_tor.py).
+        # tests/e2e/test_privacy.py; Tor: tests/e2e/test_tor.py; on startup:
+        # tests/e2e/test_startup.py; search engine: tests/e2e/test_browsing.py).
         data = json.loads(bridge_call(self.page, "settings.get")["response"])
         self.assertEqual(sorted(s["key"] for s in data["settings"] if s["status"] == "active"),
-                         sorted(["appearance.theme", "appearance.showBookmarksBar",
+                         sorted(["general.startupPage", "search.engine",
+                                 "appearance.theme", "appearance.showBookmarksBar",
                                  "downloads.askBeforeDownload", "downloads.disableDownloads",
                                  "privacy.httpsFirst", "privacy.blockTrackers",
                                  "privacy.blockThirdPartyCookies", "privacy.blockPopups",

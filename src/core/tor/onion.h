@@ -49,10 +49,6 @@ struct OnionInput {
 // kept. Anything else mentioning an onion host is refused, never searched.
 OnionInput OnionUrlFromInput(std::string_view input);
 
-// "https://duckduckgo.com/<rest>" as the same URL on DuckDuckGo's onion
-// service; any other URL is returned unchanged.
-std::string TorSearchUrl(std::string_view url);
-
 }  // namespace torfox::tor
 
 #endif  // TORFOX_CORE_TOR_ONION_H_

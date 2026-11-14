@@ -50,7 +50,8 @@ TEST(SettingsSchema, SaferDefaults) {
   EXPECT_EQ(def("privacy.blockTrackers"), Json(true));
   EXPECT_EQ(def("privacy.blockThirdPartyCookies"), Json(true));
   EXPECT_EQ(def("privacy.blockPopups"), Json(true));
-  for (auto p : {"camera", "microphone", "location", "notifications", "clipboard"}) {
+  EXPECT_EQ(def("general.startupPage"), Json("newtab"));
+  for (auto p : {"camera", "microphone", "clipboard"}) {
     EXPECT_EQ(def(std::string("permissions.") + p), Json("deny")) << p;
   }
   EXPECT_EQ(def("appearance.theme"), Json("dark"));
@@ -62,7 +63,7 @@ TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
   // A setting becomes active only once its feature exists and is tested;
   // every other setting stays "planned".
   const std::set<std::string_view> active = {
-      "appearance.theme", "appearance.showBookmarksBar", "downloads.askBeforeDownload",
+      "general.startupPage", "search.engine", "appearance.theme", "appearance.showBookmarksBar", "downloads.askBeforeDownload",
       "downloads.disableDownloads", "privacy.httpsFirst", "privacy.blockTrackers",
       "privacy.blockThirdPartyCookies", "privacy.blockPopups", "privacy.useSystemProxy",
       "privacy.clearOnExit.history",

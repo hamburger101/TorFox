@@ -69,11 +69,11 @@ constexpr Def String(std::string_view key,
 constexpr Status A = Status::kActive;
 constexpr Status P = Status::kPlanned;
 
-const std::array<Def, 26> kSettings = {
+const std::array<Def, 24> kSettings = {
     // General
-    Enum("general.startupPage", "general", P, kStartupPages),
+    Enum("general.startupPage", "general", A, kStartupPages),
     // Search Engine
-    Enum("search.engine", "search", P, kSearchEngines),
+    Enum("search.engine", "search", A, kSearchEngines),
     // Privacy & Security
     Bool("privacy.httpsFirst", "privacy", A, true),
     Bool("privacy.blockTrackers", "privacy", A, true),
@@ -85,8 +85,6 @@ const std::array<Def, 26> kSettings = {
     Bool("privacy.clearOnExit.cache", "privacy", A, false),
     Enum("permissions.camera", "privacy", A, kPermission),
     Enum("permissions.microphone", "privacy", A, kPermission),
-    Enum("permissions.location", "privacy", P, kPermission),
-    Enum("permissions.notifications", "privacy", P, kPermission),
     Enum("permissions.clipboard", "privacy", A, kPermission),
     // Downloads
     Bool("downloads.askBeforeDownload", "downloads", A, true),

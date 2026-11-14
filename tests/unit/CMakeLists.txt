@@ -25,6 +25,7 @@ add_executable(torfox_unit_tests
   privacy_test.cc
   tor_test.cc
   public_suffix_test.cc
+  search_session_test.cc
   settings_test.cc
   shortcuts_menu_test.cc
   tabs_zoom_test.cc

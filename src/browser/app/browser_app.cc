@@ -16,6 +16,7 @@
 #include "src/core/browsing/chromium_profile.h"
 #include "src/browser/app/renderer_app.h"
 #include "src/browser/app/services.h"
+#include "src/browser/app/session_service.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/fault_injection.h"
 #include "src/browser/app/places_service.h"
@@ -30,6 +31,7 @@
 #include "src/browser/shell/menus.h"
 #include "src/core/cmdline/policy.h"
 #include "src/core/settings/store.h"
+#include "src/core/url/search.h"
 #include "src/core/util/file_io.h"
 
 namespace torfox {
@@ -77,6 +79,13 @@ CefRefPtr<CefValue> BoolValue(bool v) {
 }
 
 }  // namespace
+
+std::string SearchUrlFor(const std::string& search_url, bool tor) {
+  Services& services = GetServices();
+  const std::string engine =
+      services.settings ? services.settings->store().GetString(search::kEngineSetting) : "";
+  return search::ForEngine(search_url, engine, tor);
+}
 
 Services& GetServices() {
   return g_services;
@@ -220,8 +229,35 @@ void BrowserApp::OnContextInitialized() {
   g_services.window_opened = [this](BrowserWindow* w) { windows_.insert(w); };
   g_services.window_destroyed = [this](BrowserWindow* w) {
     windows_.erase(w);
+    if (!w->is_private() && session_) {
+      session_->Changed();
+    }
     if (windows_.empty()) {
       CefQuitMessageLoop();
+    }
+  };
+
+  // Settings > General > On startup: the normal windows' tabs, in the order
+  // the windows opened.
+  session_ = std::make_unique<SessionService>(
+      settings_.get(), options_.user_data_dir / "session.json", [this] {
+        std::vector<BrowserWindow*> normal;
+        for (BrowserWindow* w : windows_) {
+          if (!w->is_private() && !w->closing()) {
+            normal.push_back(w);
+          }
+        }
+        std::sort(normal.begin(), normal.end(),
+                  [](BrowserWindow* a, BrowserWindow* b) { return a->id() < b->id(); });
+        browsing::Session session;
+        for (BrowserWindow* w : normal) {
+          session.push_back(w->SessionTabs());
+        }
+        return session;
+      });
+  g_services.session_changed = [this] {
+    if (session_) {
+      session_->Changed();
     }
   };
 
@@ -278,7 +314,24 @@ void BrowserApp::OnContextInitialized() {
                             self->Fatal(err);
                             return;
                           }
-                          BrowserWindow::Open(self->options_.start_url);
+                          browsing::Session restored =
+                              self->session_ ? self->session_->TakeStartupSession()
+                                             : browsing::Session();
+                          if (restored.empty()) {
+                            BrowserWindow::Open(self->options_.start_url);
+                          } else {
+                            std::size_t tabs = 0;
+                            for (std::size_t i = 0; i < restored.size(); ++i) {
+                              tabs += restored[i].urls.size();
+                              // An address TorFox was started with opens
+                              // after the first window's tabs.
+                              BrowserWindow::OpenRestored(
+                                  std::move(restored[i].urls), restored[i].active,
+                                  i == 0 ? self->options_.start_url : std::string());
+                            }
+                            test_log::Event("session_restored",
+                                            {{"windows", restored.size()}, {"tabs", tabs}});
+                          }
                           if (self->settings_ &&
                               self->settings_->store().GetString("tor.startMode") == "at-launch") {
                             self->StartTor();
@@ -440,6 +493,9 @@ void BrowserApp::Shutdown() {
     exit_clear_.cookies = settings_->store().GetBool("privacy.clearOnExit.cookies");
     exit_clear_.cache = settings_->store().GetBool("privacy.clearOnExit.cache");
   }
+  if (session_) {
+    session_->Shutdown();
+  }
   if (exit_clear_.history && places_ && places_->places()) {
     test_log::Event("history_cleared", {{"when", "exit"},
                                         {"ok", places_->places()->ClearHistory()}});
@@ -449,6 +505,7 @@ void BrowserApp::Shutdown() {
     proxy_observer_ = 0;
   }
   tor_.reset();
+  session_.reset();
   privacy_.reset();
   downloads_.reset();
   places_.reset();

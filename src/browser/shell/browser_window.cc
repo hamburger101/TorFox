@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "include/base/cef_callback.h"
+#include "include/cef_task.h"
 #include "include/views/cef_box_layout.h"
 #include "include/views/cef_fill_layout.h"
 #include "include/wrapper/cef_closure_task.h"
@@ -177,6 +178,31 @@ void BrowserWindow::OpenTor(const std::string& first_url,
       });
 }
 
+void BrowserWindow::OpenRestored(std::vector<std::string> urls, std::size_t active,
+                                 const std::string& extra_url) {
+  CEF_REQUIRE_UI_THREAD();
+  Services& services = GetServices();
+  if (!services.contexts) {
+    return;
+  }
+  CefRefPtr<BrowserWindow> window = new BrowserWindow(
+      extra_url, false, false, services.contexts->Get(ContextManager::Kind::kNormal));
+  window->restore_urls_ = std::move(urls);
+  window->restore_active_ = active;
+  CefWindow::CreateTopLevelWindow(window);
+}
+
+browsing::SessionWindow BrowserWindow::SessionTabs() const {
+  browsing::SessionWindow w;
+  for (const Tab& t : tabs_) {
+    if (t.id == active_tab_id_) {
+      w.active = w.urls.size();
+    }
+    w.urls.push_back(t.url);
+  }
+  return w;
+}
+
 void BrowserWindow::Close() {
   if (window_ && !closing_window_) {
     window_->Close();
@@ -313,7 +339,40 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   window->Show();
   ApplyTheme();
   test_log::Event("window_created", {{"private", private_}, {"tor", tor_}, {"id", id_}});
-  if (!first_url_.empty()) {
+  // Tabs for a saved session or a start address are created once the window
+  // is on screen: browsers created while it is still being shown stay
+  // "hidden" to Chromium (found by test_startup.py).
+  CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::OpenFirstTabs, self));
+}
+
+void BrowserWindow::OpenFirstTabs() {
+  if (closing_window_ || !content_) {
+    return;
+  }
+  if (!restore_urls_.empty()) {
+    // A saved session: its first tab replaces the new-tab page, the others
+    // open behind it.
+    const int first_id = active_tab_id_;
+    for (std::size_t i = 0; i < restore_urls_.size(); ++i) {
+      const std::string& url = restore_urls_[i];
+      const BrowserRole role = IsInternalTabUrl(url) ? BrowserRole::kInternalTab : BrowserRole::kWebTab;
+      if (i == 0) {
+        if (Tab* first = FindTab(first_id); first && url != first->url) {
+          LoadInTab(*first, role, url);
+        }
+      } else {
+        AddTab(role, url, false);
+      }
+    }
+    if (restore_active_ < tabs_.size()) {
+      Activate(tabs_[restore_active_].id);
+    }
+    test_log::Event("session_window_restored", {{"id", id_}, {"tabs", restore_urls_.size()}});
+    restore_urls_.clear();
+    if (!first_url_.empty()) {
+      AddTab(BrowserRole::kWebTab, first_url_, true);
+    }
+  } else if (!first_url_.empty()) {
     if (Tab* first = ActiveTab()) {
       LoadInTab(*first, BrowserRole::kWebTab, first_url_);
     }
@@ -604,10 +663,11 @@ BrowserWindow::Result BrowserWindow::Navigate(int tab_id, const std::string& inp
     case NavKind::kWebUrl:
     case NavKind::kSearch: {
       std::string url = d.url;
+      if (d.kind == NavKind::kSearch) {
+        // Settings > Search; DuckDuckGo's onion service in Tor windows.
+        url = SearchUrlFor(url, tor_);
+      }
       if (tor_) {
-        if (d.kind == NavKind::kSearch) {
-          url = tor::TorSearchUrl(url);  // DuckDuckGo's onion service.
-        }
         if (!guards::NavigationBlockReason(guards::Role::kTorTab, url).empty()) {
           return {false, kTorLocalRefused};
         }
@@ -1470,6 +1530,12 @@ void BrowserWindow::PushEvent(const Json& event) {
 void BrowserWindow::PushState() {
   if (!state_subscribers_.empty()) {
     PushEvent(StateJson());
+  }
+  // Every change to the tabs comes through here.
+  if (!private_) {
+    if (Services& services = GetServices(); services.session_changed) {
+      services.session_changed();
+    }
   }
 }
 

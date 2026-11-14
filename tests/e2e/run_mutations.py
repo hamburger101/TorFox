@@ -47,6 +47,9 @@ PERM = PRIV + ".PermissionTest"
 EXT = PRIV + ".ExternalProtocolTest"
 CLEAR = PRIV + ".ClearOnExitTest"
 TOR = "e2e:test_tor"
+SEARCH = "src/core/url/search.cc"
+SESSION = "src/core/browsing/session.cc"
+STARTUP = "e2e:test_startup.StartupTest"
 CTX = "src/browser/app/context_manager.cc"
 
 # name -> ([(file, old, new), ...], [checks that must each fail])
@@ -98,8 +101,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         (TAB, "    if (!tor_) {\n      model->AddItem(kOpenLinkInPrivateWindow", "    if (true) {\n      model->AddItem(kOpenLinkInPrivateWindow"),
     ], [TOR + ".TorWindowTest.test_link_menu_never_leaves_tor"]),
     "tor-searches-use-clearnet-duckduckgo": ([
-        ("src/core/tor/onion.cc", "  if (url.substr(0, kClearnet.size()) != kClearnet) {", "  if (true) {"),
-    ], ["unit:TorOnion.TorSearchesUseDuckDuckGosOnionService",
+        (SEARCH, "  if (tor) {\n    host = tor::kDuckDuckGoOnion;\n  }\n", ""),
+    ], ["unit:Search.TorWindowsUseDuckDuckGosOnionService",
         TOR + ".TorWindowTest.test_searches_in_tor_windows_use_duckduckgos_onion_service"]),
     "onion-checksum-not-checked": ([
         ("src/core/tor/onion.cc", "  if (digest[0] != bytes[32] || digest[1] != bytes[33]) {", "  if (false) {"),
@@ -457,6 +460,33 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         (APP, "    const bool ok = chromium_profile::WriteProxyMode(normal_profile, mode);",
          "    const bool ok = mode != nullptr;"),
     ], [QUIET + ".test_idle_browser_does_not_autodiscover_proxies"]),
+    # ----- Stage 6: settings -----
+    "search-engine-ignored": ([
+        (SEARCH, '  if (engine == "duckduckgo-html") {', "  if (false) {"),
+    ], ["unit:Search.EachEngineHasItsPage",
+        "e2e:test_browsing.SearchEngineTest.test_the_chosen_engine_gets_the_search"]),
+    "session-keeps-private-windows": ([
+        (APP, "          if (!w->is_private() && !w->closing()) {", "          if (!w->closing()) {"),
+    ], [STARTUP + ".test_restore_after_a_crash_reopens_every_normal_window"]),
+    "session-kept-while-history-cleared": ([
+        ("src/browser/app/session_service.cc",
+         ' == "restore" &&\n         !settings_->store().GetBool(kClearHistorySetting);', ' == "restore";'),
+    ], [STARTUP + ".test_nothing_is_kept_while_history_is_cleared_on_exit"]),
+    "session-keeps-onion-addresses": ([
+        (SESSION, "  if (!IsStorableUrl(url) || guards::IsOnionHost(guards::HostOf(url))) {",
+         "  if (!IsStorableUrl(url)) {"),
+    ], ["unit:Session.KeepsWebPagesAndTorFoxPagesOnly",
+        "unit:Session.UnrestorableTabsAndEmptyWindowsAreLeftOut"]),
+    "session-file-trusted": ([
+        (SESSION, "      if (std::optional<std::string> url = RestorableUrl(t.get_ref<const std::string&>())) {",
+         "      if (std::optional<std::string> url = std::optional<std::string>(t.get<std::string>())) {"),
+    ], ["unit:Session.DamagedOrForeignFilesRestoreNothingUnsafe",
+        STARTUP + ".test_a_damaged_session_file_opens_a_new_tab"]),
+    "first-tabs-created-while-the-window-shows": ([
+        ("src/browser/shell/browser_window.cc",
+         "  CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::OpenFirstTabs, self));",
+         "  OpenFirstTabs();"),
+    ], [STARTUP + ".test_restore_reopens_the_tabs_after_a_normal_exit"]),
 }
 
 

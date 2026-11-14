@@ -14,6 +14,7 @@
 #include "src/browser/app/download_service.h"
 #include "src/browser/app/places_service.h"
 #include "src/browser/app/services.h"
+#include "src/browser/app/tor_service.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/app/version.h"
@@ -221,6 +222,8 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
                      {"cef", CEF_VERSION},
                      {"chromium", ChromiumVersion()},
                      {"license", "MPL-2.0"},
+                     {"torBundle", kTorBundleVersion},
+                     {"tor", services.tor ? services.tor->version() : std::string()},
                      {"testBuild", kTestHooks}});
     return;
   }

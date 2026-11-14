@@ -9,10 +9,16 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+import sys
 import tempfile
 import unittest
 
 from harness import TorFox, bridge_call, wait_for
+
+HERE = pathlib.Path(__file__).resolve().parent
+FAKE_TOR = HERE / "fake_tor.py"
+OBFS4 = ("obfs4 192.0.2.10:443 0123456789ABCDEF0123456789ABCDEF01234567 "
+         "cert=AAAAbbbbCCCCddddEEEEffffGGGGhhhhIIIIjjjjKKKKllllMMMMnnnnOOOOpppp iat-mode=0")
 
 
 def settings_file(user_data: pathlib.Path) -> pathlib.Path:
@@ -103,6 +109,51 @@ class SettingsPersistenceTest(unittest.TestCase):
             self.assertIs(values["downloads.disableDownloads"], False)
         repaired = json.loads(settings_file(self.user_data).read_text(encoding="utf-8"))
         self.assertEqual(repaired, {"format": 1, "settings": {}})
+
+    def test_every_active_setting_persists_across_restart(self) -> None:
+        # Every setting that is active gets a value other than its default
+        # through the settings page, as a user would set it; after a restart
+        # each one reads back. Tor starts at launch after the restart (a
+        # scripted tor here, so nothing reaches the network).
+        command = self.user_data.parent / f"{self.user_data.name}-tor.json"
+        plan = self.user_data.parent / f"{self.user_data.name}-plan.json"
+        plan.write_text(json.dumps({"relay_port": 9}), encoding="utf-8")
+        command.write_text(json.dumps({"exe": sys.executable, "args": [
+            "-I", str(FAKE_TOR), "--plan", str(plan),
+            "--record", str(self.user_data.parent / f"{self.user_data.name}-tor.jsonl")]}),
+            encoding="utf-8")
+        self.addCleanup(command.unlink, True)
+        self.addCleanup(plan.unlink, True)
+        args = [f"--torfox-test-tor-command={command}"]
+        chosen: dict[str, object] = {}
+        with TorFox(user_data=self.user_data, extra_args=args) as tf:
+            _, page = self.open_settings(tf)
+            data = json.loads(bridge_call(page, "settings.get")["response"])
+            active = [s for s in data["settings"] if s["status"] == "active"]
+            self.assertGreaterEqual(len(active), 20)
+            # Custom bridge lines before the custom bridge mode.
+            active.sort(key=lambda s: s["key"] != "tor.bridges.custom")
+            for s in active:
+                if s["type"] == "bool":
+                    value = not s["default"]
+                elif s["type"] == "enum":
+                    value = next(v for v in s["values"] if v != s["default"])
+                else:
+                    self.assertEqual(s["key"], "tor.bridges.custom", "a string setting this test does not know")
+                    value = OBFS4
+                r = bridge_call(page, "settings.set", {"key": s["key"], "value": value})
+                self.assertTrue(r["ok"], (s["key"], r))
+                chosen[s["key"]] = value
+            self.assertEqual(tf.close(), 0)
+
+        with TorFox(user_data=self.user_data, extra_args=args) as tf:
+            _, page = self.open_settings(tf)
+            data = json.loads(bridge_call(page, "settings.get")["response"])
+            values = {s["key"]: s["value"] for s in data["settings"]}
+            for key, value in chosen.items():
+                self.assertEqual(values[key], value, key)
+            # And they act: tor started at launch, with the custom bridge.
+            tf.wait_log("tor_controlled", timeout=30)
 
 
 if __name__ == "__main__":

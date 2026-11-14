@@ -44,6 +44,8 @@ add_custom_command(
   COMMENT "Embedding the TorFox UI"
   VERBATIM)
 
+file(READ "${CMAKE_SOURCE_DIR}/deps.lock.json" _torfox_deps_lock)
+string(JSON TORFOX_TOR_BUNDLE_VERSION GET "${_torfox_deps_lock}" tor tor_browser_version)
 configure_file(app/version.h.in "${TORFOX_GEN_DIR}/src/browser/app/version.h" @ONLY)
 
 # ----- Sources ---------------------------------------------------------------
@@ -60,6 +62,7 @@ set(TORFOX_BROWSER_SOURCES
   app/privacy_service.cc app/privacy_service.h
   app/settings_service.cc app/settings_service.h
   app/test_log.cc app/test_log.h
+  app/session_service.cc app/session_service.h
   app/tor_service.cc app/tor_service.h
   bridge/bridge_handler.cc bridge/bridge_handler.h
   platform/platform.h

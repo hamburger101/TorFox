@@ -7,7 +7,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { followAppearance } from "../appearance.js";
 import { base } from "../base.js";
 import { BridgeError, call } from "../bridge.js";
-import { ERRORS, SECTIONS, SETTINGS } from "./labels.js";
+import { ERRORS, FIXED_ROWS, SECTIONS, SETTINGS } from "./labels.js";
 
 type Value = boolean | string;
 
@@ -33,6 +33,8 @@ interface AppInfo {
   cef: string;
   chromium: string;
   license: string;
+  torBundle: string;
+  tor: string;
   testBuild: boolean;
 }
 
@@ -174,6 +176,15 @@ export class TorFoxSettings extends LitElement {
       (g) => html`<section class="card">
         ${g.name ? html`<h2>${g.name}</h2>` : nothing}
         ${g.items.map((s) => this.renderSetting(s))}
+        ${(FIXED_ROWS[g.name] ?? []).map(
+          (f) => html`<div class="row fixed">
+            <div class="row-text">
+              <div class="row-title"><span>${f.title}</span></div>
+              ${f.description ? html`<div class="row-desc">${f.description}</div>` : nothing}
+            </div>
+            <div class="row-control"><span class="fixed-value">${f.value}</span></div>
+          </div>`,
+        )}
       </section>`,
     );
   }
@@ -185,6 +196,9 @@ export class TorFoxSettings extends LitElement {
           ["Version", info.version + (info.testBuild ? " (test build)" : "")],
           ["Chromium", info.chromium],
           ["CEF", info.cef],
+          ["Tor", info.tor
+            ? `${info.tor} (Tor Expert Bundle ${info.torBundle})`
+            : `Tor Expert Bundle ${info.torBundle} (tor's version is shown once Tor has started)`],
           ["License", "Mozilla Public License 2.0"],
         ]
       : [];
@@ -370,6 +384,14 @@ export class TorFoxSettings extends LitElement {
     }
     .row-control {
       flex: none;
+    }
+    .fixed-value {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: var(--radius-s);
+      background: var(--field);
+      font-size: 13px;
+      color: var(--fg-muted);
     }
     .badge {
       padding: 1px 8px;

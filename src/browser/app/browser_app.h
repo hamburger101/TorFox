@@ -24,6 +24,7 @@ class BrowserWindow;
 class ContextManager;
 class PlacesService;
 class PrivacyService;
+class SessionService;
 class SettingsService;
 class DownloadService;
 class TorService;
@@ -86,6 +87,7 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   std::unique_ptr<BridgeHandler> bridge_;
   CefRefPtr<CefMessageRouterBrowserSide> router_;
   std::set<BrowserWindow*> windows_;
+  std::unique_ptr<SessionService> session_;
   bool fatal_ = false;
   clear_data::Categories exit_clear_;
   std::string startup_notice_;

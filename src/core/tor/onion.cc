@@ -221,12 +221,4 @@ OnionInput OnionUrlFromInput(std::string_view raw) {
   return out;
 }
 
-std::string TorSearchUrl(std::string_view url) {
-  constexpr std::string_view kClearnet = "https://duckduckgo.com/";
-  if (url.substr(0, kClearnet.size()) != kClearnet) {
-    return std::string(url);
-  }
-  return "https://" + std::string(kDuckDuckGoOnion) + "/" + std::string(url.substr(kClearnet.size()));
-}
-
 }  // namespace torfox::tor

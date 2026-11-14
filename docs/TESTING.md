@@ -60,7 +60,7 @@ GoogleTest, in `tests/unit/`, covering:
 ## End-to-end tests (Windows)
 ```
 cd tests/e2e
-python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor
+python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup
 ```
 Each test starts the test build (`out/test/...`, or set `TORFOX_TEST_EXE`) with a fresh temporary profile.
 It drives TorFox over DevTools on loopback and serves fixtures from local HTTP servers. No internet access
@@ -77,11 +77,12 @@ TORFOX_LIVE_TESTS=1 python -m unittest -v test_tor.RealTorTest test_tor.RealTorN
 | `test_isolation.py` | Every web→`torfox://` vector: subresources, workers, frames, navigations, pop-ups, forms, redirects. Also browser-initiated navigations, each guard layer on its own, the bridge being absent from web pages, and internal pages staying internal |
 | `test_bridge.py` | Malformed, oversized, duplicate-key and wrong-page bridge messages. A rejected message changes nothing |
 | `test_internal_pages.py` | Security headers, strict CSP, eval and inline scripts blocked, Trusted Types, no subframes |
-| `test_settings.py` | Persistence across restart, corrupt-file recovery, invalid values falling back to safe defaults |
+| `test_settings.py` | Persistence across restart (every active setting, through the settings page), corrupt-file recovery, invalid values falling back to safe defaults |
+| `test_startup.py` | Stage 6: *On startup*: a new tab by default with no session file; *Restore previous tabs* after a normal exit and after a crash (several windows, the selected tab, a start address added after them, restored pages visible); private windows never kept; nothing kept while history is cleared on exit; switching back removes the file; damaged files open a new tab |
 | `test_lifecycle.py` | Opening and closing tabs and windows, and replacing a browser when its role changes |
 | `test_stage1_defaults.py` | Permissions denied, onion refused and never searched, pop-ups only on a click, DuckDuckGo search, no data in Chrome's `Default` profile |
 | `test_quiet_startup.py` | NetLog of an idle session: no connections and no proxy auto-discovery from any context (with a control that turns the system-proxy setting on). Onion names never reach the resolver |
-| `test_browsing.py` | Address bar and DuckDuckGo URLs, onion input, navigation controls, error pages, tabs (new, close, reopen, reorder, drag), keyboard shortcuts, find, zoom, context and app menus |
+| `test_browsing.py` | Address bar and DuckDuckGo URLs (and each *Search engine* choice, `SearchEngineTest`), onion input, navigation controls, error pages, tabs (new, close, reopen, reorder, drag), keyboard shortcuts, find, zoom, context and app menus |
 | `test_places.py` | History recorded only by TorFox (Chromium's `History` stays empty), History page search/remove/clear leaving no bytes behind, bookmarks star/bar/manager and persistence |
 | `test_private.py` | Private windows: marking, no history, storage isolated from normal and other private windows, links stay private, nothing left on disk (with a control) |
 | `test_privacy.py` | Stage 4: trackers, HTTPS-first, third-party cookies, pop-ups, site permissions, email and phone links, WebRTC addresses, and clear-on-exit across real restarts (normal exit, crash, and a control). Fixture sites get real hostnames (`sites.py`) so that site and public-suffix rules apply |
@@ -92,7 +93,8 @@ TORFOX_LIVE_TESTS=1 python -m unittest -v test_tor.RealTorTest test_tor.RealTorN
 
 Known gaps are written as `expectedFailure` tests, so a fix shows up as an unexpected success. See
 [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md), [`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md),
-[`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md) and [`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md).
+[`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md), [`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md),
+[`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md) and [`STAGE6_FINDINGS.md`](STAGE6_FINDINGS.md).
 
 The tests open real windows. Don't type while they run: keystrokes can land in a test window and make it
 browse for real (this happened once and showed up in the quiet-startup test).

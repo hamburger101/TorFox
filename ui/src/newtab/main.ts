@@ -14,18 +14,18 @@ import { icons } from "../icons.js";
 const BUILD_NOTES = [
   {
     icon: icons.onion,
-    title: "Tor is not available yet",
-    text: "Onion addresses are refused in this build. TorFox never sends them to a search engine or to ordinary DNS.",
+    title: "Onion sites open in Tor windows",
+    text: "Tor windows send everything through the Tor network and wait while Tor is not connected. TorFox is not Tor Browser: it does not resist fingerprinting.",
   },
   {
     icon: icons.download,
-    title: "Downloads are blocked",
-    text: "Download protection is still being built, so this build cancels every download.",
+    title: "You decide about downloads",
+    text: "TorFox asks before saving a file unless you change that, and can block downloads entirely. See Settings > Downloads.",
   },
   {
     icon: icons.shield,
-    title: "Site permissions are denied",
-    text: "Camera, microphone, location, notifications and other permission requests are refused automatically.",
+    title: "Site permissions are blocked",
+    text: "Camera, microphone and clipboard requests are refused unless you choose Ask in Settings. Location and notifications are always refused.",
   },
 ];
 

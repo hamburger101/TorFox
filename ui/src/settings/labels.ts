@@ -21,7 +21,10 @@ export const SECTIONS: Record<string, SectionLabel> = {
   search: {
     title: "Search Engine",
     icon: icons.search,
-    note: "Searches from the address bar and the new tab page go to DuckDuckGo.",
+    note:
+      "Searches from the address bar, the new tab page and the page menu go to the DuckDuckGo " +
+      "page you choose here. In Tor windows they go to the same page on DuckDuckGo's onion " +
+      "service. Onion addresses are never searched for.",
   },
   privacy: {
     title: "Privacy & Security",
@@ -61,6 +64,28 @@ export const SECTIONS: Record<string, SectionLabel> = {
   about: { title: "About TorFox", icon: icons.info },
 };
 
+// Rows that are not settings: shown after a group's settings.
+export interface FixedRow {
+  title: string;
+  value: string;
+  description?: string;
+}
+
+export const FIXED_ROWS: Record<string, FixedRow[]> = {
+  "Site permissions": [
+    {
+      title: "Location",
+      value: "Always blocked",
+      description: "TorFox does not share your location with sites.",
+    },
+    {
+      title: "Notifications",
+      value: "Always blocked",
+      description: "TorFox does not show notifications from sites.",
+    },
+  ],
+};
+
 export interface SettingLabel {
   title: string;
   description?: string;
@@ -75,10 +100,15 @@ const PERMISSION_VALUES = { deny: "Block", ask: "Ask" };
 export const SETTINGS: Record<string, SettingLabel> = {
   "general.startupPage": {
     title: "On startup",
+    description:
+      "Restore previous tabs reopens the tabs of your normal windows, also after a crash. " +
+      "Private and Tor windows are never reopened. While “Clear when TorFox closes: History” " +
+      "is on, TorFox keeps no tabs and opens a new tab.",
     values: { newtab: "Open a new tab", restore: "Restore previous tabs" },
   },
   "search.engine": {
     title: "Search engine",
+    description: "HTML works without JavaScript; Lite is a plain text page.",
     values: {
       duckduckgo: "DuckDuckGo",
       "duckduckgo-html": "DuckDuckGo (HTML)",
@@ -130,12 +160,6 @@ export const SETTINGS: Record<string, SettingLabel> = {
   },
   "permissions.camera": { title: "Camera", values: PERMISSION_VALUES, group: "Site permissions" },
   "permissions.microphone": { title: "Microphone", values: PERMISSION_VALUES, group: "Site permissions" },
-  "permissions.location": { title: "Location", values: PERMISSION_VALUES, group: "Site permissions" },
-  "permissions.notifications": {
-    title: "Notifications",
-    values: PERMISSION_VALUES,
-    group: "Site permissions",
-  },
   "permissions.clipboard": { title: "Clipboard", values: PERMISSION_VALUES, group: "Site permissions" },
   "downloads.askBeforeDownload": {
     title: "Ask before downloading",

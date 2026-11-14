@@ -61,6 +61,7 @@ add_library(torfox_core STATIC
   browsing/chromium_profile.cc browsing/chromium_profile.h
   browsing/context_menu.cc browsing/context_menu.h
   browsing/places.cc browsing/places.h
+  browsing/session.cc browsing/session.h
   browsing/shortcuts.cc browsing/shortcuts.h
   browsing/tabs.cc browsing/tabs.h
   browsing/zoom.cc browsing/zoom.h
@@ -84,6 +85,7 @@ add_library(torfox_core STATIC
   url/internal_url.cc url/internal_url.h
   url/nav_input.cc url/nav_input.h
   url/public_suffix.cc url/public_suffix.h
+  url/search.cc url/search.h
   util/file_io.cc util/file_io.h
   util/utf8.cc util/utf8.h
 )

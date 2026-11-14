@@ -307,7 +307,7 @@ bool TabClient::OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
       return true;
     case kSearchSelection:
       if (auto url = browsing::SelectionSearchUrl(params->GetSelectionText().ToString())) {
-        OpenInNewTab(tor_ ? tor::TorSearchUrl(*url) : *url, true);
+        OpenInNewTab(SearchUrlFor(*url, tor_), true);
       }
       return true;
     case kBookmarkPage:
