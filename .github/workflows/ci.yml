@@ -40,6 +40,12 @@ jobs:
       - name: Fetch CEF (hash-verified)
         run: python -I scripts/fetch_deps.py cef windows64-minimal
 
+      - name: Fetch libraries (hash-verified)
+        shell: bash
+        run: |
+          python -I scripts/fetch_deps.py nlohmann_json header
+          python -I scripts/fetch_deps.py googletest source
+
       - name: Install UI dependencies (lockfile, no install scripts)
         run: npm --prefix ui ci
 
@@ -108,6 +114,11 @@ jobs:
 
       - name: Fetch CEF (hash-verified)
         run: python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }}
+
+      - name: Fetch libraries (hash-verified)
+        run: |
+          python3 -I scripts/fetch_deps.py nlohmann_json header
+          python3 -I scripts/fetch_deps.py googletest source
 
       - name: Install UI dependencies (lockfile, no install scripts)
         run: npm --prefix ui ci
