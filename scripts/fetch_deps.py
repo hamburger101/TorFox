@@ -101,20 +101,28 @@ def verify(path: Path, entry: dict, allow_pin: bool) -> str:
     return sha256
 
 
-def safe_extract(archive: Path, dest_parent: Path) -> Path:
-    """Extract into a temp dir under dest_parent, then atomically move into place."""
+def safe_extract(archive: Path, dest_parent: Path, root_name: str) -> Path:
+    """Extract into a temp dir under dest_parent, then atomically move into place.
+
+    Archives with a single top-level directory named root_name (CEF) are moved
+    as-is; archives with several top-level entries (Tor Expert Bundle) are
+    placed inside a directory named root_name. The 'data' filter rejects
+    absolute paths, '..' traversal, device files and links escaping the tree.
+    """
     dest_parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=".extract-", dir=dest_parent))
     try:
         with tarfile.open(archive, "r:*") as tar:
-            tar.extractall(tmp, filter="data")
-        children = [p for p in tmp.iterdir()]
-        if len(children) != 1 or not children[0].is_dir():
-            raise VerificationError(f"{archive.name}: expected exactly one top-level directory")
-        final = dest_parent / children[0].name
+            tar.extractall(tmp / "x", filter="data")
+        children = list((tmp / "x").iterdir())
+        if len(children) == 1 and children[0].is_dir() and children[0].name == root_name:
+            source = children[0]
+        else:
+            source = tmp / "x"
+        final = dest_parent / root_name
         if final.exists():
             shutil.rmtree(final)
-        os.replace(children[0], final)
+        os.replace(source, final)
         return final
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -162,9 +170,7 @@ def fetch(kind: str, key: str, file_override: str | None, allow_pin: bool, verif
         return archive
 
     print(f"Verified {name}; extracting", file=sys.stderr)
-    root = safe_extract(archive, dest_parent)
-    if root.name != root_name:
-        raise VerificationError(f"unexpected archive root {root.name}, expected {root_name}")
+    root = safe_extract(archive, dest_parent, root_name)
     marker.write_text(sha256 + "\n")
     return root
 
