@@ -9,6 +9,8 @@
 
 #include <utility>
 
+#include "src/core/privacy/external_protocols.h"
+
 namespace torfox::platform {
 
 std::filesystem::path DefaultUserDataDir() {
@@ -107,6 +109,20 @@ bool RevealInFolder(const std::filesystem::path& path) {
     // Selects the file in Finder; never opens it.
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:str] ]];
     return true;
+  }
+}
+
+bool OpenExternal(const std::string& url) {
+  if (external_protocols::LaunchableScheme(url).empty()) {
+    return false;
+  }
+  @autoreleasepool {
+    NSString* str = [NSString stringWithUTF8String:url.c_str()];
+    NSURL* target = str ? [NSURL URLWithString:str] : nil;
+    if (!target) {
+      return false;
+    }
+    return [[NSWorkspace sharedWorkspace] openURL:target];
   }
 }
 

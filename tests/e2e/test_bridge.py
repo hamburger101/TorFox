@@ -121,7 +121,7 @@ class BridgeValidationTest(unittest.TestCase):
     def test_settings_service_refusals(self) -> None:
         for key, value, expected in (
             ("tor.startMode", "at-launch", "not_available"),
-            ("privacy.httpsFirst", False, "not_available"),
+            ("permissions.location", "ask", "not_available"),
             ("appearance.theme", "purple", "invalid_value"),
             ("appearance.theme", 1, "invalid_value"),
             ("no.such.setting", True, "unknown_key"),

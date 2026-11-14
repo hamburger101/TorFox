@@ -29,9 +29,9 @@ CefRefPtr<CefValue> StringValue(const std::string& v) {
   return value;
 }
 
-CefRefPtr<CefValue> DirectProxyValue() {
+CefRefPtr<CefValue> ProxyValue(const char* mode) {
   CefRefPtr<CefDictionaryValue> dict = CefDictionaryValue::Create();
-  dict->SetString("mode", "direct");
+  dict->SetString("mode", mode);
   CefRefPtr<CefValue> value = CefValue::Create();
   value->SetDictionary(dict);
   return value;
@@ -234,12 +234,26 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
   if (!SetPrefVerified(context, name, "net.network_prediction_options", IntValue(2), error)) {
     return false;
   }
-  if (!SetPrefVerified(context, name, "profile.cookie_controls_mode", IntValue(1), error)) {
+  // Third-party cookies: always blocked for internal pages; web contexts
+  // follow Settings > Privacy & Security.
+  const int cookie_mode = kind == Kind::kInternal || block_third_party_cookies_ ? 1 : 0;
+  if (!SetPrefVerified(context, name, "profile.cookie_controls_mode", IntValue(cookie_mode),
+                       error)) {
     return false;
   }
   const char* webrtc = kind == Kind::kInternal ? "disable_non_proxied_udp"
                                                : "default_public_interface_only";
   if (!SetPrefVerified(context, name, "webrtc.ip_handling_policy", StringValue(webrtc), error)) {
+    return false;
+  }
+  // Pop-ups: TorFox's OnBeforePopup decides (Settings > Privacy & Security
+  // > Block pop-ups) and opens allowed ones as tabs, never as windows.
+  // Chromium's own blocker would refuse gesture-less pop-ups before
+  // TorFox sees them, so the setting could not be turned off and the user
+  // could not be told (docs/STAGE4_FINDINGS.md).
+  if (kind != Kind::kInternal &&
+      !SetPrefVerified(context, name, "profile.default_content_setting_values.popups",
+                       IntValue(1), error)) {
     return false;
   }
   // TorFox keeps its own history (places.db, Normal windows only). Chrome's
@@ -260,11 +274,60 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
       return false;
     }
   }
+  // Web contexts: direct unless the user chose the system's proxy settings.
+  if (kind != Kind::kInternal &&
+      !SetPrefVerified(context, name, "proxy",
+                       ProxyValue(use_system_proxy_ ? "system" : "direct"), error)) {
+    return false;
+  }
   // Internal pages never use the network, so their context must not even
   // look for a proxy ("wpad" lookups; see BrowserApp::ApplyGlobalPrefs).
   if (kind == Kind::kInternal &&
-      !SetPrefVerified(context, name, "proxy", DirectProxyValue(), error)) {
+      !SetPrefVerified(context, name, "proxy", ProxyValue("direct"), error)) {
     return false;
+  }
+  return true;
+}
+
+bool ContextManager::SetBlockThirdPartyCookies(bool block, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  block_third_party_cookies_ = block;
+  return !normal_ || ApplyCookiePolicy(normal_, error);
+}
+
+bool ContextManager::ApplyCookiePolicy(CefRefPtr<CefRequestContext> context, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  const std::string name = context == normal_ ? "normal" : "private";
+  return SetPrefVerified(context, name, "profile.cookie_controls_mode",
+                         IntValue(block_third_party_cookies_ ? 1 : 0), error);
+}
+
+bool ContextManager::SetUseSystemProxy(bool use_system, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  use_system_proxy_ = use_system;
+  return !normal_ || ApplyProxyMode(normal_, error);
+}
+
+bool ContextManager::ApplyProxyMode(CefRefPtr<CefRequestContext> context, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  const std::string name = context == normal_ ? "normal" : "private";
+  return SetPrefVerified(context, name, "proxy",
+                         ProxyValue(use_system_proxy_ ? "system" : "direct"), error);
+}
+
+bool ContextManager::ClearSiteRecords(std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!normal_) {
+    return true;
+  }
+  for (const char* pref : {"partition.per_host_zoom_levels",
+                           "profile.content_settings.exceptions.site_engagement",
+                           "profile.content_settings.exceptions.media_engagement"}) {
+    CefRefPtr<CefValue> empty = CefValue::Create();
+    empty->SetDictionary(CefDictionaryValue::Create());
+    if (!SetPrefVerified(normal_, "normal", pref, empty, error)) {
+      return false;
+    }
   }
   return true;
 }

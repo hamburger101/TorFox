@@ -237,10 +237,10 @@ void BrowserWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   }
   if (services.downloads) {
     downloads_observer_ = services.downloads->AddObserver([self]() {
-      // Downloads were just disabled: no prompt may stay open.
+      // Downloads were just disabled: no download prompt may stay open.
       if (DownloadService* d = GetServices().downloads;
           d && d->Decide() == downloads::Decision::kBlock) {
-        self->CancelPrompts(0);
+        self->CancelPrompts(0, "download");
       }
       self->PushState();
     });
@@ -1333,11 +1333,19 @@ void BrowserWindow::ShowNotice(const std::string& text) {
 
 void BrowserWindow::ConfirmDownload(int tab_id, const platform::ConfirmPrompt& prompt,
                                     std::function<void(bool)> done) {
+  ConfirmForTab(tab_id, "download", prompt, std::move(done));
+}
+
+std::shared_ptr<platform::PromptHandle> BrowserWindow::ConfirmForTab(
+    int tab_id,
+    const char* kind,
+    const platform::ConfirmPrompt& prompt,
+    std::function<void(bool)> done) {
   CEF_REQUIRE_UI_THREAD();
   if (!window_ || closing_window_ || !FindTab(tab_id)) {
     CefPostTask(TID_UI, base::BindOnce([](std::function<void(bool)> f) { f(false); },
                                        std::move(done)));
-    return;
+    return nullptr;
   }
   // The prompt belongs to its tab: show that tab, so the user sees which
   // page asked.
@@ -1347,24 +1355,27 @@ void BrowserWindow::ConfirmDownload(int tab_id, const platform::ConfirmPrompt& p
   auto slot = std::make_shared<std::shared_ptr<platform::PromptHandle>>();
   CefRefPtr<BrowserWindow> self = this;
   std::shared_ptr<platform::PromptHandle> handle = dialogs::Confirm(
-      window_, "download", prompt,
+      window_, kind, prompt,
       [self, slot, done = std::move(done)](bool ok) {
         auto& prompts = self->prompts_;
         prompts.erase(std::remove_if(prompts.begin(), prompts.end(),
-                                     [&](const auto& p) { return p.second == *slot; }),
+                                     [&](const Prompt& p) { return p.handle == *slot; }),
                       prompts.end());
         done(ok);
       });
   *slot = handle;
-  prompts_.emplace_back(tab_id, std::move(handle));
+  if (handle) {
+    prompts_.push_back(Prompt{tab_id, kind, handle});
+  }
+  return handle;
 }
 
-void BrowserWindow::CancelPrompts(int tab_id) {
+void BrowserWindow::CancelPrompts(int tab_id, const char* kind) {
   // Cancel() answers asynchronously, and the answer removes the entry.
   std::vector<std::shared_ptr<platform::PromptHandle>> cancel;
-  for (const auto& [tab, handle] : prompts_) {
-    if (tab_id == 0 || tab == tab_id) {
-      cancel.push_back(handle);
+  for (const Prompt& p : prompts_) {
+    if ((tab_id == 0 || p.tab_id == tab_id) && (!kind || std::string_view(kind) == p.kind)) {
+      cancel.push_back(p.handle);
     }
   }
   for (const auto& handle : cancel) {
@@ -1378,6 +1389,14 @@ void BrowserWindow::AddStateSubscriber(int browser_id,
   state_subscribers_.push_back(Subscriber{browser_id, query_id, callback});
   callback->Success(DumpJson(StateJson()));
   callback->Success(DumpJson(BookmarksBarJson()));
+  std::string& notice = GetServices().startup_notice;
+  if (!notice.empty()) {
+    Json event = Json::object();
+    event["type"] = "notice";
+    event["text"] = notice;
+    callback->Success(DumpJson(event));
+    notice.clear();
+  }
 }
 
 void BrowserWindow::RemoveStateSubscriber(int browser_id, int64_t query_id) {

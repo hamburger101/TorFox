@@ -8,6 +8,7 @@
 
 #include <commctrl.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <shlobj.h>
 
 #include <atomic>
@@ -17,6 +18,7 @@
 #include "include/base/cef_callback.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_closure_task.h"
+#include "src/core/privacy/external_protocols.h"
 
 namespace torfox::platform {
 
@@ -158,6 +160,22 @@ bool RevealInFolder(const std::filesystem::path& path) {
       ::SHOpenFolderAndSelectItems(item, 0, nullptr, 0);
       ::ILFree(item);
     }
+    ::CoUninitialize();
+  }).detach();
+  return true;
+}
+
+bool OpenExternal(const std::string& url) {
+  if (external_protocols::LaunchableScheme(url).empty()) {
+    return false;
+  }
+  // The shell finds the registered handler; it can block, so it runs on its
+  // own COM thread.
+  std::thread([wide = Widen(url)]() {
+    if (FAILED(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
+      return;
+    }
+    ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     ::CoUninitialize();
   }).detach();
   return true;

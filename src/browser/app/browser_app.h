@@ -7,11 +7,14 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
 #include "include/cef_app.h"
 #include "include/wrapper/cef_message_router.h"
+#include "src/core/privacy/clear_data.h"
+#include "src/core/privacy/https_first.h"
 
 namespace torfox {
 
@@ -19,6 +22,7 @@ class BridgeHandler;
 class BrowserWindow;
 class ContextManager;
 class PlacesService;
+class PrivacyService;
 class SettingsService;
 class DownloadService;
 
@@ -26,6 +30,8 @@ struct StartupOptions {
   std::filesystem::path user_data_dir;
   std::string start_url;  // Web URL for the first tab, or empty for the new tab page.
   std::filesystem::path download_dir;  // Test builds only; empty = the platform's.
+  // Test builds only: the local test sites' http and https ports.
+  std::optional<https_first::TestPorts> https_test_ports;
 };
 
 // CefApp for the browser process: command-line policy, startup checks,
@@ -48,19 +54,31 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   // Releases every CEF reference. Must run before CefShutdown().
   void Shutdown();
 
+  // What Settings > Privacy & Security > Clear when TorFox closes asked for
+  // when Shutdown() ran: cleared once Chromium has let go of the profile.
+  clear_data::Categories exit_clear() const { return exit_clear_; }
+  // Shown once in the first window.
+  void set_startup_notice(std::string text) { startup_notice_ = std::move(text); }
+
  private:
   void Fatal(const std::string& message);
   bool ApplyGlobalPrefs(std::string* error);
+  void ApplyCookiePolicy(bool block);
+  void ApplyProxyMode(bool use_system);
 
   StartupOptions options_;
   std::unique_ptr<SettingsService> settings_;
   std::unique_ptr<PlacesService> places_;
   std::unique_ptr<DownloadService> downloads_;
+  std::unique_ptr<PrivacyService> privacy_;
   std::unique_ptr<ContextManager> contexts_;
   std::unique_ptr<BridgeHandler> bridge_;
   CefRefPtr<CefMessageRouterBrowserSide> router_;
   std::set<BrowserWindow*> windows_;
   bool fatal_ = false;
+  clear_data::Categories exit_clear_;
+  std::string startup_notice_;
+  int proxy_observer_ = 0;
 
   IMPLEMENT_REFCOUNTING(BrowserApp);
 };

@@ -5,6 +5,9 @@
 #ifndef TORFOX_BROWSER_SHELL_TAB_CLIENT_H_
 #define TORFOX_BROWSER_SHELL_TAB_CLIENT_H_
 
+#include <cstdint>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -14,6 +17,8 @@
 #include "include/views/cef_browser_view.h"
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
+#include "src/browser/platform/platform.h"
+#include "src/core/privacy/https_first.h"
 
 namespace torfox {
 
@@ -182,6 +187,9 @@ class TabClient : public CefClient,
                               const CefString& requesting_origin,
                               uint32_t requested_permissions,
                               CefRefPtr<CefPermissionPromptCallback> callback) override;
+  void OnDismissPermissionPrompt(CefRefPtr<CefBrowser> browser,
+                                 uint64_t prompt_id,
+                                 cef_permission_request_result_t result) override;
 
   // CefRequestHandler
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -226,6 +234,21 @@ class TabClient : public CefClient,
   void BuildWebMenu(CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model);
   // Opens |url| (from a link or menu) in a new tab next to this one.
   void OpenInNewTab(const std::string& url, bool foreground);
+  // HTTPS-First (UI thread). True if the main-frame navigation to |url|
+  // must be cancelled: it is being retried over https, or it is the https
+  // site redirecting back to http.
+  bool HttpsFirst(CefRefPtr<CefFrame> frame, const std::string& url, const std::string& method,
+                  bool is_redirect);
+  // The https attempt failed: ask before loading the http URL.
+  void OfferHttp();
+  https_first::Exceptions* HttpsExceptions() const;
+  // A mailto: or tel: link: asks, then opens the app (UI thread).
+  void OpenExternalApp(CefRefPtr<CefBrowser> browser, const std::string& url, bool user_gesture);
+  // A native question for this tab; |done| always runs (false if no
+  // prompt could be shown).
+  std::shared_ptr<platform::PromptHandle> Ask(const char* kind,
+                                              const platform::ConfirmPrompt& prompt,
+                                              std::function<void(bool)> done);
 
   const BrowserRole role_;
   const int tab_id_;
@@ -238,6 +261,13 @@ class TabClient : public CefClient,
   // The main-frame URL whose load failed most recently: its error page is
   // not history.
   std::string failed_url_;
+  // HTTPS-First: the host being tried over https, and the http URL the
+  // page asked for. Empty when no attempt is under way.
+  std::string https_host_;
+  std::string https_from_;
+  bool external_prompt_open_ = false;
+  // Open permission prompts by Chromium's prompt id.
+  std::map<uint64_t, std::shared_ptr<platform::PromptHandle>> permission_prompts_;
 
   IMPLEMENT_REFCOUNTING(TabClient);
 };

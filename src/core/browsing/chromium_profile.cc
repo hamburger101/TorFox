@@ -4,11 +4,14 @@
 
 #include "src/core/browsing/chromium_profile.h"
 
+#include <initializer_list>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #include "sqlite3.h"
+#include "src/core/json.h"
+#include "src/core/util/file_io.h"
 
 namespace torfox::chromium_profile {
 
@@ -105,6 +108,76 @@ ScrubResult ScrubDownloadRecords(const std::filesystem::path& profile_dir) {
   sqlite3_close_v2(db);
   result.ok = result.ok && ok;
   return result;
+}
+
+SiteRecordsResult ScrubSiteRecords(const std::filesystem::path& profile_dir, bool zoom_levels) {
+  constexpr std::size_t kMaxBytes = 32u << 20;
+  constexpr int kMaxDepth = 200;
+  SiteRecordsResult result;
+  const std::filesystem::path file = profile_dir / "Preferences";
+  const ReadResult read = ReadFileLimited(file, kMaxBytes);
+  if (read.status == ReadStatus::kMissing) {
+    return result;
+  }
+  std::optional<Json> prefs;
+  if (read.status == ReadStatus::kOk) {
+    prefs = ParseJson(read.data, kMaxBytes, kMaxDepth);
+  }
+  if (!prefs || !prefs->is_object()) {
+    result.ok = false;  // Left alone: Chromium resets a file it cannot read.
+    return result;
+  }
+  auto erase = [&](std::initializer_list<const char*> path) {
+    Json* node = &*prefs;
+    const char* last = nullptr;
+    for (const char* key : path) {
+      if (last) {
+        auto it = node->find(last);
+        if (it == node->end() || !it->is_object()) {
+          return;
+        }
+        node = &*it;
+      }
+      last = key;
+    }
+    if (node->erase(last) > 0) {
+      ++result.removed;
+    }
+  };
+  erase({"profile", "content_settings", "exceptions", "site_engagement"});
+  erase({"profile", "content_settings", "exceptions", "media_engagement"});
+  if (zoom_levels) {
+    erase({"partition", "per_host_zoom_levels"});
+  }
+  if (result.removed > 0 && !WriteFileAtomically(file, DumpJson(*prefs))) {
+    result.ok = false;
+  }
+  return result;
+}
+
+bool WriteProxyMode(const std::filesystem::path& profile_dir, std::string_view mode) {
+  constexpr std::size_t kMaxBytes = 32u << 20;
+  const std::filesystem::path file = profile_dir / "Preferences";
+  const ReadResult read = ReadFileLimited(file, kMaxBytes);
+  Json prefs = Json::object();
+  if (read.status == ReadStatus::kOk) {
+    std::optional<Json> parsed = ParseJson(read.data, kMaxBytes, 200);
+    if (!parsed || !parsed->is_object()) {
+      return false;
+    }
+    prefs = std::move(*parsed);
+  } else if (read.status != ReadStatus::kMissing) {
+    return false;
+  }
+  Json proxy = Json::object();
+  proxy["mode"] = std::string(mode);
+  if (const auto it = prefs.find("proxy"); it != prefs.end() && *it == proxy) {
+    return true;
+  }
+  prefs["proxy"] = std::move(proxy);
+  std::error_code ec;
+  std::filesystem::create_directories(profile_dir, ec);
+  return !ec && WriteFileAtomically(file, DumpJson(prefs));
 }
 
 }  // namespace torfox::chromium_profile

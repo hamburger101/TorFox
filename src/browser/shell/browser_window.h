@@ -22,6 +22,7 @@
 #include "src/core/browsing/shortcuts.h"
 #include "src/core/browsing/tabs.h"
 #include "src/core/json.h"
+#include "src/core/privacy/https_first.h"
 
 namespace torfox {
 
@@ -51,6 +52,19 @@ class BrowserWindow : public CefWindowDelegate {
   // the dialog failed, or |tab_id|'s tab or this window closed first.
   void ConfirmDownload(int tab_id, const platform::ConfirmPrompt& prompt,
                        std::function<void(bool)> done);
+  // The same for any question a tab asks (|kind|: "download", "https",
+  // "permission", "external"; a string literal). The prompt is cancelled
+  // with its tab or window. Returns its handle, or null if none was shown
+  // (|done| then gets false).
+  std::shared_ptr<platform::PromptHandle> ConfirmForTab(int tab_id,
+                                                        const char* kind,
+                                                        const platform::ConfirmPrompt& prompt,
+                                                        std::function<void(bool)> done);
+  // Web tabs' context: Normal, or this window's own private context.
+  CefRefPtr<CefRequestContext> web_context() const { return web_context_; }
+  // Hosts this private window may load over http (HTTPS-First); normal
+  // windows share PrivacyService::normal_exceptions().
+  https_first::Exceptions& https_exceptions() { return https_exceptions_; }
   // A short message in the address bar.
   void ShowNotice(const std::string& text);
 
@@ -165,8 +179,9 @@ class BrowserWindow : public CefWindowDelegate {
   void PushState();
   void PushBookmarksBar();
   void PushEvent(const Json& event);
-  // Cancels open download prompts for |tab_id|, or all of them for 0.
-  void CancelPrompts(int tab_id);
+  // Cancels open prompts for |tab_id|, or all of them for 0; only those of
+  // |kind| if it is given.
+  void CancelPrompts(int tab_id, const char* kind = nullptr);
   CefRefPtr<CefBrowser> ActiveBrowser();
 
   const std::string first_url_;
@@ -189,8 +204,14 @@ class BrowserWindow : public CefWindowDelegate {
   int settings_observer_ = 0;
   int places_observer_ = 0;
   int downloads_observer_ = 0;
-  // Open download prompts and the tab each belongs to.
-  std::vector<std::pair<int, std::shared_ptr<platform::PromptHandle>>> prompts_;
+  // Open prompts and the tab each belongs to.
+  struct Prompt {
+    int tab_id;
+    const char* kind;
+    std::shared_ptr<platform::PromptHandle> handle;
+  };
+  std::vector<Prompt> prompts_;
+  https_first::Exceptions https_exceptions_;
 
   // Find bar.
   bool find_open_ = false;

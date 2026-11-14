@@ -6,6 +6,7 @@
 #define TORFOX_BROWSER_APP_SERVICES_H_
 
 #include <functional>
+#include <string>
 
 #include "include/wrapper/cef_message_router.h"
 
@@ -14,6 +15,7 @@ namespace torfox {
 class ContextManager;
 class DownloadService;
 class PlacesService;
+class PrivacyService;
 class SettingsService;
 class BrowserWindow;
 
@@ -25,6 +27,11 @@ struct Services {
   ContextManager* contexts = nullptr;
   PlacesService* places = nullptr;  // History and bookmarks.
   DownloadService* downloads = nullptr;
+  // Settings > Privacy & Security. Also read on the IO thread (tracker
+  // blocking): set before the first window opens, cleared after the last.
+  PrivacyService* privacy = nullptr;
+  // Shown once in the first window (for example: clearing data failed).
+  std::string startup_notice;
   CefRefPtr<CefMessageRouterBrowserSide> router;
   std::function<void(BrowserWindow*)> window_opened;
   std::function<void(BrowserWindow*)> window_destroyed;

@@ -84,13 +84,32 @@ class QuietStartupTest(unittest.TestCase):
         # auto-detect setting (see the known gap below).
         self.assertLessEqual(netlog.system_autodetect_contexts(self.log), 1)
 
-    # KNOWN GAP: web tabs follow the operating system's proxy settings. When
-    # Windows' "Automatically detect settings" is on, the web context runs
-    # WPAD (DHCP, then a "wpad" name lookup) as soon as it is created, before
-    # TorFox can configure it. Stage 4 gives TorFox its own network settings.
-    @known_gap_if(windows_proxy_autodetect())
+    # Web tabs connect directly unless Settings > Privacy & Security > Use
+    # the system's proxy settings is on, so no context runs WPAD (DHCP, then a
+    # "wpad" name lookup), even with Windows' "Automatically detect
+    # settings" on (STAGE1_FINDINGS.md §4, STAGE4_FINDINGS.md).
     def test_idle_browser_does_not_autodiscover_proxies(self) -> None:
         self.assertEqual(netlog.proxy_autodiscovery_sources(self.log), set())
+        self.assertEqual(netlog.system_autodetect_contexts(self.log), 0)
+
+
+class SystemProxyTest(unittest.TestCase):
+    @unittest.skipUnless(windows_proxy_autodetect(), "needs Windows' proxy auto-detect on")
+    def test_system_proxy_setting_follows_windows(self) -> None:
+        # The control for the test above: with the setting on, TorFox uses
+        # Windows' settings, and so (with auto-detect on) looks for a proxy.
+        tf = TorFox()
+        (tf.user_data / "settings.json").write_text(
+            '{"format": 1, "settings": {"privacy.useSystemProxy": true}}', encoding="utf-8")
+        log_path = tf.user_data / "netlog.json"
+        tf.args += [f"--log-net-log={log_path}", "--net-log-capture-mode=Everything"]
+        with tf:
+            tf.shell()
+            time.sleep(IDLE_SECONDS / 2)
+            self.assertEqual(tf.wait_log("proxy_mode_written")["mode"], "system")
+            self.assertEqual(tf.close(), 0)
+            log = netlog.load(log_path)  # Before the profile is deleted.
+        self.assertNotEqual(netlog.proxy_autodiscovery_sources(log), set())
 
 
 class OnionResolverTest(unittest.TestCase):

@@ -14,8 +14,9 @@ Legend:
 **macOS:** the build files and platform code exist but have never been compiled, so every macOS entry is
 ⬜ or 🟡 until CI builds and tests them.
 
-Last updated: end of Stage 3 (2026-11-14). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
-[`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md) and [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md).
+Last updated: end of Stage 4 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
+[`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md), [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md) and
+[`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md).
 
 | Area | Feature | Windows | macOS | Evidence |
 |---|---|---|---|---|
@@ -34,7 +35,7 @@ Last updated: end of Stage 3 (2026-11-14). The evidence is in [`STAGE1_FINDINGS.
 | Browsing | Zoom | ✅ | ⬜ | `test_zoom` |
 | Browsing | Bookmarks: star, bar, manager page, persistence | ✅ | ⬜ | `test_places.py` (bookmark tests) |
 | Browsing | History: recorded by TorFox only, search, remove, clear (overwritten in TorFox's files) | ✅ M | ⬜ | `test_places.py` (history tests) |
-| Browsing | Clearing history also forgets per-site zoom levels | ❌ | ⬜ | `test_clearing_history_forgets_zoomed_sites` (expected failure; Stage 4) |
+| Browsing | Clearing history also forgets per-site zoom levels | ✅ M | ⬜ | `test_clearing_history_forgets_zoomed_sites` (Stage 4 findings §3.5) |
 | Browsing | Native menus: app, star, bookmark folders, page context menu (no save/inspect items) | ✅ | 🟡 | `test_app_menu`, `test_web_context_menu_has_no_save_or_inspect`, via the menu test hook |
 | Browsing | Address-bar suggestions | ⬜ | ⬜ | Stage 6 |
 | Search | Typed queries go to DuckDuckGo; `.onion` input is never searched | ✅ | ⬜ | `test_search_goes_to_duckduckgo`, `test_onion_input_is_refused_and_never_searched`, `test_onion_input_is_never_searched_or_loaded` |
@@ -51,20 +52,25 @@ Last updated: end of Stage 3 (2026-11-14). The evidence is in [`STAGE1_FINDINGS.
 | Downloads | Pages cannot write files another way (File System Access pickers off) | ✅ M | ⬜ | `test_file_system_access_pickers_are_absent` (findings §3.4) |
 | Downloads | Downloads page (list, cancel, show in folder, remove, clear; no "open"), per-window for private windows | ✅ M | ⬜ | `test_downloads_page_*`, `test_private_downloads_stay_in_their_window` |
 | Downloads | Drag-out of links/images; print to PDF | 🟡 | 🟡 | Not testable by automation (findings §6) |
-| Privacy | Tracker blocking | ⬜ | ⬜ | Stage 4; WebSockets need another mechanism (findings §5) |
-| Privacy | Third-party cookie blocking | ⬜ | ⬜ | Stage 4 |
-| Privacy | HTTPS-first | ⬜ | ⬜ | Stage 4 |
-| Privacy | Pop-ups without a user gesture blocked; click-opened pop-ups get no opener | ✅ | ⬜ | `test_popup_*` |
-| Privacy | Pop-up per-site allow | ⬜ | ⬜ | Stage 4 |
+| Privacy | Tracker blocking (EasyPrivacy domains, third-party requests only; setting) | ✅ M | ⬜ | `TrackerTest`, `Trackers.*` |
+| Privacy | Tracker blocking for WebSockets | ❌ | ⬜ | CEF does not show WebSockets to the request guard (Stage 4 findings §6) |
+| Privacy | Third-party cookie blocking (setting applies at once) | ✅ M | ⬜ | `CookieTest` |
+| Privacy | HTTPS-first: upgrade, question before http, per-session exceptions, no redirect loop (setting) | ✅ M | ⬜ | `HttpsFirstTest`, `HttpsFirst.*` |
+| Privacy | HTTPS-first for form posts | ⛔ | ⛔ | Not upgraded: repeating a POST would resend the form (Stage 4 findings §1) |
+| Privacy | Pop-ups without a click blocked with a notice; click-opened pop-ups open as tabs, no opener (setting) | ✅ M | ⬜ | `PopupTest`, `test_popup_*` |
+| Privacy | Pop-up per-site allow | ⛔ | ⛔ | Not offered: a list of sites is a browsing record (Stage 4 findings §2) |
 | Privacy | Idle browser makes no network connections (20 s locally, 60 s on CI) | ✅ M | ⬜ | `test_idle_browser_makes_no_network_connections` |
 | Privacy | Service contexts never auto-discover proxies | ✅ M | ⬜ | `test_service_contexts_never_autodiscover_proxies` |
-| Privacy | No proxy auto-discovery (WPAD) at all | ❌ | ⬜ | Normal context auto-discovers once at start-up (findings §4) |
+| Privacy | No proxy auto-discovery (WPAD) unless *Use the system's proxy settings* is on | ✅ M | ⬜ | `test_idle_browser_does_not_autodiscover_proxies`, `SystemProxyTest` (Stage 4 findings §3.6) |
 | Privacy | Chrome's `Default` profile holds no browsing data | ✅ | ⬜ | `test_no_history_in_default_profile` |
+| Privacy | Chromium's per-site scores never kept in the profile | ✅ M | ⬜ | `test_control_without_clearing_everything_is_kept`, `ChromiumProfileTest.*` (Stage 4 findings §3.5) |
 | Privacy | Private windows: own context each, isolated storage, nothing recorded or left on disk | ✅ M | ⬜ | `test_private.py` |
-| Privacy | Clear data on exit | ⬜ | ⬜ | Stage 4 |
-| Permissions | All permission requests denied (interim default) | ✅ | ⬜ | `test_permission_requests_are_denied`, `test_media_permission_refused_by_torfox` |
-| Permissions | Per-site settings for camera, mic, location, notifications, clipboard, pop-ups | ⬜ | ⬜ | Stage 4 |
-| Network | WebRTC leak protection | ⬜ | ⬜ | Spike D only |
+| Privacy | Clear on exit (history, cookies and site data, cache), after a normal exit and after a crash; links never followed | ✅ M | ⬜ | `ClearOnExitTest`, `ClearData.*` |
+| Privacy | Email and phone links ask first, after a click only; other schemes never reach the OS | ✅ M | ⬜ | `ExternalProtocolTest`, `ExternalProtocols.*` |
+| Privacy | Handing the link to the mail or phone app | 🟡 | 🟡 | Test builds log instead of opening an app (Stage 4 findings §6) |
+| Permissions | Camera, microphone, clipboard: Block (default) or Ask every time; no answer remembered | ✅ M | ⬜ | `PermissionTest` |
+| Permissions | Location, notifications, screen capture and all others always denied | ✅ | ⬜ | `test_location_and_notifications_are_always_denied`, `test_screen_capture_is_always_denied`, `test_permission_requests_are_denied` |
+| Network | WebRTC exposes no local addresses | ✅ | ⬜ | `WebRtcTest` (two layers; the test shows the outcome, Stage 4 findings §6) |
 | Tor | Regular tabs never resolve or connect to `.onion` (incl. WebSockets) | ✅ M | ⬜ | `OnionResolverTest`, `test_onion_subresources_and_navigation_are_blocked` |
 | Tor | Bundled tor managed automatically | ⬜ | ⬜ | Stage 5 |
 | Tor | Onion traffic only via Tor; no DNS leak; fail closed | ⬜ | ⬜ | Stage 5 (Spike C only) |

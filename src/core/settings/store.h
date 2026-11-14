@@ -35,6 +35,11 @@ struct LoadResult {
 
 enum class SetResult { kOk, kUnchanged, kUnknownKey, kInvalidValue };
 
+enum class LoadMode {
+  kRepair,    // A corrupt file is backed up and set aside (kCorruptReset).
+  kReadOnly,  // The file is never changed: a corrupt one is left for kRepair.
+};
+
 // Holds TorFox settings in memory and persists them as versioned JSON:
 //   {"format": 1, "settings": {"appearance.theme": "dark", ...}}
 // Only values that differ from the defaults are written. Not thread-safe; the
@@ -43,7 +48,7 @@ class Store {
  public:
   explicit Store(std::filesystem::path file);
 
-  LoadResult Load();
+  LoadResult Load(LoadMode mode = LoadMode::kRepair);
   bool Save() const;
 
   // Returns the current value (stored or default). |key| must be known.

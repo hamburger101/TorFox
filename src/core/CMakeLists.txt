@@ -42,10 +42,21 @@ add_custom_command(
           "${_psl}/test_psl.txt" "${_psl}/SOURCE.json"
   COMMENT "Generating the Public Suffix List tables"
 )
+set(_trackers "${CMAKE_SOURCE_DIR}/third_party/easyprivacy")
+add_custom_command(
+  OUTPUT "${TORFOX_CORE_GEN_DIR}/trackers_data.inc"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${TORFOX_CORE_GEN_DIR}"
+  COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/scripts/gen_trackers.py"
+          "${TORFOX_CORE_GEN_DIR}/trackers_data.inc"
+  DEPENDS "${CMAKE_SOURCE_DIR}/scripts/gen_trackers.py" "${_trackers}/domains.txt"
+          "${_trackers}/sources.lock.json"
+  COMMENT "Generating the tracker domain table (EasyPrivacy)"
+)
 
 add_library(torfox_core STATIC
   "${TORFOX_CORE_GEN_DIR}/psl_data.inc"
   "${TORFOX_CORE_GEN_DIR}/psl_vectors.inc"
+  "${TORFOX_CORE_GEN_DIR}/trackers_data.inc"
   json.cc json.h
   browsing/chromium_profile.cc browsing/chromium_profile.h
   browsing/context_menu.cc browsing/context_menu.h
@@ -56,6 +67,10 @@ add_library(torfox_core STATIC
   bridge/validator.cc bridge/validator.h
   cmdline/policy.cc cmdline/policy.h
   downloads/policy.cc downloads/policy.h
+  privacy/clear_data.cc privacy/clear_data.h
+  privacy/external_protocols.cc privacy/external_protocols.h
+  privacy/https_first.cc privacy/https_first.h
+  privacy/trackers.cc privacy/trackers.h
   settings/schema.cc settings/schema.h
   settings/store.cc settings/store.h
   url/guards.cc url/guards.h

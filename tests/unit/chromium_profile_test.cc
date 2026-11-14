@@ -109,5 +109,67 @@ TEST_F(ChromiumProfileTest, UnreadableDatabaseIsReportedAndLeftAlone) {
   EXPECT_EQ(Bytes(dir_ / "History"), before);
 }
 
+TEST_F(ChromiumProfileTest, ErasesSiteScoresAndOptionallyZoomLevels) {
+  const std::string prefs = R"({"browser":{"window_placement":{"left":10}},)"
+                            R"("partition":{"per_host_zoom_levels":{"x":{"zoomed.example":{"zoom_level":1.5}}}},)"
+                            R"("profile":{"content_settings":{"exceptions":{)"
+                            R"("site_engagement":{"https://visited.example:443,*":{"setting":{"rawScore":3.2}}},)"
+                            R"("media_engagement":{"https://visited.example:443,*":{"setting":{}}},)"
+                            R"("cookies":{"https://kept.example:443,*":{"setting":1}}}},"name":"Person 1"}})";
+  std::ofstream(dir_ / "Preferences", std::ios::binary) << prefs;
+
+  SiteRecordsResult r = ScrubSiteRecords(dir_, /*zoom_levels=*/false);
+  EXPECT_TRUE(r.ok);
+  EXPECT_EQ(r.removed, 2);
+  std::string after = Bytes(dir_ / "Preferences");
+  EXPECT_EQ(after.find("visited.example"), std::string::npos);
+  EXPECT_NE(after.find("zoomed.example"), std::string::npos);
+  EXPECT_NE(after.find("kept.example"), std::string::npos);  // Other settings stay.
+  EXPECT_NE(after.find("Person 1"), std::string::npos);
+  EXPECT_NE(after.find("window_placement"), std::string::npos);
+
+  r = ScrubSiteRecords(dir_, /*zoom_levels=*/true);
+  EXPECT_TRUE(r.ok);
+  EXPECT_EQ(r.removed, 1);
+  after = Bytes(dir_ / "Preferences");
+  EXPECT_EQ(after.find("zoomed.example"), std::string::npos);
+  EXPECT_NE(after.find("kept.example"), std::string::npos);
+
+  // Nothing left to erase: the file is not rewritten.
+  const auto before = std::filesystem::last_write_time(dir_ / "Preferences");
+  r = ScrubSiteRecords(dir_, true);
+  EXPECT_TRUE(r.ok);
+  EXPECT_EQ(r.removed, 0);
+  EXPECT_EQ(std::filesystem::last_write_time(dir_ / "Preferences"), before);
+}
+
+TEST_F(ChromiumProfileTest, UnreadablePreferencesAreReportedAndLeftAlone) {
+  EXPECT_TRUE(ScrubSiteRecords(dir_ / "absent", true).ok);
+  std::ofstream(dir_ / "Preferences", std::ios::binary) << "{ not json";
+  const SiteRecordsResult r = ScrubSiteRecords(dir_, true);
+  EXPECT_FALSE(r.ok);
+  EXPECT_EQ(Bytes(dir_ / "Preferences"), "{ not json");
+}
+
+TEST_F(ChromiumProfileTest, WritesTheProxyModeKeepingEverythingElse) {
+  // A new profile: the folder and file are created.
+  const std::filesystem::path fresh = dir_ / "New";
+  ASSERT_TRUE(WriteProxyMode(fresh, "direct"));
+  EXPECT_EQ(Bytes(fresh / "Preferences"), R"({"proxy":{"mode":"direct"}})");
+
+  std::ofstream(dir_ / "Preferences", std::ios::binary)
+      << R"({"proxy":{"mode":"system","server":"x"},"profile":{"name":"Person 1"}})";
+  ASSERT_TRUE(WriteProxyMode(dir_, "direct"));
+  std::string after = Bytes(dir_ / "Preferences");
+  EXPECT_NE(after.find(R"("proxy":{"mode":"direct"})"), std::string::npos);
+  EXPECT_NE(after.find("Person 1"), std::string::npos);
+  ASSERT_TRUE(WriteProxyMode(dir_, "system"));
+  EXPECT_NE(Bytes(dir_ / "Preferences").find(R"("proxy":{"mode":"system"})"), std::string::npos);
+
+  std::ofstream(dir_ / "Preferences", std::ios::binary) << "{ not json";
+  EXPECT_FALSE(WriteProxyMode(dir_, "direct"));
+  EXPECT_EQ(Bytes(dir_ / "Preferences"), "{ not json");
+}
+
 }  // namespace
 }  // namespace torfox::chromium_profile

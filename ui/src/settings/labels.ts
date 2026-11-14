@@ -27,9 +27,10 @@ export const SECTIONS: Record<string, SectionLabel> = {
     title: "Privacy & Security",
     icon: icons.shield,
     note:
-      "These protections are still being built. Each control stays disabled until its feature " +
-      "is finished and tested. In this build, websites cannot use your camera, microphone, " +
-      "location, notifications or other permissions: every request is denied.",
+      "Camera, microphone and clipboard are blocked unless you choose Ask: TorFox then asks " +
+      "every time and never remembers the answer. Location, notifications and every other " +
+      "permission are always denied in this build. Links that open another app ask first, and " +
+      "only email and phone links can do so.",
   },
   downloads: {
     title: "Downloads",
@@ -86,7 +87,7 @@ export const SETTINGS: Record<string, SettingLabel> = {
   },
   "privacy.blockTrackers": {
     title: "Block trackers",
-    description: "Block requests to known tracking domains.",
+    description: "Block other sites' requests to known tracking domains (EasyPrivacy list).",
     group: "Browsing protection",
   },
   "privacy.blockThirdPartyCookies": {
@@ -99,10 +100,29 @@ export const SETTINGS: Record<string, SettingLabel> = {
     description: "Block windows that sites open without you clicking.",
     group: "Browsing protection",
   },
-  "privacy.clearOnExit.history": { title: "History", group: "Clear when TorFox closes" },
-  "privacy.clearOnExit.cookies": { title: "Cookies and site data", group: "Clear when TorFox closes" },
-  "privacy.clearOnExit.cache": { title: "Cached files", group: "Clear when TorFox closes" },
-  "privacy.clearOnExit.downloads": { title: "Download list", group: "Clear when TorFox closes" },
+  "privacy.useSystemProxy": {
+    title: "Use the system's proxy settings",
+    description:
+      "Off: TorFox connects directly and never looks for a proxy on your network. Turn this on " +
+      "only if your network requires a proxy. With Windows' “Automatically detect settings” on, " +
+      "TorFox then asks the local network for one (WPAD), which others on it can answer.",
+    group: "Network",
+  },
+  "privacy.clearOnExit.history": {
+    title: "History",
+    description: "Your browsing history, and the site icons and shortcuts kept with it.",
+    group: "Clear when TorFox closes",
+  },
+  "privacy.clearOnExit.cookies": {
+    title: "Cookies and site data",
+    description: "Cookies and everything sites store: local storage, databases, service workers.",
+    group: "Clear when TorFox closes",
+  },
+  "privacy.clearOnExit.cache": {
+    title: "Cached files",
+    description: "Copies of pages and images, and the record of which sites TorFox connected to.",
+    group: "Clear when TorFox closes",
+  },
   "permissions.camera": { title: "Camera", values: PERMISSION_VALUES, group: "Site permissions" },
   "permissions.microphone": { title: "Microphone", values: PERMISSION_VALUES, group: "Site permissions" },
   "permissions.location": { title: "Location", values: PERMISSION_VALUES, group: "Site permissions" },

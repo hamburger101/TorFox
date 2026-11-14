@@ -26,6 +26,11 @@ const std::vector<std::string> kTestHookSwitches = {
     "torfox-test-menu-choice",  // File naming the menu item to pick (tests/e2e).
     "torfox-test-dialog-choice",  // File naming the answer to the next dialog.
     "torfox-test-download-dir",   // Folder used instead of Downloads.
+    "torfox-test-https-port",     // <http>:<https> port pair HTTPS-First may map.
+    // The privacy tests' local https sites: their certificate is trusted by
+    // its public key, and a fake camera and microphone answer getUserMedia.
+    "ignore-certificate-errors-spki-list",
+    "use-fake-device-for-media-stream",
 };
 
 // Evidence for each entry is in docs/STAGE0_FINDINGS.md and the quiet-startup

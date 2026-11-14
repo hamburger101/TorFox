@@ -53,8 +53,8 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
 |---|---|---|---|
 | Base (global) | Disk, never hosts content | Proxy pref `direct` (also in Local State) | Holds the strict baseline prefs |
 | Internal | Off-the-record (OTR) | None; http(s) requests are cancelled; proxy pref `direct` | Only context with the `torfox` scheme handler |
-| Normal | Disk profile | Direct | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled and offered in a Tor tab |
-| Private | Its own OTR profile, one per private window | Direct | No history; its downloads list is its own and is dropped with the window |
+| Normal | Disk profile | Direct, or the system's proxy settings if the user turns that on | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled and offered in a Tor tab |
+| Private | Its own OTR profile, one per private window | As Normal | No history; its downloads list is its own and is dropped with the window |
 | Tor | Its own OTR profile | SOCKS5 to tor only | See below |
 
 The Tor context:
@@ -66,10 +66,11 @@ The Tor context:
 
 A tab changes context only by replacing its browser. Popups inherit the opener's context.
 
-The service contexts (Base, Local State and Internal) use `direct` so that they never run proxy
-auto-discovery (WPAD). The Normal context still follows the system proxy, and auto-discovers once at
-start-up before its prefs apply. That is a known gap, with a decision due in Stage 4 (see
-[`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) §4). TorFox never uses `--no-proxy-server`, because it would
+No context runs proxy auto-discovery (WPAD) unless the user turns on *Use the system's proxy settings*.
+The service contexts (Base, Local State and Internal) always use `direct`. The web contexts use `direct`
+or `system`, from that setting. The Normal profile's network context starts before TorFox can set prefs,
+so TorFox writes the proxy mode into its Preferences file before CEF starts
+([`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md) §3.6). TorFox never uses `--no-proxy-server`, because it would
 override the Tor context's proxy.
 
 Chrome's runtime also keeps an on-disk `User Data/Default` profile. TorFox never browses in it, and a test
@@ -87,6 +88,28 @@ checks that it stays empty of browsing data.
   that context.
 - **Pages:** `torfox://bookmarks/` and `torfox://history/` reach the data only through their own bridge
   commands (`bookmarks.*`, `history.*`). The shell keeps only the commands it needs (star, folder menus).
+
+## Privacy (web contexts)
+All of it is decided in the browser process (`TabClient`, `PrivacyService`), from Settings > Privacy &
+Security. The pure rules live in `src/core/privacy/` and are unit tested without CEF.
+- **HTTPS-first:** `OnBeforeBrowse` retries a main-frame `http://` GET over https (`https_first::UpgradedUrl`:
+  public domain names only). A failure that http might fix, or an https→http redirect, asks before loading
+  http. Accepted sites are remembered in memory: one list for normal windows, one per private window.
+- **Trackers:** `OnBeforeResourceLoad` cancels a subresource whose host is on the compiled-in EasyPrivacy
+  domain list when the request is third-party (registrable domains differ, using the Public Suffix List).
+- **Cookies and pop-ups:** `profile.cookie_controls_mode`, re-applied to every open context when the
+  setting changes. Pop-ups are decided in `OnBeforePopup`, since Chromium's own blocker is set to allow;
+  allowed ones open as tabs.
+- **Permissions:** camera and microphone (`OnRequestMediaAccessPermission`) and clipboard
+  (`OnShowPermissionPrompt`) are denied, or asked about every time. Everything else is denied. Chromium's
+  stored answer is reset right after each prompt, so nothing is remembered per site.
+- **Email and phone links:** handled in `OnBeforeBrowse`. After a click, the user is asked, and only a
+  checked `mailto:`/`tel:` URL reaches the OS (`external_protocols::LaunchableScheme`).
+  `OnProtocolExecution` refuses everything.
+- **Clear on exit:** `clear_data::Clear` deletes the chosen categories' files after `CefShutdown`, and again
+  before `CefInitialize` (crash recovery). Links are removed, never followed. TorFox's own history is
+  cleared in `places.db`. Chromium's per-site scores are always erased from Preferences, and zoom levels
+  with history (`chromium_profile::ScrubSiteRecords`).
 
 ## Downloads
 - **Policy:** `downloads::Decide(disable, ask)` (`src/core/downloads/policy.cc`) gives Block, Ask or Allow.

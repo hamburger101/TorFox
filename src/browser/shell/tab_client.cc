@@ -14,6 +14,7 @@
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/download_service.h"
 #include "src/browser/app/fault_injection.h"
+#include "src/browser/app/privacy_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/platform/platform.h"
@@ -24,6 +25,8 @@
 #include "src/core/browsing/places.h"
 #include "src/core/browsing/shortcuts.h"
 #include "src/core/downloads/policy.h"
+#include "src/core/privacy/external_protocols.h"
+#include "src/core/privacy/trackers.h"
 #include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
 #include "src/core/url/nav_input.h"
@@ -48,6 +51,12 @@ enum WebMenuCommand {
   kSearchSelection,
   kBookmarkPage,
 };
+
+// The host of an origin or URL, for prompts ("news.example.com wants ...").
+std::string SiteName(const std::string& origin_or_url) {
+  const std::string host = guards::HostOf(origin_or_url);
+  return host.empty() ? std::string("This page") : host;
+}
 
 bool IsWebUrl(const std::string& url) {
   const std::string scheme = guards::SchemeOf(url);
@@ -594,11 +603,20 @@ bool TabClient::OnBeforePopup(CefRefPtr<CefBrowser> browser,
                               CefRefPtr<CefDictionaryValue>& extra_info,
                               bool* no_javascript_access) {
   const std::string url = target_url.ToString();
-  // Popups never become real popup browsers (no opener relationship). Web
-  // pages may open a new tab only with a user gesture; Stage 4 adds the
-  // configurable popup blocker.
-  if (role_ != BrowserRole::kWebTab || !user_gesture) {
-    LogBlock("popup_blocked", role_, url, user_gesture ? "internal browser" : "no user gesture");
+  // Popups never become real popup browsers (no opener relationship): they
+  // open as new tabs. Without a click they are blocked, unless Settings >
+  // Privacy & Security > Block pop-ups is off.
+  if (role_ != BrowserRole::kWebTab) {
+    LogBlock("popup_blocked", role_, url, "internal browser");
+    return true;
+  }
+  PrivacyService* privacy = GetServices().privacy;
+  if (!user_gesture && (!privacy || privacy->block_popups())) {
+    LogBlock("popup_blocked", role_, url, "no user gesture");
+    if (window_) {
+      window_->ShowNotice("Pop-up blocked: " + SiteName(url) +
+                          " tried to open a window without a click.");
+    }
     return true;
   }
   const std::string scheme = guards::SchemeOf(url);
@@ -686,6 +704,10 @@ void TabClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   const std::string url = frame->GetURL().ToString();
   test_log::Event("load_end", {{"tab", tab_id_}, {"status", httpStatusCode},
                                {"error_page", url == failed_url_}});
+  if (httpStatusCode > 0 && url != failed_url_) {
+    https_host_.clear();  // A page loaded: any https attempt is over.
+    https_from_.clear();
+  }
   // Error pages are not visits: no HTTP response, or the URL that just failed.
   if (httpStatusCode <= 0 || url == failed_url_) {
     return;
@@ -705,19 +727,139 @@ void TabClient::OnLoadError(CefRefPtr<CefBrowser> browser,
   test_log::Event("load_error", {{"role", std::string(RoleName(role_))},
                                  {"tab", tab_id_},
                                  {"code", static_cast<int>(errorCode)}});
+  // The https attempt for an http URL failed. ERR_ABORTED is TorFox's own
+  // cancel (or the user's); errors that http cannot fix end the attempt.
+  if (!https_host_.empty() && guards::SchemeOf(failed_url_) == "https" &&
+      guards::HostOf(failed_url_) == https_host_ && errorCode != ERR_ABORTED) {
+    if (https_first::OffersHttpAfter(static_cast<int>(errorCode))) {
+      OfferHttp();
+    } else {
+      https_host_.clear();
+      https_from_.clear();
+    }
+  }
 }
 
-// ----- Permissions (denied until Stage 4) ------------------------------------
+// ----- Permissions -----------------------------------------------------------
+// Settings > Privacy & Security > Site permissions. Camera, microphone and
+// clipboard are blocked, or asked about every time (no answer is stored).
+// Everything else (location, notifications, screen capture, ...) is always
+// denied.
+
+namespace {
+
+// Chromium records the answer to a permission prompt for the site ("block"
+// or "allow", in the profile): later requests would then be answered without
+// asking, and the profile would list the sites that asked. TorFox asks every
+// time and keeps no per-site answers, so the record is removed straight
+// after the answer has been delivered.
+void ForgetPermissionAnswer(CefRefPtr<CefBrowser> browser,
+                            const std::string& origin,
+                            uint32_t permission_types) {
+  struct Map {
+    uint32_t permission;
+    cef_content_setting_types_t setting;
+  };
+  constexpr Map kMap[] = {
+      {CEF_PERMISSION_TYPE_CLIPBOARD, CEF_CONTENT_SETTING_TYPE_CLIPBOARD_READ_WRITE},
+      {CEF_PERMISSION_TYPE_GEOLOCATION, CEF_CONTENT_SETTING_TYPE_GEOLOCATION},
+      {CEF_PERMISSION_TYPE_NOTIFICATIONS, CEF_CONTENT_SETTING_TYPE_NOTIFICATIONS},
+      {CEF_PERMISSION_TYPE_CAMERA_STREAM, CEF_CONTENT_SETTING_TYPE_MEDIASTREAM_CAMERA},
+      {CEF_PERMISSION_TYPE_MIC_STREAM, CEF_CONTENT_SETTING_TYPE_MEDIASTREAM_MIC},
+  };
+  if (!browser || origin.empty()) {
+    return;
+  }
+  CefRefPtr<CefRequestContext> context = browser->GetHost()->GetRequestContext();
+  CefRefPtr<CefFrame> main = browser->GetMainFrame();
+  const std::string top = main ? main->GetURL().ToString() : origin;
+  std::vector<cef_content_setting_types_t> settings;
+  for (const Map& m : kMap) {
+    if (permission_types & m.permission) {
+      settings.push_back(m.setting);
+    }
+  }
+  if (!context || settings.empty()) {
+    return;
+  }
+  CefPostTask(TID_UI, base::BindOnce(
+                          [](CefRefPtr<CefRequestContext> context, std::string origin, std::string top,
+                             std::vector<cef_content_setting_types_t> settings) {
+                            for (cef_content_setting_types_t s : settings) {
+                              context->SetContentSetting(origin, top, s,
+                                                         CEF_CONTENT_SETTING_VALUE_DEFAULT);
+                            }
+                            test_log::Event("permission_forgotten",
+                                            {{"origin", origin}, {"count", settings.size()}});
+                          },
+                          context, origin, top, std::move(settings)));
+}
+
+}  // namespace
+
+std::shared_ptr<platform::PromptHandle> TabClient::Ask(const char* kind,
+                                                       const platform::ConfirmPrompt& prompt,
+                                                       std::function<void(bool)> done) {
+  if (!window_) {
+    CefPostTask(TID_UI, base::BindOnce([](std::function<void(bool)> f) { f(false); },
+                                       std::move(done)));
+    return nullptr;
+  }
+  return window_->ConfirmForTab(tab_id_, kind, prompt, std::move(done));
+}
 
 bool TabClient::OnRequestMediaAccessPermission(CefRefPtr<CefBrowser> browser,
                                                CefRefPtr<CefFrame> frame,
                                                const CefString& requesting_origin,
                                                uint32_t requested_permissions,
                                                CefRefPtr<CefMediaAccessCallback> callback) {
-  test_log::Event("permission_denied", {{"kind", "media"},
-                                        {"origin", requesting_origin.ToString().substr(0, 200)},
-                                        {"mask", requested_permissions}});
-  callback->Cancel();
+  CEF_REQUIRE_UI_THREAD();
+  const std::string origin = requesting_origin.ToString().substr(0, 200);
+  auto deny = [&](const char* why) {
+    test_log::Event("permission_denied", {{"kind", "media"},
+                                          {"origin", origin},
+                                          {"mask", requested_permissions},
+                                          {"why", why}});
+    callback->Cancel();
+    return true;
+  };
+  constexpr uint32_t kCamera = CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE;
+  constexpr uint32_t kMicrophone = CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE;
+  PrivacyService* privacy = GetServices().privacy;
+  if (role_ != BrowserRole::kWebTab || !privacy) {
+    return deny("not a web tab");
+  }
+  if (requested_permissions & ~(kCamera | kMicrophone)) {
+    return deny("screen capture");
+  }
+  const bool camera = requested_permissions & kCamera;
+  const bool microphone = requested_permissions & kMicrophone;
+  if ((!camera && !microphone) ||
+      (camera && privacy->PermissionFor("permissions.camera") != PrivacyService::Permission::kAsk) ||
+      (microphone &&
+       privacy->PermissionFor("permissions.microphone") != PrivacyService::Permission::kAsk)) {
+    return deny("blocked in settings");
+  }
+  const std::string what = camera && microphone ? "camera and microphone"
+                           : camera             ? "camera"
+                                                : "microphone";
+  platform::ConfirmPrompt prompt;
+  prompt.title = "Allow access to your " + what + "?";
+  prompt.heading = SiteName(origin) + " wants to use your " + what;
+  prompt.details = "Only this request is allowed: TorFox asks again the next time. The site can use "
+                   "your " + what + " until the page stops it or you leave the page.";
+  prompt.accept = "Allow";
+  prompt.cancel = "Block";
+  Ask("permission", prompt, [callback, requested_permissions, origin](bool ok) {
+    test_log::Event(ok ? "permission_granted" : "permission_denied",
+                    {{"kind", "media"}, {"origin", origin}, {"mask", requested_permissions},
+                     {"why", ok ? "allowed by the user" : "declined"}});
+    if (ok) {
+      callback->Continue(requested_permissions);
+    } else {
+      callback->Cancel();
+    }
+  });
   return true;
 }
 
@@ -726,11 +868,63 @@ bool TabClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
                                        const CefString& requesting_origin,
                                        uint32_t requested_permissions,
                                        CefRefPtr<CefPermissionPromptCallback> callback) {
-  test_log::Event("permission_denied", {{"kind", "prompt"},
-                                        {"origin", requesting_origin.ToString().substr(0, 200)},
-                                        {"mask", requested_permissions}});
-  callback->Continue(CEF_PERMISSION_RESULT_DENY);
+  CEF_REQUIRE_UI_THREAD();
+  const std::string origin = requesting_origin.ToString().substr(0, 200);
+  auto deny = [&](const char* why) {
+    test_log::Event("permission_denied", {{"kind", "prompt"},
+                                          {"origin", origin},
+                                          {"mask", requested_permissions},
+                                          {"why", why}});
+    callback->Continue(CEF_PERMISSION_RESULT_DENY);
+    ForgetPermissionAnswer(browser, requesting_origin.ToString(), requested_permissions);
+    return true;
+  };
+  PrivacyService* privacy = GetServices().privacy;
+  if (role_ != BrowserRole::kWebTab || !privacy) {
+    return deny("not a web tab");
+  }
+  if (requested_permissions != CEF_PERMISSION_TYPE_CLIPBOARD) {
+    return deny("not available");
+  }
+  if (privacy->PermissionFor("permissions.clipboard") != PrivacyService::Permission::kAsk) {
+    return deny("blocked in settings");
+  }
+  platform::ConfirmPrompt prompt;
+  prompt.title = "Allow access to your clipboard?";
+  prompt.heading = SiteName(origin) + " wants to see what you copied";
+  prompt.details = "The site could read anything you copied, such as passwords or messages. Only "
+                   "this request is allowed: TorFox asks again the next time.";
+  prompt.accept = "Allow";
+  prompt.cancel = "Block";
+  CefRefPtr<TabClient> self = this;
+  const std::string full_origin = requesting_origin.ToString();
+  std::shared_ptr<platform::PromptHandle> handle =
+      Ask("permission", prompt,
+          [self, prompt_id, callback, requested_permissions, origin, full_origin](bool ok) {
+            self->permission_prompts_.erase(prompt_id);
+            test_log::Event(ok ? "permission_granted" : "permission_denied",
+                            {{"kind", "prompt"}, {"origin", origin}, {"mask", requested_permissions},
+                             {"why", ok ? "allowed by the user" : "declined"}});
+            callback->Continue(ok ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY);
+            ForgetPermissionAnswer(self->browser_, full_origin, requested_permissions);
+          });
+  if (handle) {
+    permission_prompts_[prompt_id] = std::move(handle);
+  }
   return true;
+}
+
+void TabClient::OnDismissPermissionPrompt(CefRefPtr<CefBrowser> browser,
+                                          uint64_t prompt_id,
+                                          cef_permission_request_result_t result) {
+  // Chromium gave up on the request (the page navigated or closed): so does
+  // the question.
+  auto it = permission_prompts_.find(prompt_id);
+  if (it != permission_prompts_.end()) {
+    std::shared_ptr<platform::PromptHandle> handle = std::move(it->second);
+    permission_prompts_.erase(it);
+    handle->Cancel();
+  }
 }
 
 // ----- Requests --------------------------------------------------------------
@@ -750,15 +944,104 @@ bool TabClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                                bool is_redirect) {
   CEF_REQUIRE_UI_THREAD();
   const std::string url = request->GetURL().ToString();
+  // Links that open another app are not navigations: nothing loads, and
+  // mailto:/tel: may open the mail or phone app once the user agrees.
+  // Every other scheme is refused by the guard below.
+  if (role_ == BrowserRole::kWebTab && !external_protocols::LaunchableScheme(url).empty()) {
+    OpenExternalApp(browser, url, user_gesture);
+    return true;
+  }
   const std::string why = NavigationBlockReason(url);
   if (!why.empty() && !fault_injection::SkipNavigationGuard()) {
     LogBlock("nav_blocked", role_, url, why);
     return true;  // Cancel.
   }
+  if (role_ == BrowserRole::kWebTab && frame->IsMain() &&
+      HttpsFirst(frame, url, request->GetMethod().ToString(), is_redirect)) {
+    return true;  // Cancel: retried over https, or asking first.
+  }
   if (router_) {
     router_->OnBeforeBrowse(browser, frame);
   }
   return false;
+}
+
+https_first::Exceptions* TabClient::HttpsExceptions() const {
+  if (window_ && window_->is_private()) {
+    return &window_->https_exceptions();
+  }
+  PrivacyService* privacy = GetServices().privacy;
+  return privacy ? &privacy->normal_exceptions() : nullptr;
+}
+
+bool TabClient::HttpsFirst(CefRefPtr<CefFrame> frame,
+                           const std::string& url,
+                           const std::string& method,
+                           bool is_redirect) {
+  PrivacyService* privacy = GetServices().privacy;
+  https_first::Exceptions* exceptions = HttpsExceptions();
+  if (!privacy || !privacy->https_first() || !exceptions || guards::SchemeOf(url) != "http") {
+    return false;
+  }
+  const std::string host = guards::HostOf(url);
+  if (exceptions->Contains(host)) {
+    return false;  // The user chose http for this site earlier in the session.
+  }
+  if (!https_host_.empty() && host == https_host_) {
+    // The https site sent the browser back to http: it has no working https.
+    OfferHttp();
+    return true;
+  }
+  // Only requests that can simply be repeated: a form sent with POST would
+  // lose its data (docs/STAGE4_FINDINGS.md).
+  if (method != "GET" && method != "HEAD") {
+    return false;
+  }
+  const std::string upgraded = https_first::UpgradedUrl(url, privacy->test_ports());
+  if (upgraded.empty()) {
+    return false;  // Local names, IP addresses, .onion, unusual ports.
+  }
+  https_host_ = host;
+  https_from_ = url;
+  test_log::Event("https_upgraded", {{"tab", tab_id_}, {"from", url.substr(0, 300)},
+                                     {"to", upgraded.substr(0, 300)}, {"redirect", is_redirect}});
+  CefPostTask(TID_UI, base::BindOnce(
+                          [](CefRefPtr<CefFrame> frame, std::string target) {
+                            if (frame->IsValid()) {
+                              frame->LoadURL(target);
+                            }
+                          },
+                          frame, upgraded));
+  return true;
+}
+
+void TabClient::OfferHttp() {
+  const std::string host = https_host_;
+  const std::string http_url = https_from_;
+  https_host_.clear();
+  https_from_.clear();
+  if (host.empty() || http_url.empty()) {
+    return;
+  }
+  platform::ConfirmPrompt prompt;
+  prompt.title = "This site has no secure connection";
+  prompt.heading = host + " could not be loaded over HTTPS";
+  prompt.details = "Over plain HTTP the page, and anything you type into it, is not encrypted: "
+                   "others on the network can read or change it. TorFox remembers your choice "
+                   "for this site until it closes.";
+  prompt.accept = "Continue to the http site";
+  prompt.cancel = "Cancel";
+  CefRefPtr<TabClient> self = this;
+  Ask("https", prompt, [self, host, http_url](bool ok) {
+    test_log::Event("https_fallback", {{"tab", self->tab_id_}, {"accepted", ok}});
+    if (!ok || !self->browser_) {
+      return;
+    }
+    if (https_first::Exceptions* exceptions = self->HttpsExceptions()) {
+      exceptions->Add(host);
+    }
+    self->browser_->GetMainFrame()->LoadURL(http_url);
+  });
 }
 
 bool TabClient::OnOpenURLFromTab(CefRefPtr<CefBrowser> browser,
@@ -812,17 +1095,72 @@ CefResourceRequestHandler::ReturnValue TabClient::OnBeforeResourceLoad(
     LogBlock("resource_blocked", role_, url, why);
     return RV_CANCEL;
   }
+  // Tracker blocking: requests a page makes to a listed domain of another
+  // site. Pages of the listed site itself still work.
+  if (role_ == BrowserRole::kWebTab && request->GetResourceType() != RT_MAIN_FRAME) {
+    PrivacyService* privacy = GetServices().privacy;
+    if (privacy && privacy->block_trackers()) {
+      const trackers::Verdict v = trackers::Check(
+          guards::HostOf(url), guards::HostOf(request->GetFirstPartyForCookies().ToString()));
+      if (v.block) {
+        LogBlock("tracker_blocked", role_, url, std::string(v.listed));
+        return RV_CANCEL;
+      }
+    }
+  }
   return RV_CONTINUE;
+}
+
+void TabClient::OpenExternalApp(CefRefPtr<CefBrowser> browser,
+                                const std::string& url,
+                                bool user_gesture) {
+  CEF_REQUIRE_UI_THREAD();
+  const std::string scheme(external_protocols::LaunchableScheme(url));
+  if (scheme.empty() || !window_) {
+    LogBlock("protocol_blocked", role_, url, "external protocol");
+    return;
+  }
+  // Only a click can ask: a page cannot pop up questions by itself.
+  if (!user_gesture) {
+    LogBlock("protocol_blocked", role_, url, "no user gesture");
+    return;
+  }
+  if (external_prompt_open_) {
+    LogBlock("protocol_blocked", role_, url, "already asking");
+    return;
+  }
+  const bool mail = scheme == "mailto";
+  CefRefPtr<CefFrame> main = browser ? browser->GetMainFrame() : nullptr;
+  platform::ConfirmPrompt prompt;
+  prompt.title = mail ? "Open your email app?" : "Open your phone app?";
+  prompt.heading = SiteName(main ? main->GetURL().ToString() : std::string()) +
+                   (mail ? " wants to open your email app" : " wants to open your phone app");
+  prompt.details = "Link: " + url.substr(0, 300) +
+                   "\nThe app receives this link, and the site cannot see what happens next.";
+  prompt.accept = mail ? "Open email app" : "Open phone app";
+  prompt.cancel = "Cancel";
+  external_prompt_open_ = true;
+  CefRefPtr<TabClient> self = this;
+  Ask("external", prompt, [self, url, scheme](bool ok) {
+    self->external_prompt_open_ = false;
+    test_log::Event(ok ? "external_opened" : "external_declined", {{"scheme", scheme}});
+    // Test builds log instead: the tests must not start the real mail app.
+    if (ok && !kTestHooks && !platform::OpenExternal(url)) {
+      if (self->window_) {
+        self->window_->ShowNotice("No app could be opened for this link.");
+      }
+    }
+  });
 }
 
 void TabClient::OnProtocolExecution(CefRefPtr<CefBrowser> browser,
                                     CefRefPtr<CefFrame> frame,
                                     CefRefPtr<CefRequest> request,
                                     bool& allow_os_execution) {
-  // External protocol handlers are never launched until Stage 4 adds a
-  // confirmation prompt (and they stay blocked in Tor tabs).
-  LogBlock("protocol_blocked", role_, request->GetURL().ToString(), "external protocol");
+  // Chromium never launches another app itself. (mailto: and tel: links are
+  // handled in OnBeforeBrowse and never get here.)
   allow_os_execution = false;
+  LogBlock("protocol_blocked", role_, request->GetURL().ToString(), "external protocol");
 }
 
 }  // namespace torfox

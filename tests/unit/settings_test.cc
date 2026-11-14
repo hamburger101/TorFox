@@ -61,9 +61,13 @@ TEST(SettingsSchema, SaferDefaults) {
 TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
   // A setting becomes active only once its feature exists and is tested;
   // every other setting stays "planned".
-  const std::set<std::string_view> active = {"appearance.theme", "appearance.showBookmarksBar",
-                                             "downloads.askBeforeDownload",
-                                             "downloads.disableDownloads"};
+  const std::set<std::string_view> active = {
+      "appearance.theme", "appearance.showBookmarksBar", "downloads.askBeforeDownload",
+      "downloads.disableDownloads", "privacy.httpsFirst", "privacy.blockTrackers",
+      "privacy.blockThirdPartyCookies", "privacy.blockPopups", "privacy.useSystemProxy",
+      "privacy.clearOnExit.history",
+      "privacy.clearOnExit.cookies", "privacy.clearOnExit.cache", "permissions.camera",
+      "permissions.microphone", "permissions.clipboard"};
   for (const Def& d : AllSettings()) {
     EXPECT_EQ(d.status, active.count(d.key) ? Status::kActive : Status::kPlanned) << d.key;
   }
@@ -161,6 +165,24 @@ TEST(SettingsStore, CorruptFileIsBackedUpAndReset) {
   EXPECT_EQ(ReadAll(r.backup_path), "{ this is not json");
   EXPECT_FALSE(fs::exists(file));
   EXPECT_EQ(store.GetString("appearance.theme"), "dark");
+}
+
+TEST(SettingsStore, ReadOnlyLoadNeverChangesTheFile) {
+  // Clear-on-exit reads the settings before TorFox's settings service does:
+  // that read must leave a corrupt file for the service to report and repair.
+  testing::ScopedTempDir dir;
+  const fs::path file = dir.path() / "settings.json";
+  WriteRaw(file, "{ this is not json");
+  Store store(file);
+  LoadResult r = store.Load(LoadMode::kReadOnly);
+  EXPECT_EQ(r.outcome, LoadOutcome::kCorruptReset);
+  EXPECT_TRUE(r.backup_path.empty());
+  EXPECT_EQ(ReadAll(file), "{ this is not json");
+  EXPECT_EQ(store.GetBool("privacy.clearOnExit.cookies"), false);  // The default.
+
+  WriteRaw(file, R"({"format":1,"settings":{"privacy.clearOnExit.cookies":true}})");
+  EXPECT_EQ(store.Load(LoadMode::kReadOnly).outcome, LoadOutcome::kLoaded);
+  EXPECT_EQ(store.GetBool("privacy.clearOnExit.cookies"), true);
 }
 
 TEST(SettingsStore, WrongShapeIsCorrupt) {

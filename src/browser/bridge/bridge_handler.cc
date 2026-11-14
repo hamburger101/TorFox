@@ -10,6 +10,7 @@
 #include "include/cef_version.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/browser_registry.h"
+#include "src/browser/app/context_manager.h"
 #include "src/browser/app/download_service.h"
 #include "src/browser/app/places_service.h"
 #include "src/browser/app/services.h"
@@ -548,6 +549,15 @@ bool BridgeHandler::DispatchPlaces(const bridge::Validated& msg,
     }
     test_log::Event("history_removed", {{"what", "all"}});
     changed(false);
+    std::string error;
+    ContextManager* contexts = GetServices().contexts;
+    if (contexts && !contexts->ClearSiteRecords(&error)) {
+      test_log::Event("site_records_clear_failed", {{"error", error}});
+      callback->Failure(kFailed,
+                        "History was cleared, but the zoom levels saved for each site could not "
+                        "be.");
+      return true;
+    }
     Reply(callback, Json::object());
   } else {
     return false;

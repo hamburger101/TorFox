@@ -4,6 +4,7 @@
 
 #include "src/browser/app/browser_app.h"
 
+#include <algorithm>
 #include <system_error>
 #include <vector>
 
@@ -18,6 +19,7 @@
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/fault_injection.h"
 #include "src/browser/app/places_service.h"
+#include "src/browser/app/privacy_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/bridge/bridge_handler.h"
 #include "src/browser/platform/platform.h"
@@ -26,6 +28,7 @@
 #include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
 #include "src/core/cmdline/policy.h"
+#include "src/core/settings/store.h"
 
 namespace torfox {
 
@@ -129,6 +132,31 @@ CefRefPtr<CefValue> DirectProxy() {
   return value;
 }
 
+// Settings > Privacy & Security > Clear when TorFox closes, read straight
+// from the settings file (Chromium is not running, and neither is the
+// settings service). A corrupt file is left for the settings service.
+// Settings > Privacy & Security > Use the system's proxy settings.
+bool UseSystemProxySetting(const std::filesystem::path& user_data_dir) {
+  settings::Store store(user_data_dir / "settings.json");
+  store.Load(settings::LoadMode::kReadOnly);
+  return store.GetBool("privacy.useSystemProxy");
+}
+
+clear_data::Categories ClearOnExitSetting(const std::filesystem::path& user_data_dir) {
+  settings::Store store(user_data_dir / "settings.json");
+  store.Load(settings::LoadMode::kReadOnly);
+  clear_data::Categories c;
+  c.history = store.GetBool("privacy.clearOnExit.history");
+  c.cookies = store.GetBool("privacy.clearOnExit.cookies");
+  c.cache = store.GetBool("privacy.clearOnExit.cache");
+  return c;
+}
+
+bool AllDigits(const std::string& s) {
+  return !s.empty() && s.size() <= 5 &&
+         std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
 }  // namespace
 
 bool BrowserApp::ApplyGlobalPrefs(std::string* error) {
@@ -170,12 +198,23 @@ void BrowserApp::OnContextInitialized() {
   places_ = std::make_unique<PlacesService>(options_.user_data_dir / "places.db");
   places_->Open();
   g_services.places = places_.get();
+  // Clear when TorFox closes > History, if the last session could not do
+  // it (it ended in a crash).
+  if (settings_->store().GetBool("privacy.clearOnExit.history") && places_->places()) {
+    test_log::Event("history_cleared", {{"when", "startup"},
+                                        {"ok", places_->places()->ClearHistory()}});
+  }
 
   // Downloads: the policy from Settings > Downloads and the in-memory list.
   downloads_ = std::make_unique<DownloadService>(settings_.get(), options_.download_dir,
                                                  options_.user_data_dir / "Pending Downloads");
   downloads_->PrepareStaging();
   g_services.downloads = downloads_.get();
+
+  // Settings > Privacy & Security.
+  privacy_ = std::make_unique<PrivacyService>(settings_.get(), options_.https_test_ports);
+  g_services.privacy = privacy_.get();
+  g_services.startup_notice = startup_notice_;
   g_services.window_opened = [this](BrowserWindow* w) { windows_.insert(w); };
   g_services.window_destroyed = [this](BrowserWindow* w) {
     windows_.erase(w);
@@ -191,6 +230,14 @@ void BrowserApp::OnContextInitialized() {
 
   contexts_ = std::make_unique<ContextManager>();
   contexts_->SetDownloadDirectory(downloads_->StagingDirectory());
+  contexts_->SetBlockThirdPartyCookies(privacy_->block_third_party_cookies(), &error);
+  contexts_->SetUseSystemProxy(settings_->store().GetBool("privacy.useSystemProxy"), &error);
+  proxy_observer_ = settings_->AddObserver([this](const std::string& key) {
+    if (key == "privacy.useSystemProxy") {
+      ApplyProxyMode(settings_->store().GetBool(key));
+    }
+  });
+  privacy_->SetCookiePolicyListener([this](bool block) { ApplyCookiePolicy(block); });
   g_services.contexts = contexts_.get();
   CefRefPtr<BrowserApp> self = this;
   contexts_->Initialize(options_.user_data_dir / "User Data", CreateInternalSchemeFactory(),
@@ -221,6 +268,43 @@ bool BrowserApp::OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine> command_l
   return true;
 }
 
+void BrowserApp::ApplyCookiePolicy(bool block) {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !contexts_) {
+    return;
+  }
+  std::string error;
+  bool ok = contexts_->SetBlockThirdPartyCookies(block, &error);
+  for (BrowserWindow* window : windows_) {
+    if (ok && window->is_private() && window->web_context()) {
+      ok = contexts_->ApplyCookiePolicy(window->web_context(), &error);
+    }
+  }
+  test_log::Event("cookie_policy", {{"block", block}, {"ok", ok}});
+  if (!ok) {
+    // The setting says one thing and Chromium does another: stop.
+    Fatal(error);
+  }
+}
+
+void BrowserApp::ApplyProxyMode(bool use_system) {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !contexts_) {
+    return;
+  }
+  std::string error;
+  bool ok = contexts_->SetUseSystemProxy(use_system, &error);
+  for (BrowserWindow* window : windows_) {
+    if (ok && window->is_private() && window->web_context()) {
+      ok = contexts_->ApplyProxyMode(window->web_context(), &error);
+    }
+  }
+  test_log::Event("proxy_mode", {{"system", use_system}, {"ok", ok}});
+  if (!ok) {
+    Fatal(error);
+  }
+}
+
 void BrowserApp::Fatal(const std::string& message) {
   if (fatal_) {
     return;
@@ -249,6 +333,20 @@ void BrowserApp::Shutdown() {
   }
   contexts_.reset();
   g_services = Services();
+  if (settings_) {
+    exit_clear_.history = settings_->store().GetBool("privacy.clearOnExit.history");
+    exit_clear_.cookies = settings_->store().GetBool("privacy.clearOnExit.cookies");
+    exit_clear_.cache = settings_->store().GetBool("privacy.clearOnExit.cache");
+  }
+  if (exit_clear_.history && places_ && places_->places()) {
+    test_log::Event("history_cleared", {{"when", "exit"},
+                                        {"ok", places_->places()->ClearHistory()}});
+  }
+  if (settings_ && proxy_observer_) {
+    settings_->RemoveObserver(proxy_observer_);
+    proxy_observer_ = 0;
+  }
+  privacy_.reset();
   downloads_.reset();
   places_.reset();
   settings_.reset();
@@ -282,6 +380,13 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
           raw->GetSwitchValue("torfox-test-download-dir").ToString();
       if (!download_dir.empty()) {
         options.download_dir = platform::PathFromUtf8(download_dir);
+      }
+      const std::string ports = raw->GetSwitchValue("torfox-test-https-port").ToString();
+      if (const std::size_t colon = ports.find(':'); colon != std::string::npos) {
+        https_first::TestPorts p{ports.substr(0, colon), ports.substr(colon + 1)};
+        if (AllDigits(p.http) && AllDigits(p.https)) {
+          options.https_test_ports = std::move(p);
+        }
       }
       const std::string start = raw->GetSwitchValue("torfox-test-start-url").ToString();
       if (cmdline::IsAbsoluteHttpUrl(start)) {
@@ -344,6 +449,40 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
                                                 {"rows", scrub.rows},
                                                 {"metadata", scrub.metadata_removed}});
   }
+  const clear_data::Categories clear_at_start = ClearOnExitSetting(options.user_data_dir);
+  // The normal profile's proxy mode, before Chromium creates its network
+  // context (docs/STAGE1_FINDINGS.md §4, STAGE4_FINDINGS.md).
+  {
+    const char* mode = UseSystemProxySetting(options.user_data_dir) ? "system" : "direct";
+    const bool ok = chromium_profile::WriteProxyMode(normal_profile, mode);
+    test_log::Event("proxy_mode_written", {{"mode", mode}, {"ok", ok}});
+    if (!ok) {
+      browser_app->set_startup_notice(
+          "TorFox could not save its network settings for this profile. If Windows looks for a "
+          "proxy automatically, TorFox may have asked the local network for one as it started.");
+    }
+  }
+  // Chromium's per-site scores, always; zoom levels with the history.
+  {
+    const chromium_profile::SiteRecordsResult sites =
+        chromium_profile::ScrubSiteRecords(normal_profile, clear_at_start.history);
+    test_log::Event("site_records_erased", {{"ok", sites.ok}, {"removed", sites.removed}});
+  }
+
+  // Clear when TorFox closes: done after Chromium shuts down, and again now,
+  // before Chromium opens the profile, in case the last session ended
+  // without it (a crash, or files that were in use).
+  if (clear_at_start.any()) {
+    const clear_data::Result r = clear_data::Clear(normal_profile, clear_at_start);
+    test_log::Event("data_cleared", {{"when", "startup"},
+                                     {"removed", r.removed},
+                                     {"failed", r.failed}});
+    if (r.failed > 0) {
+      browser_app->set_startup_notice(
+          "TorFox could not clear all of the browsing data you asked it to clear when it "
+          "closes. Some of it is still on this computer; TorFox will try again next time.");
+    }
+  }
 
   CefSettings settings;
   settings.no_sandbox = false;
@@ -372,10 +511,14 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   }
   CefRunMessageLoop();
   browser_app->Shutdown();
+  const clear_data::Categories clear_at_exit = browser_app->exit_clear();
   browser_app = nullptr;
   app = nullptr;
   CefShutdown();
   chromium_profile::ScrubDownloadRecords(normal_profile);
+  chromium_profile::ScrubSiteRecords(normal_profile, clear_at_exit.history);
+  // A failure here cannot be shown; the next start clears again and says so.
+  clear_data::Clear(normal_profile, clear_at_exit);
   return 0;
 }
 

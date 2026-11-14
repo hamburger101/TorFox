@@ -46,6 +46,12 @@ std::filesystem::path DownloadsDir();
 // opening the file itself. Returns false if it could not be started.
 bool RevealInFolder(const std::filesystem::path& path);
 
+// Hands |url| to the app the user chose for its scheme (the mail or phone
+// app). Only URLs external_protocols::LaunchableScheme accepts are passed
+// on; anything else is refused. Returns false if it was refused or could
+// not be started.
+bool OpenExternal(const std::string& url);
+
 // A yes/no question for a native dialog. Cancel is the default button.
 struct ConfirmPrompt {
   std::string title;    // Dialog title, e.g. "Download this file?"

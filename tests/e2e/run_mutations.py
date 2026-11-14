@@ -39,6 +39,13 @@ GUARDS = "src/core/url/guards.cc"
 POLICY = "src/core/cmdline/policy.cc"
 QUIET = "e2e:test_quiet_startup.QuietStartupTest"
 IDLE = QUIET + ".test_idle_browser_makes_no_network_connections"
+TAB = "src/browser/shell/tab_client.cc"
+APP = "src/browser/app/browser_app.cc"
+PRIV = "e2e:test_privacy"
+HTTPS = PRIV + ".HttpsFirstTest"
+PERM = PRIV + ".PermissionTest"
+EXT = PRIV + ".ExternalProtocolTest"
+CLEAR = PRIV + ".ClearOnExitTest"
 
 # name -> ([(file, old, new), ...], [checks that must each fail])
 MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
@@ -268,6 +275,111 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          "  if (ContainsOnionText(query) || MentionsOnionHost(query)) {", "  if (false) {"),
     ], ["unit:ContextMenu.NeverSearchesOnionAddresses",
         "e2e:test_browsing.BrowsingTest.test_onion_selections_are_never_searched"]),
+    # Stage 4: privacy & security.
+    "https-first-skipped": ([
+        (TAB, "  if (role_ == BrowserRole::kWebTab && frame->IsMain() &&\n      HttpsFirst(",
+         "  if (false &&\n      HttpsFirst("),
+    ], [HTTPS + ".test_http_is_tried_over_https_first",
+        HTTPS + ".test_a_site_without_https_asks_before_using_http"]),
+    "https-fallback-without-asking": ([
+        (TAB, '  Ask("https", prompt, [self, host, http_url](bool ok) {',
+         "  ([self, host, http_url](bool ok) {"),
+        (TAB, "    self->browser_->GetMainFrame()->LoadURL(http_url);\n  });\n}",
+         "    self->browser_->GetMainFrame()->LoadURL(http_url);\n  })(true);\n}"),
+    ], [HTTPS + ".test_a_site_without_https_asks_before_using_http",
+        HTTPS + ".test_declining_never_loads_http"]),
+    "https-redirect-loop-not-detected": ([
+        (TAB, "  if (!https_host_.empty() && host == https_host_) {\n    // The https site sent",
+         "  if (false) {\n    // The https site sent"),
+    ], [HTTPS + ".test_https_redirecting_back_to_http_asks"]),
+    "https-exceptions-forgotten": ([
+        (TAB, "  if (exceptions->Contains(host)) {", "  if (false) {"),
+    ], [HTTPS + ".test_a_site_without_https_asks_before_using_http"]),
+    "https-local-names-upgraded": ([
+        ("src/core/privacy/https_first.cc", "  if (!IsUpgradableHost(host)) {", "  if (host.empty()) {"),
+    ], ["unit:HttpsFirst.LeavesOtherUrlsAlone", HTTPS + ".test_local_names_are_not_upgraded"]),
+    "trackers-not-blocked": ([
+        (TAB, '      if (v.block) {\n        LogBlock("tracker_blocked"', '      if (false) {\n        LogBlock("tracker_blocked"'),
+    ], [PRIV + ".TrackerTest.test_third_party_trackers_are_blocked"]),
+    "trackers-first-party-blocked": ([
+        ("src/core/privacy/trackers.cc",
+         "  v.block = top_host.empty() || SiteOf(request_host) != SiteOf(top_host);", "  v.block = true;"),
+    ], ["unit:Trackers.OnlyThirdPartyRequestsAreBlocked",
+        PRIV + ".TrackerTest.test_tracker_sites_work_when_visited_directly"]),
+    "third-party-cookies-allowed": ([
+        ("src/browser/app/context_manager.cc",
+         "  const int cookie_mode = kind == Kind::kInternal || block_third_party_cookies_ ? 1 : 0;",
+         "  const int cookie_mode = 0;"),
+    ], [PRIV + ".CookieTest.test_third_party_cookies_are_blocked"]),
+    "popups-without-click-allowed": ([
+        (TAB, "  if (!user_gesture && (!privacy || privacy->block_popups())) {", "  if (false) {"),
+    ], [PRIV + ".PopupTest.test_popups_without_a_click_are_blocked"]),
+    "camera-asked-by-default": ([
+        (TAB, '      (camera && privacy->PermissionFor("permissions.camera") != PrivacyService::Permission::kAsk) ||',
+         "      false ||"),
+    ], [PERM + ".test_camera_and_microphone_are_denied_by_default"]),
+    "camera-granted-without-asking": ([
+        (TAB, '  Ask("permission", prompt, [callback, requested_permissions, origin](bool ok) {',
+         "  ([callback, requested_permissions, origin](bool ok) {"),
+        (TAB, "      callback->Cancel();\n    }\n  });\n  return true;\n}",
+         "      callback->Cancel();\n    }\n  })(true);\n  return true;\n}"),
+    ], [PERM + ".test_camera_can_be_asked_for"]),
+    "clipboard-asked-by-default": ([
+        (TAB, '  if (privacy->PermissionFor("permissions.clipboard") != PrivacyService::Permission::kAsk) {',
+         "  if (false) {"),
+    ], [PERM + ".test_clipboard_reading_is_denied_or_asked"]),
+    "permission-answers-remembered": ([
+        (TAB, "  if (!browser || origin.empty()) {\n    return;\n  }\n  CefRefPtr<CefRequestContext> context",
+         "  if (!browser || !origin.empty()) {\n    return;\n  }\n  CefRefPtr<CefRequestContext> context"),
+    ], [PERM + ".test_clipboard_reading_is_denied_or_asked"]),
+    "mail-links-open-without-asking": ([
+        (TAB, '  const bool mail = scheme == "mailto";\n',
+         '  if (!url.empty()) {\n    test_log::Event("external_opened", {{"scheme", scheme}});\n    return;\n  }\n'
+         '  const bool mail = scheme == "mailto";\n'),
+    ], [EXT + ".test_mail_links_ask_before_opening_another_app",
+        EXT + ".test_declined_mail_links_open_nothing"]),
+    "mail-links-ask-without-a-click": ([
+        (TAB, '  if (!user_gesture) {\n    LogBlock("protocol_blocked"', '  if (false) {\n    LogBlock("protocol_blocked"'),
+    ], [EXT + ".test_mail_links_without_a_click_never_ask"]),
+    "launchable-scheme-allows-quotes": ([
+        ("src/core/privacy/external_protocols.cc", "    case '\"':\n", ""),
+    ], ["unit:ExternalProtocols.RefusesUrlsACommandLineCouldSplit"]),
+    "other-schemes-launchable": ([
+        ("src/core/privacy/external_protocols.cc", '{"mailto", "tel"};', '{"mailto", "tel", "ms-settings"};'),
+    ], ["unit:ExternalProtocols.OnlyMailAndPhoneLinksMayOpenAnApp",
+        EXT + ".test_other_schemes_never_launch"]),
+    "clear-on-exit-skipped": ([
+        (APP, "  clear_data::Clear(normal_profile, clear_at_exit);\n  return 0;", "  return 0;"),
+    ], [CLEAR + ".test_chosen_data_is_cleared_when_torfox_closes"]),
+    "history-kept-at-exit": ([
+        (APP, "  if (exit_clear_.history && places_ && places_->places()) {", "  if (false) {"),
+    ], [CLEAR + ".test_chosen_data_is_cleared_when_torfox_closes"]),
+    "clear-at-start-skipped": ([
+        (APP, "  if (clear_at_start.any()) {", "  if (false) {"),
+    ], [CLEAR + ".test_data_left_by_a_crash_is_cleared_at_the_next_start"]),
+    "history-kept-at-start": ([
+        (APP, '  if (settings_->store().GetBool("privacy.clearOnExit.history") && places_->places()) {',
+         "  if (false) {"),
+    ], [CLEAR + ".test_data_left_by_a_crash_is_cleared_at_the_next_start"]),
+    "clear-data-follows-links": ([
+        ("src/core/privacy/clear_data.cc",
+         "    // remove_all removes a link itself and never follows it.\n    std::filesystem::remove_all(p, ec);",
+         "    if (std::filesystem::is_directory(p, ec)) {\n"
+         "      for (const auto& e : std::filesystem::directory_iterator(p, ec)) {\n"
+         "        std::filesystem::remove_all(e.path(), ec);\n      }\n    }\n"
+         "    std::filesystem::remove_all(p, ec);"),
+    ], ["unit:ClearData.NeverFollowsJunctions"]),
+    "site-records-kept": ([
+        (APP, "  chromium_profile::ScrubSiteRecords(normal_profile, clear_at_exit.history);\n", ""),
+    ], [CLEAR + ".test_control_without_clearing_everything_is_kept"]),
+    "history-clear-keeps-zoom": ([
+        ("src/browser/bridge/bridge_handler.cc", "    if (contexts && !contexts->ClearSiteRecords(&error)) {",
+         "    if (false) {"),
+    ], ["e2e:test_places.PlacesTest.test_clearing_history_forgets_zoomed_sites"]),
+    "proxy-mode-not-written": ([
+        (APP, "    const bool ok = chromium_profile::WriteProxyMode(normal_profile, mode);",
+         "    const bool ok = mode != nullptr;"),
+    ], [QUIET + ".test_idle_browser_does_not_autodiscover_proxies"]),
 }
 
 

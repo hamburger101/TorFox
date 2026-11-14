@@ -57,6 +57,7 @@ set(TORFOX_BROWSER_SOURCES
   app/renderer_app.cc app/renderer_app.h
   app/services.h
   app/places_service.cc app/places_service.h
+  app/privacy_service.cc app/privacy_service.h
   app/settings_service.cc app/settings_service.h
   app/test_log.cc app/test_log.h
   bridge/bridge_handler.cc bridge/bridge_handler.h

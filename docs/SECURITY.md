@@ -15,10 +15,12 @@ vulnerability. Include the TorFox version, the platform, and the steps to reprod
 | A web page reaching TorFox's privileged UI or its bridge | Five layers (see [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) §1); the bridge exists only in internal pages and validates every message | Verified on Windows |
 | A shortcut or launcher weakening TorFox with command-line switches | Release builds ignore switches (two independent layers) | Verified on Windows |
 | `.onion` names leaking to DNS from regular tabs | Navigation and resource guards, plus a resolver rule that maps `*.onion` to "not found" | Verified on Windows |
-| Unrequested connections (telemetry, background services) | No crash reporter or metrics; Chromium background services turned off | Verified for an idle session on Windows, with one known gap (WPAD) |
+| Unrequested connections (telemetry, background services) | No crash reporter or metrics; Chromium background services turned off; no proxy auto-discovery unless the user turns on the system's proxy settings | Verified for an idle session on Windows |
 | Network observers linking `.onion` browsing to you | Bundled Tor, an isolated Tor context, fail closed | Not built yet (Stage 5) |
 | Tampered or downgraded updates | Ed25519 (minisign) signed manifest, SHA-256 per asset, anti-rollback | Not built yet (Stage 7) |
-| Trackers, third-party cookies, HTTP downgrade | Tracker list, third-party cookie blocking, HTTPS-first | Not built yet (Stage 4) |
+| Trackers, third-party cookies, HTTP downgrade | EasyPrivacy domain list, third-party cookie blocking, HTTPS-first with a question before http | Verified on Windows; tracker WebSockets and http form posts are not covered ([`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md) §6) |
+| Sites using the camera, microphone or clipboard, or opening other apps | Denied by default; *Ask* asks every time; only checked `mailto:`/`tel:` links reach the OS, after a click and a question | Verified on Windows, except the final hand-off to the mail or phone app |
+| Browsing traces left on disk | Clear on exit (after shutdown and again at the next start); Chromium's per-site scores always erased | Verified on Windows |
 
 ## What TorFox does not defend against
 - **Malware on your machine.** Anything running under your account (or as administrator) can read

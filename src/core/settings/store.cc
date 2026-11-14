@@ -27,7 +27,7 @@ fs::path CorruptBackupPath(const fs::path& file) {
 
 Store::Store(fs::path file) : file_(std::move(file)) {}
 
-LoadResult Store::Load() {
+LoadResult Store::Load(LoadMode mode) {
   values_.clear();
   LoadResult result;
 
@@ -54,9 +54,11 @@ LoadResult Store::Load() {
     result.notes.push_back(read.status == ReadStatus::kTooLarge
                                ? "settings file is too large; reset to defaults"
                                : "settings file is not valid; reset to defaults");
-    fs::path backup = CorruptBackupPath(file_);
-    if (RenameReplacing(file_, backup)) {
-      result.backup_path = backup;
+    if (mode == LoadMode::kRepair) {
+      fs::path backup = CorruptBackupPath(file_);
+      if (RenameReplacing(file_, backup)) {
+        result.backup_path = backup;
+      }
     }
     return result;
   }

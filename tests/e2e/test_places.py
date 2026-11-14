@@ -159,8 +159,9 @@ class PlacesTest(unittest.TestCase):
             self.assertEqual(files_containing(self.user_data, marker,
                                               skip=("test-log.jsonl", "cef.log")), [], marker)
 
-    @unittest.expectedFailure  # Known gap (STAGE2_FINDINGS.md §5): fixed with clear-data in Stage 4.
     def test_clearing_history_forgets_zoomed_sites(self) -> None:
+        # Chromium keeps zoom levels and per-site scores in Preferences
+        # (STAGE2_FINDINGS.md §5, STAGE4_FINDINGS.md).
         url = self.fixture.html("/zoom", "<!doctype html><title>Zoom</title><p>z</p>").replace(
             "127.0.0.1", "zoomsite-k2p9.test")
         tf = self.start(host_rules="MAP zoomsite-k2p9.test 127.0.0.1")

@@ -56,6 +56,25 @@ class ContextManager {
   // (DownloadService::StagingDirectory()). Call before Initialize().
   void SetDownloadDirectory(std::filesystem::path dir) { download_dir_ = std::move(dir); }
 
+  // Settings > Privacy & Security > Block third-party cookies, for web
+  // contexts: applied to Normal now (if it exists) and to every context
+  // created later. Private windows' contexts belong to the windows; apply it
+  // to them with ApplyCookiePolicy. Internal pages always block them.
+  // Returns false, with |error|, if the preference did not take effect.
+  bool SetBlockThirdPartyCookies(bool block, std::string* error);
+  bool ApplyCookiePolicy(CefRefPtr<CefRequestContext> context, std::string* error);
+
+  // Settings > Privacy & Security > Use the system's proxy settings, for
+  // web contexts ("system" or "direct"), the same way.
+  bool SetUseSystemProxy(bool use_system, std::string* error);
+  bool ApplyProxyMode(CefRefPtr<CefRequestContext> context, std::string* error);
+
+  // History > Clear history: Chromium's per-site zoom levels and scores in
+  // the Normal profile (chromium_profile::ScrubSiteRecords does the same
+  // while Chromium is not running). Open pages keep their zoom until
+  // TorFox closes. False, with |error|, if a preference did not take effect.
+  bool ClearSiteRecords(std::string* error);
+
   // Drops every reference; required before CefShutdown().
   void Shutdown();
 
@@ -73,6 +92,8 @@ class ContextManager {
   CefRefPtr<CefSchemeHandlerFactory> scheme_factory_;
   std::filesystem::path normal_path_;
   std::filesystem::path download_dir_;
+  bool block_third_party_cookies_ = true;
+  bool use_system_proxy_ = false;
   DoneCallback done_;
   int pending_ = 0;
   bool failed_ = false;
