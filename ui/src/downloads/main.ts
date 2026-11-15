@@ -7,7 +7,7 @@
 // deliberately no "open file" action: TorFox only shows a file in its folder.
 
 import { LitElement, css, html, nothing } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
+import { styleProps } from "../style-props.js";
 
 import { followAppearance } from "../appearance.js";
 import { base } from "../base.js";
@@ -132,7 +132,7 @@ export class TorFoxDownloads extends LitElement {
         </div>
         ${percent >= 0
           ? html`<div class="bar" role="progressbar" aria-valuenow=${percent} aria-valuemin="0"
-              aria-valuemax="100"><span style=${styleMap({ width: `${percent}%` })}></span></div>`
+              aria-valuemax="100"><span style=${styleProps({ width: `${percent}%` })}></span></div>`
           : nothing}
       </div>
       <div class="actions">

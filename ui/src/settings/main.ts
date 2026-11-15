@@ -3,10 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { LitElement, css, html, nothing } from "lit";
+import { styleProps } from "../style-props.js";
 
 import { followAppearance } from "../appearance.js";
 import { base } from "../base.js";
-import { BridgeError, call } from "../bridge.js";
+import { BridgeError, call, subscribe } from "../bridge.js";
 import { ERRORS, FIXED_ROWS, SECTIONS, SETTINGS } from "./labels.js";
 
 type Value = boolean | string;
@@ -38,6 +39,36 @@ interface AppInfo {
   testBuild: boolean;
 }
 
+type UpdateState =
+  | "starting" | "not_configured" | "off" | "idle" | "checking" | "up_to_date"
+  | "available" | "downloading" | "ready" | "error";
+
+interface UpdateStatus {
+  state: UpdateState;
+  message?: string;
+  version?: string;
+  notes?: string;
+  size?: number;
+  received?: number;
+  lastCheck?: number;
+  installed: string;
+  platform?: string;
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1024 * 1024) {
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function formatTime(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 function errorText(err: unknown): string {
   if (err instanceof BridgeError) {
     return ERRORS[err.message] ?? `TorFox could not change this setting (${err.message}).`;
@@ -52,6 +83,8 @@ export class TorFoxSettings extends LitElement {
     section: { state: true },
     errors: { state: true },
     loadError: { state: true },
+    updateStatus: { state: true },
+    updateError: { state: true },
   };
 
   declare data: SettingsData | null;
@@ -59,6 +92,9 @@ export class TorFoxSettings extends LitElement {
   declare section: string;
   declare errors: Record<string, string>;
   declare loadError: string;
+  declare updateStatus: UpdateStatus | null;
+  declare updateError: string;
+  private unsubscribeUpdates: (() => void) | null = null;
 
   constructor() {
     super();
@@ -67,11 +103,116 @@ export class TorFoxSettings extends LitElement {
     this.section = "general";
     this.errors = {};
     this.loadError = "";
+    this.updateStatus = null;
+    this.updateError = "";
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
     void this.load();
+    this.unsubscribeUpdates = subscribe<UpdateStatus>("update.subscribe", (s) => {
+      this.updateStatus = s;
+    });
+  }
+
+  override disconnectedCallback(): void {
+    this.unsubscribeUpdates?.();
+    this.unsubscribeUpdates = null;
+    super.disconnectedCallback();
+  }
+
+  private async updateAction(cmd: string): Promise<void> {
+    this.updateError = "";
+    try {
+      this.updateStatus = await call<UpdateStatus>(cmd);
+    } catch (err) {
+      this.updateError = err instanceof BridgeError ? err.message : String(err);
+    }
+  }
+
+  private renderUpdates() {
+    const u = this.updateStatus;
+    if (!u) {
+      return nothing;
+    }
+    const mac = (u.platform ?? "").startsWith("macos");
+    const lastCheck = u.lastCheck ? html`<div class="row-desc">Last checked ${formatTime(u.lastCheck)}</div>` : nothing;
+    const check = (label: string) => html`<button class="button" id="update-check"
+      @click=${() => this.updateAction("update.check")}>${label}</button>`;
+    let title: string;
+    let body: unknown = nothing;
+    let action: unknown = nothing;
+    switch (u.state) {
+      case "starting":
+        title = "Starting…";
+        break;
+      case "not_configured":
+        title = "Updates are not available in this build";
+        body = html`<div class="row-desc">${u.message}</div>`;
+        break;
+      case "off":
+        title = "Updates are off";
+        body = html`<div class="row-desc">TorFox does not look for updates.</div>`;
+        break;
+      case "idle":
+        title = "TorFox has not looked for updates yet";
+        body = lastCheck;
+        action = check("Check for updates");
+        break;
+      case "checking":
+        title = "Looking for updates…";
+        break;
+      case "up_to_date":
+        title = "TorFox is up to date";
+        body = lastCheck;
+        action = check("Check again");
+        break;
+      case "available":
+        title = `TorFox ${u.version} is available`;
+        body = html`<div class="row-desc">Download size ${formatBytes(u.size ?? 0)}. Its signature
+          has been verified.</div>`;
+        action = html`<button class="button primary" id="update-download"
+          @click=${() => this.updateAction("update.download")}>Download and check</button>`;
+        break;
+      case "downloading": {
+        const percent = u.size ? Math.floor(((u.received ?? 0) * 100) / u.size) : 0;
+        title = `Downloading TorFox ${u.version}…`;
+        body = html`<div class="bar" role="progressbar" aria-valuenow=${percent} aria-valuemin="0"
+          aria-valuemax="100"><span style=${styleProps({ width: `${percent}%` })}></span></div>`;
+        break;
+      }
+      case "ready":
+        title = `TorFox ${u.version} is ready`;
+        body = html`<div class="row-desc">The download matches the signed release.
+          ${mac
+            ? "TorFox will close and open the disk image; copy TorFox to Applications."
+            : "TorFox will close and start the installer, which asks for administrator rights."}</div>`;
+        action = html`<button class="button primary" id="update-install"
+          @click=${() => this.updateAction("update.install")}>${mac ? "Close and open" : "Restart to update"}</button>`;
+        break;
+      default:
+        title = "TorFox could not update";
+        body = html`<div class="row-error" role="alert">${u.message}</div>`;
+        action = u.version
+          ? html`<button class="button" id="update-download"
+              @click=${() => this.updateAction("update.download")}>Download again</button>`
+          : check("Try again");
+        break;
+    }
+    return html`<section class="card update" id="update-status" data-state=${u.state}>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title"><span>${title}</span></div>
+          <div class="row-desc">Installed: TorFox ${u.installed}</div>
+          ${body}
+          ${this.updateError ? html`<div class="row-error" role="alert">${this.updateError}</div>` : nothing}
+        </div>
+        <div class="row-control">${action}</div>
+      </div>
+      ${u.notes && (u.state === "available" || u.state === "downloading" || u.state === "ready")
+        ? html`<div class="notes"><h3>What's new</h3><p class="notes-text">${u.notes}</p></div>`
+        : nothing}
+    </section>`;
   }
 
   private async load(): Promise<void> {
@@ -244,6 +385,7 @@ export class TorFoxSettings extends LitElement {
           ? html`<div class="banner error" role="alert">${this.loadError}</div>`
           : nothing}
         ${current?.note ? html`<div class="banner">${current.note}</div>` : nothing}
+        ${this.section === "updates" ? this.renderUpdates() : nothing}
         ${this.section === "about" ? this.renderAbout() : this.renderSettings(this.section)}
       </main>
     `;
@@ -526,6 +668,60 @@ export class TorFoxSettings extends LitElement {
       font-family: var(--font-mono);
       font-size: 12.5px;
       user-select: text;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      height: 32px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-s);
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .button:hover:not(:disabled) {
+      background: var(--field-hover);
+    }
+    .button.primary {
+      background: var(--accent-strong);
+      border-color: var(--accent-strong);
+      color: #fff;
+    }
+    .button:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .bar {
+      height: 4px;
+      margin-top: 10px;
+      border-radius: 2px;
+      background: var(--field);
+      overflow: hidden;
+    }
+    .bar span {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+    }
+    .notes {
+      padding: 4px 20px 16px;
+      border-top: 1px solid var(--border);
+    }
+    .notes h3 {
+      margin: 12px 0 6px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .notes-text {
+      margin: 0;
+      color: var(--fg-muted);
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     .prose p {
       margin: 14px 0;

@@ -18,6 +18,7 @@ Needs:  the release build in out/dev, or TORFOX_RELEASE_EXE.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -135,6 +136,7 @@ class ReleaseBuildTest(unittest.TestCase):
             self.assertEqual(tf.close(), 0)
 
     def test_command_line_cannot_weaken_torfox(self) -> None:
+        net_log = pathlib.Path(os.environ.get("TEMP", str(REPO / "out"))) / "torfox-decoy-netlog.json"
         hostile = [
             "--no-sandbox", "--disable-gpu-sandbox", "--single-process", "--in-process-gpu",
             f"--remote-debugging-port={DEBUG_PORT}", "--remote-allow-origins=*",
@@ -142,9 +144,13 @@ class ReleaseBuildTest(unittest.TestCase):
             "--disable-features=NetworkServiceSandbox", "--disable-site-isolation-trials",
             "--disable-web-security", "--load-extension=C:\\nonexistent",
             "--component-updater=url-source=https://evil.test/",
-            "--user-data-dir=C:\\nonexistent-torfox", "--enable-logging", "--log-net-log=x.json",
+            "--user-data-dir=C:\\nonexistent-torfox", "--enable-logging",
+            # Absolute: a relative NetLog path can end up in TorFox's own
+            # folder rather than the test's (one once appeared next to
+            # TorFox.exe), where the decoy check would not look.
+            f"--log-net-log={net_log}",
         ]
-        decoys = [pathlib.Path("C:\\nonexistent-torfox"), pathlib.Path("x.json").resolve()]
+        decoys = [pathlib.Path("C:\\nonexistent-torfox"), net_log]
         self.assertFalse([d for d in decoys if d.exists()], "decoy paths exist before the test")
         self.addCleanup(lambda: [shutil.rmtree(d, ignore_errors=True) if d.is_dir() else d.unlink(missing_ok=True)
                                  for d in decoys])
@@ -156,6 +162,22 @@ class ReleaseBuildTest(unittest.TestCase):
             self.assertFalse(port_open(DEBUG_PORT), "the DevTools port was opened")
             self.assertFalse((user_data_dir() / "User Data" / "DevToolsActivePort").exists())
             self.assertFalse([d for d in decoys if d.exists()], "a switch wrote outside the profile")
+            self.assertEqual(tf.close(), 0)
+
+    def test_release_builds_ignore_the_test_update_source(self) -> None:
+        # Test builds can be pointed at a fake GitHub with their own key
+        # (tests/e2e/test_updates.py). In a release build that switch must do
+        # nothing: with it honoured, this config would make TorFox ask the
+        # fixture for a release half a second after start.
+        config = REPO / "out" / "dev" / "test-update-config.json"
+        config.write_text(json.dumps({
+            "origin": self.fixture.origin, "repository": "test/TorFox", "firstCheckDelayMs": 500,
+            "publicKey": "RWTdwXdA4w5c2DzsSnRKBJHsiyiWz5kbFwLS3nGYo+4HVGYNmS3/E90J"}), encoding="utf-8")
+        self.addCleanup(config.unlink, True)
+        with ReleaseTorFox([f"--torfox-test-update-config={config}", self.page_url]) as tf:
+            wait_for(lambda: "GET /page" in self.fixture.requests, 30, "the start page request")
+            time.sleep(8)
+            self.assertEqual([r for r in self.fixture.requests if "/repos/" in r or "/releases" in r], [])
             self.assertEqual(tf.close(), 0)
 
 

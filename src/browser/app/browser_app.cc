@@ -16,7 +16,10 @@
 #include "src/core/browsing/chromium_profile.h"
 #include "src/browser/app/renderer_app.h"
 #include "src/browser/app/services.h"
+#include "src/browser/app/release_config.h"
 #include "src/browser/app/session_service.h"
+#include "src/browser/app/update_service.h"
+#include "src/browser/app/version.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/fault_injection.h"
 #include "src/browser/app/places_service.h"
@@ -336,7 +339,60 @@ void BrowserApp::OnContextInitialized() {
                               self->settings_->store().GetString("tor.startMode") == "at-launch") {
                             self->StartTor();
                           }
+                          self->StartUpdates();
                         });
+}
+
+void BrowserApp::StartUpdates() {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !settings_ || !contexts_) {
+    return;
+  }
+  UpdateService::Config config;
+  config.repository = kUpdateRepository;
+  config.public_key = kUpdatePublicKey;
+  config.platform = platform::UpdatePlatform();
+  config.installed_version = kTorFoxVersion;
+  if (kTestHooks && options_.update_test) {
+    // A local fake GitHub (tests/e2e/test_updates.py). Release builds never
+    // read this: kTestHooks is false and the switch is not parsed.
+    const UpdateTestConfig& t = *options_.update_test;
+    config.repository = t.repository;
+    config.public_key = t.public_key;
+    config.endpoints.api_origin = t.origin;
+    config.endpoints.download_origin = t.origin;
+    config.endpoints.allowed_origins = {t.origin};
+    for (const std::string& o : t.extra_origins) {
+      config.endpoints.allowed_origins.push_back(o);
+    }
+    config.first_check_delay_ms = t.first_check_delay_ms;
+  }
+  updates_ = std::make_unique<UpdateService>(settings_.get(), contexts_.get(),
+                                             options_.user_data_dir, std::move(config));
+  updates_->notify = [this](const std::string& version) {
+    for (BrowserWindow* w : windows_) {
+      if (!w->is_private() && !w->is_tor() && !w->closing()) {
+        test_log::Event("update_notice", {{"version", version}, {"window", w->id()}});
+        w->ShowNotice("TorFox " + version +
+                      " is available. Open Settings, then Updates, to install it.");
+        return;
+      }
+    }
+  };
+  g_services.updates = updates_.get();
+  g_services.close_all_windows = [this] { CloseAllWindows(); };
+  updates_->Start();
+}
+
+void BrowserApp::CloseAllWindows() {
+  CEF_REQUIRE_UI_THREAD();
+  std::vector<CefRefPtr<BrowserWindow>> all;
+  for (BrowserWindow* w : windows_) {
+    all.emplace_back(w);
+  }
+  for (const CefRefPtr<BrowserWindow>& w : all) {
+    w->Close();
+  }
 }
 
 namespace {
@@ -483,6 +539,15 @@ void BrowserApp::Shutdown() {
   if (tor_) {
     tor_->Shutdown();
   }
+  // The updater's requests and context go before the contexts do.
+  if (updates_) {
+    if (std::optional<UpdateService::Handoff> h = updates_->TakeHandoff()) {
+      update_handoff_ = UpdateHandoff{h->file, h->sha256, h->size};
+      test_log::Event("update_handoff", {{"file", h->file.filename().string()},
+                                         {"sha256", h->sha256}});
+    }
+    updates_->Shutdown();
+  }
   if (contexts_) {
     contexts_->Shutdown();
   }
@@ -505,6 +570,7 @@ void BrowserApp::Shutdown() {
     proxy_observer_ = 0;
   }
   tor_.reset();
+  updates_.reset();
   session_.reset();
   privacy_.reset();
   downloads_.reset();
@@ -568,6 +634,31 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
         test_log::Event("tor_test_command", {{"exe", platform::PathToUtf8(options.tor_test_exe)},
                                              {"args", options.tor_test_args.size()}});
       }
+      const std::string update_config =
+          raw->GetSwitchValue("torfox-test-update-config").ToString();
+      if (!update_config.empty()) {
+        const ReadResult r = ReadFileLimited(platform::PathFromUtf8(update_config), 64 * 1024);
+        std::optional<Json> j =
+            r.status == ReadStatus::kOk ? ParseJson(r.data, 64 * 1024, 4) : std::nullopt;
+        if (j && j->is_object()) {
+          UpdateTestConfig t;
+          t.origin = GetString(*j, "origin").value_or("");
+          t.public_key = GetString(*j, "publicKey").value_or("");
+          t.repository = GetString(*j, "repository").value_or("");
+          t.first_check_delay_ms =
+              static_cast<int>(std::clamp<long long>(GetInt(*j, "firstCheckDelayMs").value_or(0), 0,
+                                                     600000));
+          if (const Json* extra = GetMember(*j, "extraOrigins"); extra && extra->is_array()) {
+            for (const Json& o : *extra) {
+              if (o.is_string()) {
+                t.extra_origins.push_back(o.get<std::string>());
+              }
+            }
+          }
+          options.update_test = std::move(t);
+        }
+        test_log::Event("update_test_config", {{"ok", options.update_test.has_value()}});
+      }
       const std::string start = raw->GetSwitchValue("torfox-test-start-url").ToString();
       if (cmdline::IsAbsoluteHttpUrl(start)) {
         options.start_url = start;
@@ -606,6 +697,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
     return 1;
   }
 #endif
+  platform::MarkRunning();
 
   std::error_code ec;
   if (options.user_data_dir.empty() || !options.user_data_dir.is_absolute()) {
@@ -692,6 +784,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   CefRunMessageLoop();
   browser_app->Shutdown();
   const clear_data::Categories clear_at_exit = browser_app->exit_clear();
+  const std::optional<BrowserApp::UpdateHandoff> update = browser_app->update_handoff();
   browser_app = nullptr;
   app = nullptr;
   CefShutdown();
@@ -699,6 +792,17 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   chromium_profile::ScrubSiteRecords(normal_profile, clear_at_exit.history);
   // A failure here cannot be shown; the next start clears again and says so.
   clear_data::Clear(normal_profile, clear_at_exit);
+  // Settings > Updates > Restart to update: last, once Chromium has let go
+  // of everything. The file is checked once more as it is started.
+  if (update) {
+    std::string error;
+    if (!platform::LaunchUpdate(update->file, update->sha256, update->size, &error) &&
+        !kTestHooks) {
+      platform::ShowFatalError("TorFox", "TorFox could not install the update: " + error +
+                                             ".\n\nTorFox has not changed. You can try again "
+                                             "from Settings > Updates.");
+    }
+  }
   return 0;
 }
 

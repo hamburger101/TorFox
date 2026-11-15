@@ -14,10 +14,11 @@ Legend:
 **macOS:** the build files and platform code exist but have never been compiled, so every macOS entry is
 ⬜ or 🟡 until CI builds and tests them.
 
-Last updated: end of Stage 6 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
+Last updated: end of Stage 8 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
 [`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md), [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md),
-[`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md), [`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md) and
-[`STAGE6_FINDINGS.md`](STAGE6_FINDINGS.md). Unless a row
+[`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md), [`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md),
+[`STAGE6_FINDINGS.md`](STAGE6_FINDINGS.md), [`STAGE7_FINDINGS.md`](STAGE7_FINDINGS.md) and
+[`STAGE8_FINDINGS.md`](STAGE8_FINDINGS.md). Unless a row
 says otherwise, Tor rows are verified with a scripted tor (`tests/e2e/fake_tor.py`); *live* marks checks
 made with the bundled tor on the real Tor network.
 
@@ -96,7 +97,22 @@ made with the bundled tor on the real Tor network.
 | Settings | Store: atomic writes, validation, corrupt-file backup and reset | ✅ | ⬜ | `SettingsStore.*`, `SettingsSchema.*`, `test_settings.py` |
 | Settings | Theme (dark, light, system) applied live and persists across restart | ✅ | ⬜ | `test_theme_persists_across_restart`, `test_the_ui_control_changes_the_setting` |
 | Settings | Every active setting persists across restart | ✅ | ⬜ | `test_every_active_setting_persists_across_restart` |
-| Settings | 8 sections: General, Search, Privacy & Security, Downloads, Tor, Appearance and About active; Updates labelled *not active yet* | ✅ | ⬜ | `test_only_implemented_settings_are_active`, `test_planned_settings_are_disabled_and_labelled`; Updates: Stage 7 |
-| Updates | Signed GitHub Releases updates | ⬜ | ⬜ | Stage 7 |
-| Packaging | Windows installer | ⬜ | — | Stage 8 |
-| Packaging | macOS DMG | — | ⬜ | Stage 8 |
+| Settings | 8 sections, every setting active: General, Search, Privacy & Security, Downloads, Tor, Appearance, Updates, About | ✅ | ⬜ | `test_only_implemented_settings_are_active`, `test_planned_settings_are_disabled_and_labelled` (none left) |
+| Updates | Only releases signed with the compiled-in minisign key; other keys, legacy signatures, changed manifests and changed signed comments refused | ✅ | 🟡 | `Minisign.*` (signatures made by the official minisign tool), `Release.Manifest*`, `test_a_release_signed_with_another_key_is_ignored`, `test_a_changed_manifest_or_signed_comment_is_ignored` |
+| Updates | Only strictly newer releases; an older signed release cannot be replayed | ✅ | 🟡 | `Release.OnlyNewerReleasesAreOffered`, `test_older_and_same_versions_are_never_offered`, `test_an_older_signed_release_cannot_be_replayed` |
+| Updates | Only GitHub's hosts, for every request and redirect; files only from the repository's release folder | ✅ | 🟡 | `Release.OnlyGitHubsHostsAreAllowed`, `Release.LatestReleaseAnswer`, `test_downloads_follow_redirects_only_to_allowed_hosts`, `test_release_files_of_another_repository_are_not_used` |
+| Updates | The file must match the signed size and SHA-256, after download and again before install | ✅ | 🟡 | `test_a_file_that_does_not_match_the_signed_release_is_deleted`, `test_a_file_changed_after_its_download_is_not_installed` |
+| Updates | Installed after TorFox exits (Windows: the installer is started after shutdown; macOS: the DMG is opened and the user copies the app) | ✅ | 🟡 | `test_a_signed_newer_release_is_checked_downloaded_and_installed_after_exit` (with a fake installer that records its arguments); the real setup with those arguments: `test_update_waits_for_torfox_then_installs_and_restarts_it` |
+| Updates | Settings: off means no contact with GitHub; automatic checks at most once a day; notices can be turned off | ✅ | 🟡 | `test_with_updates_off_torfox_never_contacts_github`, `test_automatic_checks_*`, `test_notices_can_be_turned_off` |
+| Updates | Only the settings page can use the updater | ✅ | ⬜ | `test_only_the_settings_page_can_use_the_updater` |
+| Updates | Builds without a release key never look for updates (every build until the maintainer adds the key) | ✅ | 🟡 | `test_a_build_without_a_key_never_looks_for_updates` |
+| Updates | Release builds ignore the test update source | ✅ | — | `test_release_builds_ignore_the_test_update_source` |
+| Updates | Updating from the real GitHub | 🟡 | 🟡 | No release has been signed with the official key yet; tested against a fake GitHub |
+| Updates | Operating-system code-signature check of updates | ⛔ | ⛔ | No code-signing certificates (TorFox is not distributed through app stores); updates rest on the minisign signature |
+| Packaging | Windows setup: contents limited to an allowlist, Start-menu shortcut, uninstall entry, uninstall removes everything but the profile | ✅ per user | — | `test_install_contents_shortcut_and_uninstall` (per-user test build, locally). The per-machine setup runs the same tests on CI with administrator rights; CI has not run yet |
+| Packaging | The installed TorFox runs sandboxed | ✅ per user | — | `test_installed_torfox_runs_sandboxed` |
+| Packaging | Update setup waits for TorFox to close, installs and restarts it; gives up without changes if TorFox stays open | ✅ per user | — | `test_update_waits_for_torfox_then_installs_and_restarts_it`, `test_update_gives_up_when_torfox_stays_open` (the setup is started with the arguments TorFox's updater uses) |
+| Packaging | Setup and uninstaller refuse while TorFox is open | ✅ per user | — | `test_setup_and_uninstall_refuse_while_torfox_is_open` |
+| Packaging | macOS DMG: ad-hoc signed app, mounts, copies out and starts | — | 🟡 | `packaging/macos/make_dmg.sh` and `check_dmg.sh` run on CI; never run yet (no Mac here, CI has not run) |
+| Packaging | Microsoft (Authenticode) and Apple (Developer ID, notarization) signing | ⛔ | ⛔ | Not distributed through stores; SmartScreen and Gatekeeper warn on first install ([`INSTALL.md`](INSTALL.md)) |
+| Release | Release workflow: fails closed without the tag, key, notes or secret; signs with the official minisign; checks the signed release as TorFox will before publishing | 🟡 | 🟡 | `tests/tools/test_release.py` (manifest, check and preflight, with the official minisign); the workflow itself has never run |

@@ -1,0 +1,201 @@
+# Release: builds the Windows setup and both macOS DMGs, signs the update
+# manifest with the release minisign key and publishes a GitHub release.
+# See docs/RELEASING.md.
+#
+# Fails closed: nothing is built or published unless the tag matches the
+# project version, config/release.json holds the release public key, the
+# release notes exist and the MINISIGN_SECRET_KEY secret is set. The signed
+# manifest is checked against the public key before anything is uploaded,
+# and the release stays a draft (invisible to TorFox's update check) until
+# every file is uploaded.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - id: check
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          python3 -I scripts/release.py preflight --tag "$GITHUB_REF_NAME"
+          echo "version=$(python3 -I scripts/release.py version)" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: preflight
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Fetch dependencies (hash-verified)
+        shell: bash
+        run: |
+          python -I scripts/fetch_deps.py cef windows64-minimal
+          python -I scripts/fetch_deps.py nlohmann_json header
+          python -I scripts/fetch_deps.py googletest source
+          python -I scripts/fetch_deps.py sqlite source
+          python -I scripts/fetch_deps.py tor windows-x86_64
+          python -I scripts/fetch_deps.py libsodium windows-msvc
+      - name: Install UI dependencies (lockfile, no install scripts)
+        run: npm --prefix ui ci
+      - name: Configure and build (release)
+        run: |
+          $line = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property catalog_productLineVersion
+          switch ("$line") {
+            '2026' { $gen = 'Visual Studio 18 2026' }
+            '2022' { $gen = 'Visual Studio 17 2022' }
+            default { throw "Unsupported or missing Visual Studio: '$line'" }
+          }
+          cmake -S . -B out/dev -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal
+          cmake --build out/dev --config Release --parallel
+          ctest --test-dir out/dev -C Release --output-on-failure
+      - name: Release-build platform tests
+        run: python -m unittest -v tests/platform/test_release_win.py
+      - name: Setup
+        run: python -I scripts/package_windows.py
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows
+          path: out/dist/TorFox-${{ needs.preflight.outputs.version }}-win-x64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    needs: preflight
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-15
+            cef: macosarm64-minimal
+            tor: macos-aarch64
+            arch: arm64
+            pkg: arm64
+          - runner: macos-15-intel
+            cef: macosx64-minimal
+            tor: macos-x86_64
+            arch: x86_64
+            pkg: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Fetch dependencies (hash-verified)
+        run: |
+          python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }}
+          python3 -I scripts/fetch_deps.py nlohmann_json header
+          python3 -I scripts/fetch_deps.py googletest source
+          python3 -I scripts/fetch_deps.py sqlite source
+          python3 -I scripts/fetch_deps.py tor ${{ matrix.tor }}
+          python3 -I scripts/fetch_deps.py libsodium source
+      - name: Install UI dependencies (lockfile, no install scripts)
+        run: npm --prefix ui ci
+      - name: Ensure Ninja
+        run: command -v ninja || brew install ninja
+      - name: Configure, build and unit tests
+        run: |
+          cmake -S . -B out/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DTORFOX_CEF_FLAVOR=minimal
+          cmake --build out/ci --parallel
+          ctest --test-dir out/ci --output-on-failure
+      - name: DMG (made, mounted, copied out and run)
+        run: |
+          version=${{ needs.preflight.outputs.version }}
+          cef=$(python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }} | tail -n 1)
+          sh packaging/macos/make_dmg.sh out/ci/src/browser/Release/TorFox.app "$version" ${{ matrix.pkg }} "$cef" out/dist
+          sh packaging/macos/check_dmg.sh "out/dist/TorFox-$version-mac-${{ matrix.pkg }}.dmg"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos-${{ matrix.pkg }}
+          path: out/dist/TorFox-${{ needs.preflight.outputs.version }}-mac-${{ matrix.pkg }}.dmg
+          if-no-files-found: error
+
+  publish:
+    needs: [preflight, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Fetch the official minisign (signature-verified)
+        run: python3 -I scripts/fetch_deps.py minisign linux
+      - name: Manifest
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          python3 -I scripts/release.py manifest --version "$VERSION" \
+            --notes "docs/release-notes/$VERSION.txt" --out dist/manifest.json \
+            --comment-out "$RUNNER_TEMP/trusted-comment.txt" \
+            "dist/TorFox-$VERSION-win-x64-setup.exe" "dist/TorFox-$VERSION-mac-arm64.dmg" \
+            "dist/TorFox-$VERSION-mac-x64.dmg"
+      - name: Sign the manifest
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -eu
+          test -n "$MINISIGN_SECRET_KEY"
+          minisign=$(find .deps/minisign -type f -name minisign -path '*x86_64*' | head -n 1)
+          test -x "$minisign"
+          umask 077
+          key="$RUNNER_TEMP/release.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          # The key has no password (minisign -G -W) and exists only in this
+          # secret. A password-protected key gets no password here and fails.
+          "$minisign" -S -s "$key" -m dist/manifest.json </dev/null \
+            -x dist/manifest.json.minisig -t "$(cat "$RUNNER_TEMP/trusted-comment.txt")" \
+            -c "TorFox release manifest"
+      - name: Check the signed release as TorFox will
+        run: |
+          set -eu
+          key=$(python3 -I -c "import json; print(json.load(open('config/release.json'))['update_public_key'])")
+          minisign=$(find .deps/minisign -type f -name minisign -path '*x86_64*' | head -n 1)
+          "$minisign" -V -P "$key" -m dist/manifest.json -x dist/manifest.json.minisig
+          python3 -I scripts/release.py check --dir dist --public-key "$key"
+      - name: Publish (draft first, public once every file is uploaded)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -eu
+          tag="v$VERSION"
+          gh release create "$tag" --draft --verify-tag --title "TorFox $VERSION" \
+            --notes-file "docs/release-notes/$VERSION.txt"
+          gh release upload "$tag" "dist/TorFox-$VERSION-win-x64-setup.exe" \
+            "dist/TorFox-$VERSION-mac-arm64.dmg" "dist/TorFox-$VERSION-mac-x64.dmg" \
+            dist/manifest.json dist/manifest.json.minisig
+          gh release edit "$tag" --draft=false

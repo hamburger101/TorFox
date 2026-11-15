@@ -30,9 +30,12 @@ add_executable(torfox_unit_tests
   shortcuts_menu_test.cc
   tabs_zoom_test.cc
   test_util.h
+  update_test.cc
 )
 SET_EXECUTABLE_TARGET_PROPERTIES(torfox_unit_tests)
-target_link_libraries(torfox_unit_tests PRIVATE torfox_core torfox_gtest)
+target_link_libraries(torfox_unit_tests PRIVATE torfox_core torfox_gtest torfox_sodium)
+target_compile_definitions(torfox_unit_tests PRIVATE
+  TORFOX_UNIT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 if(OS_WINDOWS)
   # Console test runner; CEF's default subsystem flags target GUI apps.
   set_property(TARGET torfox_unit_tests APPEND_STRING PROPERTY LINK_FLAGS " /SUBSYSTEM:CONSOLE")

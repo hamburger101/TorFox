@@ -94,10 +94,15 @@ class StartupTest(unittest.TestCase):
 
     def restored_shells(self, tf: TorFox, count: int) -> list:
         wait_for(lambda: len(tf.events("session_window_restored")) == count, 15, f"{count} restored windows")
-        wait_for(lambda: len([t for t in tf.browser.targets() if t["url"] == "torfox://shell/"]) == count,
-                 15, "the shells")
+        # One reading of the target list: two readings once disagreed (a full
+        # run found the shell, then an empty list).
+        def shells():
+            ids = tf.shell_ids()
+            return ids if len(ids) == count else None
+        ids = wait_for(shells, 15, "the shells")
+        # (page() also checks the loaded page with the predicate, without a targetId.)
         return [tf.page(lambda t, i=i: t["url"] == "torfox://shell/" and t.get("targetId", i) == i)
-                for i in sorted(tf.shell_ids())]
+                for i in sorted(ids)]
 
     # ----- tests -----
 

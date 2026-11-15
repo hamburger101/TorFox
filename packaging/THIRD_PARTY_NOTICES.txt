@@ -1,0 +1,34 @@
+TorFox third-party notices
+==========================
+
+TorFox is licensed under the Mozilla Public License 2.0 (licenses/TorFox-MPL-2.0.txt).
+It includes the following components, each under its own license.
+
+Chromium Embedded Framework (CEF) and Chromium
+  BSD 3-Clause license: licenses/CEF-LICENSE.txt
+  Chromium and its third-party components: licenses/Chromium-CREDITS.html
+
+Tor Expert Bundle (tor, lyrebird, conjure, and the libraries they use)
+  The Tor Project's official build. Each component's license is in tor/docs.
+
+libsodium
+  ISC license: licenses/libsodium-ISC.txt
+
+Lit (lit, lit-html, @lit/reactive-element), in TorFox's interface
+  BSD 3-Clause license: licenses/lit-BSD-3-Clause.txt
+
+JSON for Modern C++ (nlohmann/json)
+  MIT license: licenses/nlohmann-json-MIT.txt
+
+SQLite
+  Public domain (https://sqlite.org/copyright.html).
+
+EasyPrivacy (tracker domains, an adaptation: whole-domain rules only)
+  By The EasyList authors (https://easylist.to/). TorFox uses it under the
+  Creative Commons Attribution-ShareAlike 3.0 Unported license; the adapted
+  list is distributed under the same license.
+  https://creativecommons.org/licenses/by-sa/3.0/
+
+Public Suffix List
+  Mozilla Public License 2.0 (licenses/TorFox-MPL-2.0.txt).
+  https://publicsuffix.org/

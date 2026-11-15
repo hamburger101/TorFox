@@ -267,9 +267,20 @@ class BrowsingTest(unittest.TestCase):
         bridge_call(self.shell, "tab.new")
         wait_state(self.shell, lambda s: len(s["tabs"]) == 2, "two tabs")
         ids = [t["id"] for t in shell_state(self.shell)["tabs"]]
-        rects = self.shell.evaluate("""[...document.querySelector('tf-shell').shadowRoot
+        measure = """[...document.querySelector('tf-shell').shadowRoot
             .querySelectorAll('.tab')].map(e => { const r = e.getBoundingClientRect();
-            return [r.left + 20, r.top + r.height / 2, r.right - 10]; })""")
+            return [r.left + 20, r.top + r.height / 2, r.right - 10]; })"""
+        # The strip may still be laying out the new tab (this once made the
+        # drop land short of the second tab): wait for two unchanged readings.
+        last: list = []
+
+        def stable():
+            nonlocal last
+            now = self.shell.evaluate(measure)
+            same = len(now) == 2 and now == last
+            last = now
+            return now if same else None
+        rects = wait_for(stable, 10, "the tab strip to settle", interval=0.2)
         (x1, y1, _), (_, _, right2) = rects
         self.shell.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x1, "y": y1})
         self.shell.send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x1, "y": y1,

@@ -69,7 +69,8 @@ TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
       "privacy.clearOnExit.history",
       "privacy.clearOnExit.cookies", "privacy.clearOnExit.cache", "permissions.camera",
       "permissions.microphone", "permissions.clipboard", "tor.startMode", "tor.bridges.mode",
-      "tor.bridges.builtinType", "tor.bridges.custom"};
+      "tor.bridges.builtinType", "tor.bridges.custom", "updates.enabled", "updates.autoCheck",
+      "updates.notify"};
   for (const Def& d : AllSettings()) {
     EXPECT_EQ(d.status, active.count(d.key) ? Status::kActive : Status::kPlanned) << d.key;
   }

@@ -114,6 +114,24 @@ class InternalPageHardeningTest(unittest.TestCase):
             "document.querySelector('tf-shell').shadowRoot.querySelectorAll('.tab').length")
         self.assertGreaterEqual(tabs, 1)
 
+    def test_pages_set_no_style_attributes(self) -> None:
+        # The CSP refuses style attributes, so an element styled through one
+        # stays unstyled. lit's styleMap wrote its first value that way (every
+        # tab, and progress bars when first drawn); see Stage 7 findings §3.7.
+        for command, url in (("app.openSettings", "torfox://settings/"),
+                             ("app.openDownloads", "torfox://downloads/"),
+                             ("app.openHistory", "torfox://history/"),
+                             ("app.openBookmarks", "torfox://bookmarks/")):
+            self.assertTrue(bridge_call(self.shell, command)["ok"], command)
+            page = self.tf.page_at(url)
+            wait_for(lambda: page.evaluate("document.readyState") == "complete", 10, url)
+        self.assertTrue(bridge_call(self.shell, "tab.new")["ok"])
+        wait_for(lambda: self.shell.evaluate(
+            "document.querySelector('tf-shell').shadowRoot.querySelectorAll('.tab').length") >= 6,
+            10, "the new tabs")
+        styles = [e["message"] for e in self.tf.events("console") if "inline style" in e.get("message", "")]
+        self.assertEqual(styles, [])
+
     def test_shell_layout(self) -> None:
         layout = self.tf.events("window_layout")[-1]
         self.assertEqual(layout["shell"][3], 82)
@@ -145,9 +163,11 @@ class SettingsPageTest(unittest.TestCase):
                                  "Tor Network", "Appearance", "Updates", "About TorFox"])
 
     def test_planned_settings_are_disabled_and_labelled(self) -> None:
+        # Since Stage 7 every setting is active; a setting added before its
+        # feature exists must be shown disabled and labelled "Not active yet".
         data = json.loads(bridge_call(self.page, "settings.get")["response"])
         planned = [s["key"] for s in data["settings"] if s["status"] == "planned"]
-        self.assertTrue(planned)
+        self.assertEqual(planned, [])
         for section in ("general", "search", "privacy", "downloads", "tor", "updates"):
             self.page.evaluate(f"document.querySelector('tf-settings').section = '{section}'; 1")
             wait_for(lambda: self.root("r.querySelector('.page-title').textContent") != "", 5, "render")
@@ -162,10 +182,12 @@ class SettingsPageTest(unittest.TestCase):
         # and tested (the bookmarks bar toggle: tests/e2e/test_places.py;
         # downloads: tests/e2e/test_downloads.py; privacy and permissions:
         # tests/e2e/test_privacy.py; Tor: tests/e2e/test_tor.py; on startup:
-        # tests/e2e/test_startup.py; search engine: tests/e2e/test_browsing.py).
+        # tests/e2e/test_startup.py; search engine: tests/e2e/test_browsing.py;
+        # updates: tests/e2e/test_updates.py).
         data = json.loads(bridge_call(self.page, "settings.get")["response"])
         self.assertEqual(sorted(s["key"] for s in data["settings"] if s["status"] == "active"),
                          sorted(["general.startupPage", "search.engine",
+                                 "updates.enabled", "updates.autoCheck", "updates.notify",
                                  "appearance.theme", "appearance.showBookmarksBar",
                                  "downloads.askBeforeDownload", "downloads.disableDownloads",
                                  "privacy.httpsFirst", "privacy.blockTrackers",

@@ -47,6 +47,7 @@ jobs:
           python -I scripts/fetch_deps.py googletest source
           python -I scripts/fetch_deps.py sqlite source
           python -I scripts/fetch_deps.py tor windows-x86_64
+          python -I scripts/fetch_deps.py libsodium windows-msvc
 
       - name: Install UI dependencies (lockfile, no install scripts)
         run: npm --prefix ui ci
@@ -74,11 +75,18 @@ jobs:
       - name: Unit tests
         run: ctest --test-dir out/test -C Release --output-on-failure
 
+      # scripts/release.py, which the release workflow uses, checked with
+      # signatures made by the official minisign tool.
+      - name: Release tooling tests
+        run: |
+          python -I scripts/fetch_deps.py minisign windows
+          python -m unittest discover -v -s tests/tools
+
       - name: End-to-end tests (test build)
         working-directory: tests/e2e
         env:
           TORFOX_QUIET_SECONDS: "60"
-        run: python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup
+        run: python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup test_updates
 
       # The bundled tor itself (needs the network; LiveTorTest is skipped,
       # not failed, if tor cannot finish bootstrapping from the runner).
@@ -88,7 +96,18 @@ jobs:
           TORFOX_LIVE_TESTS: "1"
         run: python -m unittest -v test_tor.RealTorTest test_tor.RealTorNonAsciiProfileTest test_tor.LiveTorTest
 
-      - name: Release-build platform tests (sandbox, command line)
+      # The setups use no compression here: the tests check the setup's
+      # behaviour, and the release workflow builds the compressed one.
+      - name: Windows setups (per-user test build and the real one, this version and the next)
+        run: |
+          python -I scripts/package_windows.py --test-peruser --compression none
+          python -I scripts/package_windows.py --test-peruser --compression none --next-patch
+          python -I scripts/package_windows.py --compression none
+          python -I scripts/package_windows.py --compression none --next-patch
+
+      # Includes the installer tests: the per-user setup, and the real one
+      # installed for all users (the runner has administrator rights).
+      - name: Release-build platform and installer tests
         run: python -m unittest discover -v -s tests/platform -p "test_*_win.py"
 
   macos:
@@ -101,10 +120,12 @@ jobs:
             cef: macosarm64-minimal
             tor: macos-aarch64
             arch: arm64
+            pkg: arm64
           - runner: macos-15-intel
             cef: macosx64-minimal
             tor: macos-x86_64
             arch: x86_64
+            pkg: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -133,6 +154,7 @@ jobs:
           python3 -I scripts/fetch_deps.py googletest source
           python3 -I scripts/fetch_deps.py sqlite source
           python3 -I scripts/fetch_deps.py tor ${{ matrix.tor }}
+          python3 -I scripts/fetch_deps.py libsodium source
 
       - name: Install UI dependencies (lockfile, no install scripts)
         run: npm --prefix ui ci
@@ -162,3 +184,10 @@ jobs:
           test -x "$app/Contents/Helpers/tor/pluggable_transports/lyrebird"
           test -f "$app/Contents/Helpers/tor/pluggable_transports/pt_config.json"
           test -f "$app/Contents/Helpers/tor/data/geoip"
+
+      - name: DMG (made, mounted, copied out and run)
+        run: |
+          version=$(python3 -I scripts/release.py version)
+          cef=$(python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }} | tail -n 1)
+          sh packaging/macos/make_dmg.sh out/ci/src/browser/Release/TorFox.app "$version" ${{ matrix.pkg }} "$cef" out/dist
+          sh packaging/macos/check_dmg.sh "out/dist/TorFox-$version-mac-${{ matrix.pkg }}.dmg"

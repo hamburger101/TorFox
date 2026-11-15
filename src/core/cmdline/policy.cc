@@ -32,6 +32,10 @@ const std::vector<std::string> kTestHookSwitches = {
     // its public key, and a fake camera and microphone answer getUserMedia.
     "ignore-certificate-errors-spki-list",
     "use-fake-device-for-media-stream",
+    // Other windows may cover the test windows. Chromium then treats them as
+    // hidden: no frames, so input waits (Stage 7 findings, §3.5).
+    "disable-backgrounding-occluded-windows",
+    "torfox-test-update-config",  // JSON file: a fake GitHub and its key.
 };
 
 // Evidence for each entry is in docs/STAGE0_FINDINGS.md and the quiet-startup

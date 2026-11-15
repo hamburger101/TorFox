@@ -6,7 +6,9 @@
 
 Every artifact listed in deps.lock.json is verified by size, SHA-256 and (when
 present) the SHA-1 or SHA3-256 published by the upstream project before it is
-extracted.
+extracted. Sections with a "minisign_key" (libsodium, minisign) are also
+checked against the upstream minisign signature (<file>.minisig) whenever the
+archive is downloaded or pinned.
 A missing or mismatching hash is a hard failure; nothing is ever extracted
 from an unverified file.
 
@@ -29,7 +31,11 @@ import tarfile
 import tempfile
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import minisign  # noqa: E402  (scripts/minisign.py)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOCK_PATH = REPO_ROOT / "deps.lock.json"
@@ -84,7 +90,19 @@ def download(url: str, dest: Path) -> None:
     os.replace(part, dest)
 
 
-def verify(path: Path, entry: dict, allow_pin: bool) -> str:
+def verify_minisig(path: Path, signature: Path, public_key: str) -> None:
+    """The upstream signature must verify and name this file."""
+    try:
+        trusted = minisign.verify(public_key, signature.read_text(encoding="utf-8"), path.read_bytes())
+    except (minisign.MinisignError, OSError, UnicodeDecodeError) as e:
+        raise VerificationError(f"{path.name}: minisign signature: {e}") from e
+    fields = dict(f.split(":", 1) for f in trusted.split("\t") if ":" in f)
+    if fields.get("file") != path.name:
+        raise VerificationError(f"{path.name}: the signature is for {fields.get('file')!r}")
+    print(f"{path.name}: upstream minisign signature verified ({trusted})", file=sys.stderr)
+
+
+def verify(path: Path, entry: dict, allow_pin: bool, signed: bool = False) -> str:
     sha1, sha256, sha3_256, size = hash_file(path)
     if entry.get("size") is not None and size != entry["size"]:
         raise VerificationError(f"{path.name}: size {size} != pinned {entry['size']}")
@@ -101,7 +119,7 @@ def verify(path: Path, entry: dict, allow_pin: bool) -> str:
             f"{path.name}: no SHA-256 pinned in deps.lock.json (computed {sha256}). "
             "A maintainer must pin it with --pin-sha256 after checking the upstream hash."
         )
-    elif not entry.get("sha1") and not entry.get("sha3_256"):
+    elif not entry.get("sha1") and not entry.get("sha3_256") and not signed:
         raise VerificationError(f"{path.name}: refusing to pin SHA-256 without an upstream hash to cross-check")
     return sha256
 
@@ -117,8 +135,18 @@ def safe_extract(archive: Path, dest_parent: Path, root_name: str) -> Path:
     dest_parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=".extract-", dir=dest_parent))
     try:
-        with tarfile.open(archive, "r:*") as tar:
-            tar.extractall(tmp / "x", filter="data")
+        if archive.name.endswith(".zip"):
+            with zipfile.ZipFile(archive) as z:
+                for info in z.infolist():
+                    name = info.filename
+                    parts = Path(name).parts
+                    if (name.startswith(("/", "\\")) or ":" in name or ".." in parts or "\\" in name
+                            or (info.external_attr >> 16) & 0o170000 == 0o120000):
+                        raise VerificationError(f"{archive.name}: unsafe entry {name!r}")
+                z.extractall(tmp / "x")
+        else:
+            with tarfile.open(archive, "r:*") as tar:
+                tar.extractall(tmp / "x", filter="data")
         children = list((tmp / "x").iterdir())
         if len(children) == 1 and children[0].is_dir() and children[0].name == root_name:
             source = children[0]
@@ -156,7 +184,7 @@ def fetch(kind: str, key: str, file_override: str | None, allow_pin: bool, verif
         root_name = rel.parts[0]
     else:
         root_name = name
-        for ext in (".tar.bz2", ".tar.gz", ".tar.xz", ".tgz"):
+        for ext in (".tar.bz2", ".tar.gz", ".tar.xz", ".tgz", ".zip"):
             if root_name.endswith(ext):
                 root_name = root_name[: -len(ext)]
     if entry.get("sha256") and marker.exists() and marker.read_text().strip() == entry["sha256"]:
@@ -164,6 +192,7 @@ def fetch(kind: str, key: str, file_override: str | None, allow_pin: bool, verif
         if root.is_dir():
             return root
 
+    key_text = section.get("minisign_key")
     if file_override:
         archive = Path(file_override).resolve()
     else:
@@ -171,8 +200,16 @@ def fetch(kind: str, key: str, file_override: str | None, allow_pin: bool, verif
         if not archive.exists():
             url = section["base_url"] + urllib.parse.quote(name)
             download(url, archive)
+            if key_text:
+                download(url + ".minisig", archive.with_name(name + ".minisig"))
+    signed = False
+    if key_text:
+        sig = archive.with_name(archive.name + ".minisig")
+        if sig.exists() or not entry.get("sha256"):
+            verify_minisig(archive, sig, key_text)
+            signed = True
 
-    sha256 = verify(archive, entry, allow_pin)
+    sha256 = verify(archive, entry, allow_pin, signed)
     if not entry.get("sha256"):
         entry["sha256"] = sha256
         save_lock(lock)
@@ -207,7 +244,7 @@ def main() -> int:
     args = ap.parse_args()
     try:
         root = fetch(args.kind, args.key, args.file, args.pin_sha256, args.verify_only)
-    except (VerificationError, OSError, tarfile.TarError) as e:
+    except (VerificationError, OSError, tarfile.TarError, zipfile.BadZipFile) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     print(root)

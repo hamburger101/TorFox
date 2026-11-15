@@ -19,6 +19,7 @@ class PlacesService;
 class PrivacyService;
 class SettingsService;
 class TorService;
+class UpdateService;
 class BrowserWindow;
 
 // Browser-process services shared by windows and handlers. Owned by
@@ -40,6 +41,10 @@ struct Services {
   // New identity: closes every Tor window, forgets the Tor context and asks
   // tor for new circuits; then opens a fresh Tor window.
   std::function<void(BrowserWindow* requester)> tor_new_identity;
+  // Settings > Updates. Null until the browsing contexts exist.
+  UpdateService* updates = nullptr;
+  // Closes every window, which quits TorFox.
+  std::function<void()> close_all_windows;
   // Shown once in the first window (for example: clearing data failed).
   std::string startup_notice;
   CefRefPtr<CefMessageRouterBrowserSide> router;

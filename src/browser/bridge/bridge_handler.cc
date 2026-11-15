@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <string>
 
+#include "include/base/cef_callback.h"
+#include "include/cef_task.h"
 #include "include/cef_version.h"
+#include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/browser_registry.h"
 #include "src/browser/app/context_manager.h"
@@ -17,6 +20,7 @@
 #include "src/browser/app/tor_service.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
+#include "src/browser/app/update_service.h"
 #include "src/browser/app/version.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/shell/browser_window.h"
@@ -74,6 +78,11 @@ void BridgeHandler::Shutdown() {
     services.downloads->RemoveObserver(downloads_observer_);
   }
   downloads_observer_ = 0;
+  if (services.updates && updates_observer_) {
+    services.updates->RemoveObserver(updates_observer_);
+  }
+  updates_observer_ = 0;
+  update_subscribers_.clear();
   downloads_subscribers_.clear();
   appearance_subscribers_.clear();
   bookmarks_subscribers_.clear();
@@ -152,7 +161,7 @@ void BridgeHandler::OnQueryCanceled(CefRefPtr<CefBrowser> browser,
   const int browser_id = browser->GetIdentifier();
   for (std::vector<Subscriber>* list :
        {&appearance_subscribers_, &bookmarks_subscribers_, &history_subscribers_,
-        &downloads_subscribers_}) {
+        &downloads_subscribers_, &update_subscribers_}) {
     list->erase(std::remove_if(list->begin(), list->end(),
                                [&](const Subscriber& s) {
                                  return s.browser_id == browser_id && s.query_id == query_id;
@@ -162,6 +171,78 @@ void BridgeHandler::OnQueryCanceled(CefRefPtr<CefBrowser> browser,
   if (auto entry = Registry().Find(browser_id); entry && entry->window) {
     entry->window->RemoveStateSubscriber(browser_id, query_id);
   }
+}
+
+namespace {
+
+Json UpdateStatusJson() {
+  UpdateService* updates = GetServices().updates;
+  if (!updates) {
+    return {{"state", "starting"}, {"installed", kTorFoxVersion}};
+  }
+  const UpdateService::Status s = updates->status();
+  return {{"state", UpdateService::StateName(s.state)},
+          {"message", s.message},
+          {"version", s.version},
+          {"notes", s.notes},
+          {"size", s.size},
+          {"received", s.received},
+          {"lastCheck", s.last_check},
+          {"installed", kTorFoxVersion},
+          {"platform", platform::UpdatePlatform()}};
+}
+
+}  // namespace
+
+void BridgeHandler::NotifyUpdates() {
+  const std::string payload = DumpJson(UpdateStatusJson());
+  for (Subscriber& s : update_subscribers_) {
+    s.callback->Success(payload);
+  }
+}
+
+bool BridgeHandler::DispatchUpdates(const bridge::Validated& msg, int browser_id,
+                                    int64_t query_id, CefRefPtr<Callback> callback) {
+  const std::string& cmd = msg.command;
+  if (cmd.rfind("update.", 0) != 0) {
+    return false;
+  }
+  UpdateService* updates = GetServices().updates;
+  if (cmd == "update.subscribe") {
+    if (updates && !updates_observer_) {
+      updates_observer_ = updates->AddObserver([this] { NotifyUpdates(); });
+    }
+    update_subscribers_.push_back(Subscriber{browser_id, query_id, callback});
+    Reply(callback, UpdateStatusJson());
+    return true;
+  }
+  if (!updates) {
+    callback->Failure(kFailed, "not_ready");
+    return true;
+  }
+  if (cmd == "update.check") {
+    updates->Check();
+  } else if (cmd == "update.download") {
+    updates->Download();
+  } else if (cmd == "update.install") {
+    std::string error;
+    if (!updates->PrepareInstall(&error)) {
+      callback->Failure(kFailed, error);
+      return true;
+    }
+    Reply(callback, UpdateStatusJson());
+    // TorFox closes; the update starts once it has shut down.
+    if (GetServices().close_all_windows) {
+      CefPostTask(TID_UI, base::BindOnce([] {
+                    if (GetServices().close_all_windows) {
+                      GetServices().close_all_windows();
+                    }
+                  }));
+    }
+    return true;
+  }
+  Reply(callback, UpdateStatusJson());
+  return true;
 }
 
 void BridgeHandler::PushAppearance() {
@@ -229,6 +310,9 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
   }
 
   if (DispatchPlaces(msg, browser_id, query_id, callback)) {
+    return;
+  }
+  if (DispatchUpdates(msg, browser_id, query_id, callback)) {
     return;
   }
 

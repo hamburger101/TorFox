@@ -85,6 +85,9 @@ class TorFox:
             "--remote-debugging-port=0",
             f"--torfox-test-user-data={self.user_data}",
             f"--torfox-test-log={self.log_path}",
+            # Covered by other windows, a test window would count as hidden:
+            # no frames, and input that waits for them stalls.
+            "--disable-backgrounding-occluded-windows",
         ]
         if start_url:
             args.append(f"--torfox-test-start-url={start_url}")

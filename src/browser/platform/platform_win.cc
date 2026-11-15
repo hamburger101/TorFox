@@ -19,6 +19,7 @@
 #include "include/cef_task.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "src/core/privacy/external_protocols.h"
+#include "src/core/update/sha256.h"
 
 namespace torfox::platform {
 
@@ -412,6 +413,72 @@ std::unique_ptr<ChildProcess> LaunchHidden(const std::filesystem::path& exe,
   ::ResumeThread(pi.hThread);
   ::CloseHandle(pi.hThread);
   return std::make_unique<WinChildProcess>(pi.hProcess, job, pi.dwProcessId);
+}
+
+void MarkRunning() {
+  // Kept until the process exits; Windows releases it then, crash or not.
+  static HANDLE running = ::CreateMutexW(nullptr, FALSE, L"TorFoxBrowserRunning");
+  (void)running;
+}
+
+const char* UpdatePlatform() {
+  return "windows-x64";
+}
+
+bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, uint64_t size,
+                  std::string* error) {
+  // Read access, shared for reading only: nobody can write, rename or delete
+  // the file while TorFox holds this handle, so what runs is what was hashed.
+  HANDLE h = ::CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
+    *error = "the update could not be opened";
+    return false;
+  }
+  update::Sha256 hash;
+  uint64_t total = 0;
+  std::vector<char> buf(1 << 16);
+  bool read_ok = true;
+  for (;;) {
+    DWORD n = 0;
+    if (!::ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &n, nullptr)) {
+      read_ok = false;
+      break;
+    }
+    if (n == 0) {
+      break;
+    }
+    total += n;
+    if (total > size) {
+      break;
+    }
+    hash.Update(std::string_view(buf.data(), n));
+  }
+  if (!read_ok || total != size || hash.FinalHex() != sha256) {
+    ::CloseHandle(h);
+    *error = "the update changed after it was checked";
+    return false;
+  }
+  // The update installs per machine: the installer asks for administrator
+  // rights (UAC). It waits for TorFox to exit (MarkRunning).
+  SHELLEXECUTEINFOW info = {};
+  info.cbSize = sizeof info;
+  info.fMask = SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+  info.lpVerb = L"open";
+  info.lpFile = file.c_str();
+  info.lpParameters = L"/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE";
+  info.nShow = SW_SHOWNORMAL;
+  const bool started = ::ShellExecuteExW(&info) != FALSE;
+  if (info.hProcess) {
+    ::CloseHandle(info.hProcess);
+  }
+  ::CloseHandle(h);
+  if (!started) {
+    *error = ::GetLastError() == ERROR_CANCELLED ? "the installer was not allowed to run"
+                                                 : "the installer could not be started";
+    return false;
+  }
+  return true;
 }
 
 long CurrentProcessId() {

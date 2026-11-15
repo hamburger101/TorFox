@@ -28,6 +28,17 @@ class SessionService;
 class SettingsService;
 class DownloadService;
 class TorService;
+class UpdateService;
+
+// Test builds only: a local fake GitHub and the key its releases are signed
+// with.
+struct UpdateTestConfig {
+  std::string origin;  // "http://127.0.0.1:<port>": API, downloads and redirects.
+  std::vector<std::string> extra_origins;  // Further allowed origins (redirect targets).
+  std::string public_key;
+  std::string repository;
+  int first_check_delay_ms = 0;
+};
 
 struct StartupOptions {
   std::filesystem::path user_data_dir;
@@ -38,6 +49,7 @@ struct StartupOptions {
   // Test builds only: run this (a fake tor) instead of the bundled tor.
   std::filesystem::path tor_test_exe;
   std::vector<std::string> tor_test_args;
+  std::optional<UpdateTestConfig> update_test;
 };
 
 // CefApp for the browser process: command-line policy, startup checks,
@@ -63,6 +75,14 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   // What Settings > Privacy & Security > Clear when TorFox closes asked for
   // when Shutdown() ran: cleared once Chromium has let go of the profile.
   clear_data::Categories exit_clear() const { return exit_clear_; }
+  // The checked update to start once TorFox has shut down (Settings >
+  // Updates > Restart to update), taken when Shutdown() ran.
+  struct UpdateHandoff {
+    std::filesystem::path file;
+    std::string sha256;
+    uint64_t size = 0;
+  };
+  std::optional<UpdateHandoff> update_handoff() const { return update_handoff_; }
   // Shown once in the first window.
   void set_startup_notice(std::string text) { startup_notice_ = std::move(text); }
 
@@ -75,6 +95,9 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   void StartTor();
   void RestartTorIfRunning();
   void NewTorIdentity(BrowserWindow* requester);
+  // Settings > Updates.
+  void StartUpdates();
+  void CloseAllWindows();
 
   StartupOptions options_;
   std::unique_ptr<SettingsService> settings_;
@@ -88,6 +111,8 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   CefRefPtr<CefMessageRouterBrowserSide> router_;
   std::set<BrowserWindow*> windows_;
   std::unique_ptr<SessionService> session_;
+  std::unique_ptr<UpdateService> updates_;
+  std::optional<UpdateHandoff> update_handoff_;
   bool fatal_ = false;
   clear_data::Categories exit_clear_;
   std::string startup_notice_;

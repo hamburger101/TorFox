@@ -58,8 +58,12 @@ export const SECTIONS: Record<string, SectionLabel> = {
     title: "Updates",
     icon: icons.update,
     note:
-      "Automatic updates are not built yet. This build never checks for or installs updates " +
-      "by itself.",
+      "TorFox looks for new releases on GitHub, in TorFox's official repository. It uses an " +
+      "update only if the release's signature verifies with the key built into this copy of " +
+      "TorFox, the release is newer than this version, and the downloaded file has exactly the " +
+      "size and SHA-256 the signed release lists. On Windows the installer starts when TorFox " +
+      "closes and asks for administrator rights. On macOS TorFox opens the checked disk image " +
+      "and you copy TorFox to Applications yourself.",
   },
   about: { title: "About TorFox", icon: icons.info },
 };
@@ -202,12 +206,20 @@ export const SETTINGS: Record<string, SettingLabel> = {
     title: "Show bookmarks bar",
     description: "Show the Bookmarks bar folder below the address bar.",
   },
-  "updates.enabled": { title: "Updates", description: "Allow TorFox to update itself." },
+  "updates.enabled": {
+    title: "Updates",
+    description: "Allow TorFox to look for, download and install updates. When this is off, " +
+      "TorFox never contacts GitHub.",
+  },
   "updates.autoCheck": {
     title: "Check for updates automatically",
-    description: "Look for new releases on GitHub once a day.",
+    description: "Look for a new release at most once a day, a little after TorFox starts. " +
+      "Nothing is downloaded or installed without you.",
   },
-  "updates.notify": { title: "Tell me when an update is available" },
+  "updates.notify": {
+    title: "Tell me when an update is available",
+    description: "After an automatic check finds one, show a notice in a TorFox window.",
+  },
 };
 
 export const ERRORS: Record<string, string> = {

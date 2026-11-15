@@ -207,12 +207,39 @@ Each layer is also tested end-to-end with the outer layers switched off (test bu
   credentials is impossible. TorFox uses `IsolateDestAddr`, which is weaker than Tor Browser's first-party isolation.
 
 ## Updates
-- GitHub Releases on the repository named in `config/release.json`.
-- The manifest is signed with minisign (Ed25519) in CI. Its trusted comment carries version and timestamp for
-  anti-rollback, and it lists each platform asset's SHA-256 and size.
-- The client verifies, in order: signature → strictly newer version and timestamp → asset hash and size →
-  OS code signature (once configured).
-- Only GitHub hosts are allowed. The previous installation is preserved on failure.
+User-facing behaviour and limits: [`UPDATING.md`](UPDATING.md). Making a release: [`RELEASING.md`](RELEASING.md).
+- **Configuration.** `config/release.json` names the repository and the minisign public key. CMake checks
+  both and compiles them in (`release_config.h`). With either missing the updater is *not configured* and
+  never connects. Test builds can replace both with `--torfox-test-update-config` (a fake GitHub and a key
+  made per test run); release builds never read that switch.
+- **Pure rules** (`src/core/update/`, no CEF, unit-tested):
+  - `minisign`: prehashed minisign (`ED`, Ed25519 over BLAKE2b-512) with libsodium. Key ID, file
+    signature and the global signature over the trusted comment.
+  - `release`: the manifest (`format` 1, `product` "TorFox", `version`, `timestamp`, `notes`, `assets` by
+    platform with `name`, `size`, `sha256`). The trusted comment must be exactly
+    `torfox-release version:<v> timestamp:<t>`. Strictly newer versions only, and never a release older
+    than the newest seen (`update.json`). Host allowlist: `https://` `api.github.com`, `github.com`,
+    `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, compared as exact origins.
+    Reading GitHub's *latest release* answer: no drafts or pre-releases, and file URLs must be exactly
+    `https://github.com/<repo>/releases/download/<tag>/<name>`.
+  - `sha256`: streaming SHA-256 and file hashing (libsodium).
+- **`UpdateService`** (browser process, UI thread). States `not_configured / off / idle / checking /
+  up_to_date / available / downloading / ready / error`, shown on `torfox://settings` through the bridge
+  (`update.status`, `update.subscribe`, `update.check`, `update.download`, `update.install`, settings page
+  only).
+  - Requests use `CefURLRequest` in an off-the-record context of their own, with
+    `UR_FLAG_STOP_ON_REDIRECT`: TorFox checks each `Location` against the allowlist before following it (at
+    most 5). No cookies, no cache, no credentials (`GetAuthCredentials` refuses).
+  - The manifest and signature are limited to 64 KiB, the file to its signed size (at most 1 GiB). The file
+    is hashed while it downloads into `Updates/<name>.part` and renamed only when size and hash match.
+  - Automatic checks: a tick two minutes after start and then every hour. It checks only when the last
+    check (or attempt) was more than a day ago.
+  - *Install*: the file is hashed again, all windows close, and after `CefShutdown`
+    `platform::LaunchUpdate` hashes it once more. On Windows it holds the file open without write sharing
+    while it hashes it and starts the installer
+    (`/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE`, UAC). On macOS it opens the DMG.
+- There is no OS code-signature check: TorFox has no code-signing certificates (it is not distributed
+  through app stores).
 
 ## Security assumptions
 - **Chromium/CEF security:** Chromium's sandbox and site isolation are TorFox's primary defence against
@@ -221,5 +248,7 @@ Each layer is also tested end-to-end with the outer layers switched off (test bu
   not compromised. TorFox does not defend against local malware running with the user's privileges.
 - **Tor:** Tor provides network-level anonymity for traffic routed through it. TorFox does not provide
   Tor Browser's fingerprinting resistance; sites can still fingerprint the browser.
-- **Updates:** update integrity rests on the secrecy of the minisign key held in GitHub Actions secrets and
-  on GitHub's TLS. Until code-signing certificates exist, the OS gives no publisher identity.
+- **Updates:** update integrity rests on the secrecy of the minisign key, held only as a GitHub Actions
+  secret, not on GitHub's TLS. TLS makes it harder for a network attacker to hide new releases from TorFox,
+  which a signature alone cannot prevent (an old answer can never bring back an older release). TorFox has no code-signing certificates, so
+  the OS gives no publisher identity.

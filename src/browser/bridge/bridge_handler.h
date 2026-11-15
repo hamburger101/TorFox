@@ -61,6 +61,9 @@ class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
                          int64_t query_id,
                          CefRefPtr<Callback> callback);
   void NotifyDownloads();
+  bool DispatchUpdates(const bridge::Validated& msg, int browser_id, int64_t query_id,
+                       CefRefPtr<Callback> callback);
+  void NotifyUpdates();
 
   struct Subscriber {
     int browser_id;
@@ -71,6 +74,8 @@ class BridgeHandler : public CefMessageRouterBrowserSide::Handler {
   std::vector<Subscriber> bookmarks_subscribers_;
   std::vector<Subscriber> history_subscribers_;
   std::vector<Subscriber> downloads_subscribers_;
+  std::vector<Subscriber> update_subscribers_;
+  int updates_observer_ = 0;
   int settings_observer_ = 0;
   int places_observer_ = 0;
   int downloads_observer_ = 0;

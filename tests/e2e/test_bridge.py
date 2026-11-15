@@ -120,7 +120,6 @@ class BridgeValidationTest(unittest.TestCase):
     # Semantic checks after validation ------------------------------------------------
     def test_settings_service_refusals(self) -> None:
         for key, value, expected in (
-            ("updates.autoCheck", False, "not_available"),
             ("general.startupPage", "home", "invalid_value"),
             ("search.engine", "google", "invalid_value"),
             # Not settings: always refused (test_privacy.py).

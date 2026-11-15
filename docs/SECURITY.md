@@ -1,6 +1,6 @@
 # Security
 
-> TorFox is in early development, and no release exists yet. Don't use it where security or anonymity
+> TorFox is pre-release, and no release exists yet. Don't use it where security or anonymity
 > matters. [`FEATURE_STATUS.md`](FEATURE_STATUS.md) lists what is verified by test, and on which platform.
 
 ## Reporting a vulnerability
@@ -18,9 +18,10 @@ vulnerability. Include the TorFox version, the platform, and the steps to reprod
 | Unrequested connections (telemetry, background services) | No crash reporter or metrics; Chromium background services turned off; no proxy auto-discovery unless the user turns on the system's proxy settings | Verified for an idle session on Windows |
 | Network observers seeing what you browse in Tor windows, or local DNS revealing it | Bundled official tor; Tor windows use their own context whose only route is tor's SOCKS port (host names resolved by tor); fail closed in three independent layers | Verified on Windows with a scripted tor, and live with the bundled tor ([`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md)) |
 | A Tor window revealing your address through WebRTC, local-network requests, other apps or device access | No WebRTC route but the proxy; local addresses, other apps, camera, microphone and clipboard refused in Tor windows | Verified on Windows |
-| Tampered or downgraded updates | Ed25519 (minisign) signed manifest, SHA-256 per asset, anti-rollback | Not built yet (Stage 7) |
+| Tampered, downgraded or replayed updates | A minisign (Ed25519) signature on the release manifest with the key compiled into TorFox; strictly newer versions and no release older than one already seen; size and SHA-256 of the file after download and again before install; GitHub's hosts only, for every redirect ([`UPDATING.md`](UPDATING.md)) | Verified on Windows against a fake GitHub. Builds have no release key yet, so they never look for updates |
 | Trackers, third-party cookies, HTTP downgrade | EasyPrivacy domain list, third-party cookie blocking, HTTPS-first with a question before http | Verified on Windows; tracker WebSockets and http form posts are not covered ([`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md) §6) |
 | Sites using the camera, microphone or clipboard, or opening other apps | Denied by default; *Ask* asks every time; only checked `mailto:`/`tel:` links reach the OS, after a click and a question | Verified on Windows, except the final hand-off to the mail or phone app |
+| Other programs changing TorFox's installed files | Windows: installed for all users in Program Files, which needs administrator rights to change; the setup and uninstaller refuse while TorFox runs, and an update restarts TorFox as the user who started it, not elevated | Per-user test setup verified on Windows (except that the restarted TorFox is not elevated, which no test can show here); the per-machine setup is tested on CI only ([`STAGE8_FINDINGS.md`](STAGE8_FINDINGS.md)). On macOS the app is wherever the user copies it |
 | Browsing traces left on disk | Clear on exit (after shutdown and again at the next start); Chromium's per-site scores always erased | Verified on Windows |
 
 ## What TorFox does not defend against
@@ -32,6 +33,9 @@ vulnerability. Include the TorFox version, the platform, and the steps to reprod
 - **Files opened after downloading them in a Tor window.** They can connect to the internet without Tor;
   the download prompt says so.
 - **Bugs in Chromium or CEF.** These are fixed only by updating to a newer CEF build. TorFox is only as current as the CEF it ships.
+- **A stolen release key.** Whoever holds the minisign secret key can sign an update that TorFox
+  installs. It exists only as a GitHub Actions secret. TorFox has no code-signing certificates, so neither
+  Windows nor macOS confirms the publisher of the installer.
 - **Certificate revocation between releases.** TorFox turns off Chromium's component updater, which also
   delivers revocation lists (CRLSets). See [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md) §3.
 

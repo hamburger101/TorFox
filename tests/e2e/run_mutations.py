@@ -6,7 +6,10 @@
 
 Each mutation deliberately removes one protection from the source, rebuilds
 the test build, and runs the checks that are supposed to catch it: unit tests
-("unit:<gtest filter>") and end-to-end tests ("e2e:<unittest name>"). A
+("unit:<gtest filter>"), end-to-end tests ("e2e:<unittest name>"), release-
+build platform tests ("platform:<unittest name>") and installer tests
+("installer:<test name>", which first build the per-user test setups of the
+mutated sources with scripts/package_windows.py). A
 mutation is only "killed" if EVERY listed check fails on its own; if any of
 them still passes, that check does not really verify the protection, and the
 mutation "survives" (this script then fails). Sources are always restored,
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -51,6 +55,13 @@ SEARCH = "src/core/url/search.cc"
 SESSION = "src/core/browsing/session.cc"
 STARTUP = "e2e:test_startup.StartupTest"
 CTX = "src/browser/app/context_manager.cc"
+MINISIGN = "src/core/update/minisign.cc"
+RELEASE = "src/core/update/release.cc"
+UPDATER = "src/browser/app/update_service.cc"
+UPD = "e2e:test_updates.UpdateTest"
+ISS = "packaging/windows/TorFox.iss"
+PACKAGER = "scripts/package_windows.py"
+INST = "installer:"
 
 # name -> ([(file, old, new), ...], [checks that must each fail])
 MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
@@ -429,7 +440,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], ["unit:ExternalProtocols.OnlyMailAndPhoneLinksMayOpenAnApp",
         EXT + ".test_other_schemes_never_launch"]),
     "clear-on-exit-skipped": ([
-        (APP, "  clear_data::Clear(normal_profile, clear_at_exit);\n  return 0;", "  return 0;"),
+        (APP, "  clear_data::Clear(normal_profile, clear_at_exit);\n  // Settings > Updates",
+         "  // Settings > Updates"),
     ], [CLEAR + ".test_chosen_data_is_cleared_when_torfox_closes"]),
     "history-kept-at-exit": ([
         (APP, "  if (exit_clear_.history && places_ && places_->places()) {", "  if (false) {"),
@@ -487,6 +499,107 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          "  CefPostTask(TID_UI, base::BindOnce(&BrowserWindow::OpenFirstTabs, self));",
          "  OpenFirstTabs();"),
     ], [STARTUP + ".test_restore_reopens_the_tabs_after_a_normal_exit"]),
+
+    # ----- Updates (Stage 7) -----
+    # The signature over the manifest itself.
+    "minisign-data-signature-ignored": ([
+        (MINISIGN, " ||\n      crypto_sign_verify_detached(sig + 10, digest, sizeof digest, key.key.data()) != 0) {",
+         ") {"),
+    ], ["unit:Minisign.ChangedDataIsRefused",
+        UPD + ".test_a_changed_manifest_or_signed_comment_is_ignored"]),
+    # The signature over the trusted comment (version and time).
+    "minisign-comment-signature-ignored": ([
+        (MINISIGN, """  if (crypto_sign_verify_detached(global, signed_comment.data(), signed_comment.size(),
+                                  key.key.data()) != 0) {
+    return Fail("the trusted comment signature does not match");
+  }
+""", ""),
+    ], ["unit:Minisign.ChangedTrustedCommentIsRefused"]),
+    "manifest-comment-not-compared": ([
+        (RELEASE, """  if (sig.trusted_comment != TrustedComment(*version, *timestamp)) {
+    return Fail("the signed comment does not match the release manifest");
+  }
+""", ""),
+    ], ["unit:Release.ManifestNeedsTheRightKeyAndComment", "unit:Release.ManifestContentRules",
+        UPD + ".test_a_changed_manifest_or_signed_comment_is_ignored"]),
+    "manifest-file-names-unchecked": ([
+        (RELEASE, "    if (!IsValidAssetName(a.name, *version) || a.sha256.size() != 64",
+         "    if (a.name.empty() || a.sha256.size() != 64"),
+    ], ["unit:Release.ManifestContentRules"]),
+    "update-same-version-offered": ([
+        (RELEASE, "  if (CompareVersions(release.version, installed) <= 0) {",
+         "  if (CompareVersions(release.version, installed) < 0) {"),
+    ], ["unit:Release.OnlyNewerReleasesAreOffered",
+        UPD + ".test_older_and_same_versions_are_never_offered"]),
+    "update-old-release-replayable": ([
+        (RELEASE, "  if (release.timestamp < newest_seen) {",
+         "  if (release.timestamp < newest_seen - newest_seen) {"),
+    ], ["unit:Release.OnlyNewerReleasesAreOffered",
+        UPD + ".test_an_older_signed_release_cannot_be_replayed"]),
+    "update-any-host-allowed": ([
+        (RELEASE, """  return std::find(endpoints.allowed_origins.begin(), endpoints.allowed_origins.end(), origin) !=
+         endpoints.allowed_origins.end();""", "  return !endpoints.allowed_origins.empty();"),
+    ], ["unit:Release.OnlyGitHubsHostsAreAllowed",
+        UPD + ".test_downloads_follow_redirects_only_to_allowed_hosts"]),
+    # Both of the updater's own host checks (each redirect, each request).
+    "updater-redirects-unchecked": ([
+        (UPDATER, "      const bool allowed = update::IsAllowedUrl(endpoints_, location);",
+         "      const bool allowed = !location.empty();"),
+        (UPDATER, "    if (!update::IsAllowedUrl(endpoints_, url)) {", "    if (url.empty()) {"),
+    ], [UPD + ".test_downloads_follow_redirects_only_to_allowed_hosts"]),
+    "update-other-repository-files-used": ([
+        (RELEASE, "    if (name.empty() || url != base + name || !IsAllowedUrl(endpoints, url)) {",
+         "    if (name.empty() || !IsAllowedUrl(endpoints, url)) {"),
+    ], ["unit:Release.LatestReleaseAnswer",
+        UPD + ".test_release_files_of_another_repository_are_not_used"]),
+    "update-download-hash-unchecked": ([
+        (UPDATER, """          } else if (r.sha256 != asset_.sha256) {
+            problem = "The downloaded file does not match the signed release, so TorFox deleted it.";
+""", ""),
+    ], [UPD + ".test_a_file_that_does_not_match_the_signed_release_is_deleted"]),
+    "update-not-rechecked-before-install": ([
+        (UPDATER, "  if (!d || d->size != asset_.size || d->sha256 != asset_.sha256) {", "  if (!d) {"),
+    ], [UPD + ".test_a_file_changed_after_its_download_is_not_installed"]),
+    "updates-off-ignored": ([
+        (UPDATER, '  return settings_ && settings_->store().GetBool("updates.enabled");',
+         "  return settings_ != nullptr;"),
+    ], [UPD + ".test_with_updates_off_torfox_never_contacts_github"]),
+    "update-auto-check-setting-ignored": ([
+        (UPDATER, '  if (Enabled() && settings_->store().GetBool("updates.autoCheck") &&\n',
+         "  if (Enabled() &&\n"),
+    ], [UPD + ".test_automatic_checks_can_be_turned_off"]),
+    "update-auto-check-not-daily": ([
+        (UPDATER, "constexpr int64_t kCheckInterval = 24 * 60 * 60;", "constexpr int64_t kCheckInterval = 0;"),
+    ], [UPD + ".test_automatic_checks_happen_once_a_day_and_tell_the_user"]),
+    "update-notice-setting-ignored": ([
+        (UPDATER, '  if (automatic && notify && settings_->store().GetBool("updates.notify")) {',
+         "  if (automatic && notify) {"),
+    ], [UPD + ".test_notices_can_be_turned_off"]),
+
+    # ----- Windows installer (Stage 8) -----
+    "installer-update-does-not-wait": ([
+        (ISS, "    if not WaitForTorFox(Dir, UpdateWaitSeconds) then", "    if False then"),
+    ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it",
+        INST + "test_update_gives_up_when_torfox_stays_open"]),
+    "installer-ignores-running-torfox": ([
+        (ISS, "  while TorFoxRunning(Dir) do\n  begin\n    if WizardSilent then",
+         "  while False do\n  begin\n    if WizardSilent then"),
+    ], [INST + "test_setup_and_uninstall_refuse_while_torfox_is_open"]),
+    "uninstaller-ignores-running-torfox": ([
+        (ISS, "  while TorFoxRunning(Dir) do\n  begin\n    if UninstallSilent then",
+         "  while False do\n  begin\n    if UninstallSilent then"),
+    ], [INST + "test_setup_and_uninstall_refuse_while_torfox_is_open"]),
+    "update-not-restarted": ([
+        (ISS, 'Filename: "{app}\\TorFox.exe"; Flags: nowait runasoriginaluser; Check: IsUpdate\n', ""),
+    ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it"]),
+    "installer-ships-build-files": ([
+        (PACKAGER, "    for name in REQUIRED_FILES + [f for f in OPTIONAL_FILES if (build / f).is_file()]:",
+         "    for name in [p.name for p in build.iterdir() if p.is_file()]:"),
+    ], [INST + "test_install_contents_shortcut_and_uninstall"]),
+    "installer-keeps-nothing-running-check": ([
+        (ISS, "  Result := CheckForMutexes(RunningMutex) or ProgramFolderInUse(Dir);", "  Result := False;"),
+    ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it",
+        INST + "test_setup_and_uninstall_refuse_while_torfox_is_open"]),
 }
 
 
@@ -501,13 +614,28 @@ def build(release: bool = False) -> None:
             raise RuntimeError(f"build of out/{tree} failed")
 
 
+def package_installers() -> None:
+    """The per-user test setups, this version and the next (the update)."""
+    text = (REPO / "CMakeLists.txt").read_text(encoding="utf-8")
+    major, minor, patch = re.search(r"project\(TorFox VERSION ([0-9]+)\.([0-9]+)\.([0-9]+)", text).groups()
+    for version in (f"{major}.{minor}.{patch}", f"{major}.{minor}.{int(patch) + 1}"):
+        result = subprocess.run([sys.executable, "-I", str(REPO / PACKAGER), "--test-peruser",
+                                 "--compression", "none", "--version", version],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            sys.stdout.write(result.stdout[-2000:] + result.stderr[-2000:])
+            raise RuntimeError(f"the {version} test setup could not be built")
+
+
 def check_passes(check: str) -> bool:
     kind, _, name = check.partition(":")
     if kind == "unit":
         cmd = [str(UNIT_EXE), f"--gtest_filter={name}", "--gtest_brief=1"]
     elif kind == "e2e":
         cmd = [sys.executable, "-m", "unittest", name]
-    elif kind == "platform":
+    elif kind in ("platform", "installer"):
+        if kind == "installer":
+            name = f"test_installer_win.PerUserInstallerTest.{name}"
         cmd = [sys.executable, "-m", "unittest", name]
         result = subprocess.run(cmd, cwd=PLATFORM_TESTS, capture_output=True, text=True, timeout=900)
         if "skipped" in result.stderr.lower() and "OK (skipped" in result.stderr:
@@ -542,7 +670,9 @@ def main(names: list[str]) -> int:
         originals: dict[pathlib.Path, bytes] = {}
         try:
             apply(name, edits, originals)
-            build(release=any(c.startswith("platform:") for c in checks))
+            build(release=any(c.startswith(("platform:", INST)) for c in checks))
+            if any(c.startswith(INST) for c in checks):
+                package_installers()
             still_passing = [c for c in checks if check_passes(c)]
         finally:
             for path, data in originals.items():
@@ -553,7 +683,9 @@ def main(names: list[str]) -> int:
         else:
             print(f"{name}: killed by all {len(checks)} check(s)", flush=True)
     # Leave builds of the clean sources behind.
-    build(release=any(c.startswith("platform:") for n in selected for c in MUTATIONS[n][1]))
+    build(release=any(c.startswith(("platform:", INST)) for n in selected for c in MUTATIONS[n][1]))
+    if any(c.startswith(INST) for n in selected for c in MUTATIONS[n][1]):
+        package_installers()
     if survivors:
         print("Surviving mutations:", ", ".join(survivors))
         return 1

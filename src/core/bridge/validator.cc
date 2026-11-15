@@ -147,11 +147,17 @@ const std::array<CommandSpec, 2> kNewTabCommands = {
     Cmd("nav.go", kNavGoArgs),
 };
 
-const std::array<CommandSpec, 4> kSettingsCommands = {
+const std::array<CommandSpec, 9> kSettingsCommands = {
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("settings.get", kNoArgs),
     Cmd("settings.set", kSettingsSetArgs),
     Cmd("app.info", kNoArgs),
+    // Settings > Updates. TorFox decides what each one may do in its state.
+    Cmd("update.status", kNoArgs),
+    Cmd("update.subscribe", kNoArgs, true),
+    Cmd("update.check", kNoArgs),
+    Cmd("update.download", kNoArgs),
+    Cmd("update.install", kNoArgs),
 };
 
 const std::array<CommandSpec, 11> kBookmarksCommands = {

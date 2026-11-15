@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "src/core/privacy/external_protocols.h"
+#include "src/core/update/sha256.h"
 
 namespace torfox::platform {
 
@@ -298,6 +299,35 @@ std::unique_ptr<ChildProcess> LaunchHidden(const std::filesystem::path& exe,
     return nullptr;
   }
   return std::make_unique<MacChildProcess>(pid);
+}
+
+void MarkRunning() {}
+
+const char* UpdatePlatform() {
+#if defined(__aarch64__) || defined(__arm64__)
+  return "macos-arm64";
+#else
+  return "macos-x64";
+#endif
+}
+
+bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, uint64_t size,
+                  std::string* error) {
+  // macOS has no mandatory locks: the disk image is checked again just
+  // before Finder opens it, and macOS checks the image itself when it mounts.
+  const std::optional<update::FileDigest> d = update::HashFile(file, size);
+  if (!d || d->size != size || d->sha256 != sha256) {
+    *error = "the update changed after it was checked";
+    return false;
+  }
+  @autoreleasepool {
+    NSString* str = [NSString stringWithUTF8String:PathToUtf8(file).c_str()];
+    if (!str || ![[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:str]]) {
+      *error = "the disk image could not be opened";
+      return false;
+    }
+  }
+  return true;
 }
 
 long CurrentProcessId() {

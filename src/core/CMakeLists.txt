@@ -9,6 +9,50 @@ torfox_verified_dep(TORFOX_JSON_DIR nlohmann_json header)
 torfox_verified_dep(TORFOX_SQLITE_DIR sqlite source)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# libsodium, for the updater's signature check (Ed25519 and BLAKE2b). The
+# official release, verified by fetch_deps.py with libsodium's minisign key
+# and pinned by SHA-256: on Windows its prebuilt static MSVC library (static
+# runtime, like CEF); on macOS built here from the source release.
+if(WIN32)
+  torfox_verified_dep(TORFOX_SODIUM_DIR libsodium windows-msvc)
+  set(_sodium "${TORFOX_SODIUM_DIR}/libsodium")
+  add_library(torfox_sodium STATIC IMPORTED GLOBAL)
+  set_target_properties(torfox_sodium PROPERTIES
+    IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
+    IMPORTED_LOCATION_RELEASE "${_sodium}/x64/Release/v143/static/libsodium.lib"
+    IMPORTED_LOCATION_DEBUG "${_sodium}/x64/Debug/v143/static/libsodium.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${_sodium}/include"
+    INTERFACE_COMPILE_DEFINITIONS "SODIUM_STATIC=1")
+elseif(APPLE)
+  torfox_verified_dep(TORFOX_SODIUM_SRC libsodium source)
+  include(ExternalProject)
+  set(_sodium "${CMAKE_CURRENT_BINARY_DIR}/libsodium")
+  set(_sodium_cflags "-O2 -fPIC")
+  foreach(_arch IN LISTS CMAKE_OSX_ARCHITECTURES)
+    string(APPEND _sodium_cflags " -arch ${_arch}")
+  endforeach()
+  if(CMAKE_OSX_DEPLOYMENT_TARGET)
+    string(APPEND _sodium_cflags " -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  ExternalProject_Add(torfox_sodium_build
+    SOURCE_DIR "${TORFOX_SODIUM_SRC}"
+    BINARY_DIR "${_sodium}/build"
+    INSTALL_DIR "${_sodium}"
+    CONFIGURE_COMMAND "${TORFOX_SODIUM_SRC}/configure" --prefix=<INSTALL_DIR> --disable-shared
+                      --enable-static --disable-dependency-tracking "CFLAGS=${_sodium_cflags}"
+    BUILD_COMMAND make -j4
+    INSTALL_COMMAND make install
+    BUILD_BYPRODUCTS "${_sodium}/lib/libsodium.a")
+  file(MAKE_DIRECTORY "${_sodium}/include")
+  add_library(torfox_sodium STATIC IMPORTED GLOBAL)
+  set_target_properties(torfox_sodium PROPERTIES
+    IMPORTED_LOCATION "${_sodium}/lib/libsodium.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${_sodium}/include")
+  add_dependencies(torfox_sodium torfox_sodium_build)
+else()
+  message(FATAL_ERROR "TorFox builds for Windows and macOS only.")
+endif()
+
 # SQLite, for history and bookmarks. Deleted rows are overwritten
 # (SECURE_DELETE); extensions and URI file names are compiled out.
 add_library(torfox_sqlite STATIC "${TORFOX_SQLITE_DIR}/sqlite3.c")
@@ -81,6 +125,9 @@ add_library(torfox_core STATIC
   tor/loopback_channel.cc
   tor/onion.cc tor/onion.h
   tor/torrc.cc tor/torrc.h
+  update/minisign.cc update/minisign.h
+  update/release.cc update/release.h
+  update/sha256.cc update/sha256.h
   url/guards.cc url/guards.h
   url/internal_url.cc url/internal_url.h
   url/nav_input.cc url/nav_input.h
@@ -94,6 +141,7 @@ target_include_directories(torfox_core PUBLIC "${CMAKE_SOURCE_DIR}")
 target_include_directories(torfox_core SYSTEM PUBLIC "${TORFOX_JSON_DIR}")
 target_include_directories(torfox_core PUBLIC "${TORFOX_CORE_GEN_DIR}")
 target_link_libraries(torfox_core PUBLIC torfox_sqlite)
+target_link_libraries(torfox_core PRIVATE torfox_sodium)
 if(WIN32)
   # Sockets (tor's control port) and CNG (HMAC, random numbers).
   target_link_libraries(torfox_core PUBLIC ws2_32 bcrypt)

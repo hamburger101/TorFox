@@ -4,7 +4,7 @@
 
 import { LitElement, css, html, nothing } from "lit";
 // CSSOM, not a style attribute: the strict CSP forbids inline styles.
-import { styleMap } from "lit/directives/style-map.js";
+import { styleProps } from "../style-props.js";
 
 import { base } from "../base.js";
 import { call, subscribe, BridgeError } from "../bridge.js";
@@ -394,7 +394,7 @@ export class TorFoxShell extends LitElement {
       data-id=${t.id}
       aria-selected=${active ? "true" : "false"}
       title=${title}
-      style=${styleMap(dragging ? { transform: `translateX(${this.drag?.dx ?? 0}px)` } : {})}
+      style=${styleProps(dragging ? { transform: `translateX(${this.drag?.dx ?? 0}px)` } : {})}
       @pointerdown=${(e: PointerEvent) => this.onTabPointerDown(e, t.id)}
       @pointermove=${(e: PointerEvent) => this.onTabPointerMove(e)}
       @pointerup=${(e: PointerEvent) => this.onTabPointerUp(e, t.id)}
@@ -513,7 +513,7 @@ export class TorFoxShell extends LitElement {
         ${icons.onion}<span>Tor</span><span class="tor-state">${label}</span>
         ${busy
           ? html`<span class="tor-progress" aria-hidden="true"><span class="tor-progress-fill"
-              style=${styleMap({ width: `${Math.max(4, Math.min(100, t.progress))}%` })}></span></span>`
+              style=${styleProps({ width: `${Math.max(4, Math.min(100, t.progress))}%` })}></span></span>`
           : nothing}
       </span>
       ${t.state === "error" && !t.retry

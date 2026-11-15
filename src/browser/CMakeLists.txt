@@ -48,6 +48,29 @@ file(READ "${CMAKE_SOURCE_DIR}/deps.lock.json" _torfox_deps_lock)
 string(JSON TORFOX_TOR_BUNDLE_VERSION GET "${_torfox_deps_lock}" tor tor_browser_version)
 configure_file(app/version.h.in "${TORFOX_GEN_DIR}/src/browser/app/version.h" @ONLY)
 
+# The updater's repository and public key (config/release.json; never secrets).
+file(READ "${CMAKE_SOURCE_DIR}/config/release.json" _torfox_release)
+string(JSON _owner GET "${_torfox_release}" github_owner)
+string(JSON _repo GET "${_torfox_release}" github_repo)
+string(JSON TORFOX_UPDATE_PUBLIC_KEY GET "${_torfox_release}" update_public_key)
+if(NOT _owner MATCHES "^[A-Za-z0-9._-]*$" OR NOT _repo MATCHES "^[A-Za-z0-9._-]*$")
+  message(FATAL_ERROR "config/release.json: github_owner and github_repo may hold only letters, digits, '.', '-' and '_'.")
+endif()
+if(_owner STREQUAL "" OR _repo STREQUAL "")
+  set(TORFOX_UPDATE_REPOSITORY "")
+else()
+  set(TORFOX_UPDATE_REPOSITORY "${_owner}/${_repo}")
+endif()
+if(NOT TORFOX_UPDATE_PUBLIC_KEY STREQUAL "" AND NOT TORFOX_UPDATE_PUBLIC_KEY MATCHES "^RW[A-Za-z0-9+/]+$")
+  message(FATAL_ERROR "config/release.json: update_public_key must be the RW... line of a minisign public key.")
+endif()
+if(TORFOX_UPDATE_PUBLIC_KEY STREQUAL "" OR TORFOX_UPDATE_REPOSITORY STREQUAL "")
+  message(STATUS "TorFox updates: off in this build (config/release.json has no update_public_key)")
+else()
+  message(STATUS "TorFox updates: ${TORFOX_UPDATE_REPOSITORY}, key ${TORFOX_UPDATE_PUBLIC_KEY}")
+endif()
+configure_file(app/release_config.h.in "${TORFOX_GEN_DIR}/src/browser/app/release_config.h" @ONLY)
+
 # ----- Sources ---------------------------------------------------------------
 set(TORFOX_BROWSER_SOURCES
   app/app_common.cc app/app_common.h
@@ -63,6 +86,7 @@ set(TORFOX_BROWSER_SOURCES
   app/settings_service.cc app/settings_service.h
   app/test_log.cc app/test_log.h
   app/session_service.cc app/session_service.h
+  app/update_service.cc app/update_service.h
   app/tor_service.cc app/tor_service.h
   bridge/bridge_handler.cc bridge/bridge_handler.h
   platform/platform.h

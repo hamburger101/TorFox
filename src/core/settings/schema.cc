@@ -67,7 +67,8 @@ constexpr Def String(std::string_view key,
 }
 
 constexpr Status A = Status::kActive;
-constexpr Status P = Status::kPlanned;
+// Status::kPlanned (shown as "Not active yet") is for settings whose feature is
+// not built; every setting of this build is active.
 
 const std::array<Def, 24> kSettings = {
     // General
@@ -98,9 +99,9 @@ const std::array<Def, 24> kSettings = {
     Enum("appearance.theme", "appearance", A, kThemes),
     Bool("appearance.showBookmarksBar", "appearance", A, false),
     // Updates
-    Bool("updates.autoCheck", "updates", P, true),
-    Bool("updates.notify", "updates", P, true),
-    Bool("updates.enabled", "updates", P, true),
+    Bool("updates.enabled", "updates", A, true),
+    Bool("updates.autoCheck", "updates", A, true),
+    Bool("updates.notify", "updates", A, true),
 };
 
 bool IsValidUtf8(std::string_view s) {
