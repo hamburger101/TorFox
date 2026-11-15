@@ -9,7 +9,10 @@
 #include "include/cef_request_context_handler.h"
 #include "include/cef_values.h"
 #include "include/wrapper/cef_helpers.h"
+#include "src/browser/app/content_filter.h"
 #include "src/browser/app/fault_injection.h"
+#include "src/browser/app/privacy_service.h"
+#include "src/browser/app/services.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/platform/platform.h"
 #include "src/core/url/guards.h"
@@ -103,6 +106,24 @@ class ContextManager::Handler : public CefRequestContextHandler {
  public:
   Handler(ContextManager* owner, Kind kind) : owner_(owner), kind_(kind) {}
 
+  // Only reached for requests no browser's client handles (service and
+  // shared workers): Normal's get the tracker and ad blocking tabs get.
+  CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefRefPtr<CefRequest> request,
+      bool is_navigation,
+      bool is_download,
+      const CefString& request_initiator,
+      bool& disable_default_handling) override {
+    if (kind_ != Kind::kNormal) {
+      return nullptr;
+    }
+    PrivacyService* privacy = GetServices().privacy;
+    return new content_filter::ContextRequestHandler(
+        request_initiator.ToString(), nullptr, privacy ? privacy->normal_ads_allowed() : nullptr);
+  }
+
   void OnRequestContextInitialized(CefRefPtr<CefRequestContext> context) override {
     CEF_REQUIRE_UI_THREAD();
     if (owner_) {
@@ -154,14 +175,18 @@ class ContextManager::PrivateHandler : public CefRequestContextHandler {
  public:
   PrivateHandler(ContextManager* owner, PrivateCallback done, bool tor = false,
                  std::function<bool()> tor_gate = nullptr,
-                 std::shared_ptr<const std::atomic<bool>> retired = nullptr)
+                 std::shared_ptr<const std::atomic<bool>> retired = nullptr, bool web = true)
       : owner_(owner),
         done_(std::move(done)),
         tor_(tor),
+        web_(web || tor),
         gate_(tor ? new TorGate(std::move(tor_gate), std::move(retired)) : nullptr) {}
 
   // Only reached for requests no browser's client handles (CEF asks the
-  // browser's client first, and TorFox's tabs always answer).
+  // browser's client first, and TorFox's tabs always answer): service and
+  // shared workers. Tor's gate first, then tracker and ad blocking. Ads
+  // allowed on a site in a private or Tor window are allowed for its tabs
+  // only: these requests belong to no window, so they are always filtered.
   CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
       CefRefPtr<CefBrowser> browser,
       CefRefPtr<CefFrame> frame,
@@ -170,7 +195,10 @@ class ContextManager::PrivateHandler : public CefRequestContextHandler {
       bool is_download,
       const CefString& request_initiator,
       bool& disable_default_handling) override {
-    return gate_;
+    if (!web_) {
+      return gate_;  // TorFox's own requests (the updater's context).
+    }
+    return new content_filter::ContextRequestHandler(request_initiator.ToString(), gate_, nullptr);
   }
 
   void OnRequestContextInitialized(CefRefPtr<CefRequestContext> context) override {
@@ -198,11 +226,12 @@ class ContextManager::PrivateHandler : public CefRequestContextHandler {
   ContextManager* owner_;
   PrivateCallback done_;
   const bool tor_;
+  const bool web_;  // A window's context: its workers' requests are filtered.
   CefRefPtr<TorGate> gate_;
   IMPLEMENT_REFCOUNTING(PrivateHandler);
 };
 
-void ContextManager::CreatePrivate(PrivateCallback done) {
+void ContextManager::CreatePrivate(PrivateCallback done, bool web) {
   CEF_REQUIRE_UI_THREAD();
   if (!internal_ || !normal_) {
     done(nullptr, "TorFox is not ready to open a private window.");
@@ -212,7 +241,8 @@ void ContextManager::CreatePrivate(PrivateCallback done) {
   // on disk, and no storage shared with any other context.
   CefRequestContextSettings settings;
   settings.persist_session_cookies = false;
-  CefRefPtr<PrivateHandler> handler = new PrivateHandler(this, std::move(done));
+  CefRefPtr<PrivateHandler> handler =
+      new PrivateHandler(this, std::move(done), false, nullptr, nullptr, web);
   pending_private_[handler.get()] = CefRequestContext::CreateContext(settings, handler);
 }
 

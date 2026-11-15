@@ -431,6 +431,9 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
   } else if (cmd == "bookmarks.star") {
     window_result(window->StarActivePage(static_cast<int>(GetInt(msg.args, "x").value_or(0)),
                                          static_cast<int>(GetInt(msg.args, "y").value_or(0))));
+  } else if (cmd == "adblock.menu") {
+    window_result(window->ShowShieldMenu(static_cast<int>(GetInt(msg.args, "x").value_or(0)),
+                                         static_cast<int>(GetInt(msg.args, "y").value_or(0))));
   } else if (cmd == "bookmarks.folderMenu") {
     window_result(window->ShowBookmarkFolderMenu(
         GetInt(msg.args, "id").value_or(0), static_cast<int>(GetInt(msg.args, "x").value_or(0)),

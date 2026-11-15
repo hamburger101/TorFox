@@ -193,6 +193,7 @@ class SettingsPageTest(unittest.TestCase):
                                  "appearance.theme", "appearance.showBookmarksBar",
                                  "downloads.askBeforeDownload", "downloads.disableDownloads",
                                  "privacy.httpsFirst", "privacy.blockTrackers",
+                                 "privacy.blockAds", "privacy.adsAllowedSites",
                                  "privacy.blockThirdPartyCookies", "privacy.blockPopups",
                                  "privacy.useSystemProxy",
                                  "privacy.clearOnExit.history", "privacy.clearOnExit.cookies",

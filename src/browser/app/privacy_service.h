@@ -7,9 +7,11 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 
+#include "src/core/adblock/sites.h"
 #include "src/core/privacy/https_first.h"
 
 namespace torfox {
@@ -34,11 +36,20 @@ class PrivacyService {
   bool block_trackers() const { return block_trackers_; }
   bool block_third_party_cookies() const { return block_third_party_cookies_; }
   bool block_popups() const { return block_popups_; }
+  bool block_ads() const { return block_ads_; }
   const https_first::TestPorts* test_ports() const { return test_ports_ ? &*test_ports_ : nullptr; }
 
   // Hosts the user chose to load over http in normal windows (each private
   // window keeps its own). Any thread.
   https_first::Exceptions& normal_exceptions() { return normal_exceptions_; }
+
+  // Sites the user allowed ads on in normal windows (the setting
+  // "privacy.adsAllowedSites"; private and Tor windows keep their own).
+  // Any thread.
+  const std::shared_ptr<adblock::SiteList>& normal_ads_allowed() const { return normal_ads_allowed_; }
+  // Allows or blocks ads again on |host| in normal windows, and saves the
+  // list. False if it could not be saved (nothing changed then).
+  bool SetAdsAllowed(const std::string& host, bool allowed);
 
   // "permissions.camera", "permissions.microphone", "permissions.clipboard".
   // Anything unknown, or a setting that is not available, is kDeny.
@@ -60,7 +71,9 @@ class PrivacyService {
   std::atomic<bool> block_trackers_{true};
   std::atomic<bool> block_third_party_cookies_{true};
   std::atomic<bool> block_popups_{true};
+  std::atomic<bool> block_ads_{true};
   https_first::Exceptions normal_exceptions_;
+  const std::shared_ptr<adblock::SiteList> normal_ads_allowed_ = std::make_shared<adblock::SiteList>();
   std::function<void(bool)> cookie_listener_;
 };
 

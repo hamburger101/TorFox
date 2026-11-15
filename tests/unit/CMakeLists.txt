@@ -13,6 +13,7 @@ target_include_directories(torfox_gtest PRIVATE "${TORFOX_GTEST_DIR}/googletest"
 torfox_third_party_flags(torfox_gtest)
 
 add_executable(torfox_unit_tests
+  adblock_test.cc
   bridge_validator_test.cc
   cmdline_policy_test.cc
   chromium_profile_test.cc

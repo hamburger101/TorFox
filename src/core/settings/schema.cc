@@ -6,6 +6,7 @@
 
 #include <array>
 
+#include "src/core/adblock/sites.h"
 #include "src/core/tor/bridges.h"
 
 namespace torfox::settings {
@@ -74,7 +75,7 @@ constexpr Status A = Status::kActive;
 // Status::kPlanned (shown as "Not active yet") is for settings whose feature is
 // not built; every setting of this build is active.
 
-const std::array<Def, 26> kSettings = {
+const std::array<Def, 28> kSettings = {
     // General
     Enum("general.startupPage", "general", A, kStartupPages),
     // Search Engine
@@ -82,6 +83,9 @@ const std::array<Def, 26> kSettings = {
     // Privacy & Security
     Bool("privacy.httpsFirst", "privacy", A, true),
     Bool("privacy.blockTrackers", "privacy", A, true),
+    Bool("privacy.blockAds", "privacy", A, true),
+    // Normal windows only: private and Tor windows keep their own list in memory.
+    String("privacy.adsAllowedSites", "privacy", A, 65536, &adblock::SitesTextIsValid),
     Bool("privacy.blockThirdPartyCookies", "privacy", A, true),
     Bool("privacy.blockPopups", "privacy", A, true),
     Bool("privacy.useSystemProxy", "privacy", A, false),

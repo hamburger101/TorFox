@@ -96,12 +96,25 @@ add_custom_command(
           "${_trackers}/sources.lock.json"
   COMMENT "Generating the tracker domain table (EasyPrivacy)"
 )
+set(_easylist "${CMAKE_SOURCE_DIR}/third_party/easylist")
+add_custom_command(
+  OUTPUT "${TORFOX_CORE_GEN_DIR}/adblock_data.inc"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${TORFOX_CORE_GEN_DIR}"
+  COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/scripts/gen_adblock.py"
+          "${TORFOX_CORE_GEN_DIR}/adblock_data.inc"
+  DEPENDS "${CMAKE_SOURCE_DIR}/scripts/gen_adblock.py" "${_easylist}/filters.txt"
+          "${_easylist}/sources.lock.json"
+  COMMENT "Generating the ad-blocking rules (EasyList)"
+)
 
 add_library(torfox_core STATIC
   "${TORFOX_CORE_GEN_DIR}/psl_data.inc"
   "${TORFOX_CORE_GEN_DIR}/psl_vectors.inc"
   "${TORFOX_CORE_GEN_DIR}/trackers_data.inc"
+  "${TORFOX_CORE_GEN_DIR}/adblock_data.inc"
   json.cc json.h
+  adblock/filters.cc adblock/filters.h
+  adblock/sites.cc adblock/sites.h
   browsing/chromium_profile.cc browsing/chromium_profile.h
   browsing/context_menu.cc browsing/context_menu.h
   browsing/places.cc browsing/places.h
@@ -139,6 +152,11 @@ add_library(torfox_core STATIC
   util/utf8.cc util/utf8.h
 )
 SET_COMMON_TARGET_PROPERTIES(torfox_core)
+if(MSVC)
+  # One section per EasyList rule string (about 78,000): more than an object file
+  # holds without /bigobj.
+  set_source_files_properties(adblock/filters.cc PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 target_include_directories(torfox_core PUBLIC "${CMAKE_SOURCE_DIR}")
 target_include_directories(torfox_core SYSTEM PUBLIC "${TORFOX_JSON_DIR}")
 target_include_directories(torfox_core PUBLIC "${TORFOX_CORE_GEN_DIR}")

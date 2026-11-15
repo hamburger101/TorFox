@@ -18,6 +18,8 @@ constexpr char kHttpsFirst[] = "privacy.httpsFirst";
 constexpr char kBlockTrackers[] = "privacy.blockTrackers";
 constexpr char kBlockCookies[] = "privacy.blockThirdPartyCookies";
 constexpr char kBlockPopups[] = "privacy.blockPopups";
+constexpr char kBlockAds[] = "privacy.blockAds";
+constexpr char kAdsAllowedSites[] = "privacy.adsAllowedSites";
 
 }  // namespace
 
@@ -44,9 +46,37 @@ void PrivacyService::Refresh(const std::string& key) {
   const bool cookies = get(kBlockCookies);
   const bool changed = cookies != block_third_party_cookies_.exchange(cookies);
   block_popups_ = get(kBlockPopups);
+  block_ads_ = get(kBlockAds);
+  if (key.empty() || key == kAdsAllowedSites) {
+    normal_ads_allowed_->Set(settings_ ? adblock::ParseSites(settings_->store().GetString(kAdsAllowedSites))
+                                       : std::vector<std::string>());
+  }
   if ((changed || key == kBlockCookies) && cookie_listener_) {
     cookie_listener_(cookies);
   }
+}
+
+bool PrivacyService::SetAdsAllowed(const std::string& host, bool allowed) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!settings_) {
+    return false;
+  }
+  adblock::SiteList list;
+  list.Set(normal_ads_allowed_->Get());
+  if (allowed) {
+    if (list.Covers(host)) {
+      return true;  // Already allowed.
+    }
+    if (!list.Add(host)) {
+      return false;  // Not a host name, or the list is full.
+    }
+  } else if (!list.Remove(host)) {
+    return true;  // Not allowed: nothing to do.
+  }
+  // The observer (Refresh) updates the shared list once the setting is saved.
+  const SettingsService::ChangeResult r =
+      settings_->Change(kAdsAllowedSites, Json(adblock::SitesText(list.Get())));
+  return r == SettingsService::ChangeResult::kOk || r == SettingsService::ChangeResult::kUnchanged;
 }
 
 PrivacyService::Permission PrivacyService::PermissionFor(const std::string& setting) const {

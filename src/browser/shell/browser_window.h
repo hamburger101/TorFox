@@ -20,6 +20,7 @@
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
 #include "src/browser/platform/platform.h"
+#include "src/core/adblock/sites.h"
 #include "src/core/browsing/places.h"
 #include "src/core/browsing/session.h"
 #include "src/core/browsing/shortcuts.h"
@@ -94,6 +95,10 @@ class BrowserWindow : public CefWindowDelegate {
   // Hosts this private window may load over http (HTTPS-First); normal
   // windows share PrivacyService::normal_exceptions().
   https_first::Exceptions& https_exceptions() { return https_exceptions_; }
+  // Sites the user allowed ads on: in normal windows the saved setting
+  // (PrivacyService::normal_ads_allowed), in a private or Tor window its own
+  // list, forgotten when it closes. Read by its tabs on the network thread.
+  const std::shared_ptr<adblock::SiteList>& ads_allowed() const { return ads_allowed_; }
   // A short message in the address bar.
   void ShowNotice(const std::string& text);
   // The tab the window shows (0 while it has none).
@@ -118,6 +123,8 @@ class BrowserWindow : public CefWindowDelegate {
   void OnRendererCrashed(TabClient* client);
   // A Tor window's tab could not load because tor is not connected yet.
   void OnTorHeldBack(int tab_id);
+  // The tab blocked more ads or trackers (counts in TabClient).
+  void OnBlockedCountChanged(int tab_id);
   void OpenWebUrlInNewTab(std::string url, bool foreground, int opener_tab_id);
   void HandleCommand(browsing::ShortcutCommand command);
 
@@ -171,6 +178,10 @@ class BrowserWindow : public CefWindowDelegate {
   // The star in the address bar: bookmarks the page, or, if it is already
   // bookmarked, shows a menu at |x|,|y| (shell coordinates) to remove or edit.
   Result StarActivePage(int x, int y);
+  // The shield in the address bar: what was blocked on the page, and a menu
+  // at |x|,|y| (shell coordinates) to allow ads on the site or block them
+  // again.
+  Result ShowShieldMenu(int x, int y);
   void ShowAppMenu(int x, int y);
   Result ShowBookmarkFolderMenu(int64_t folder_id, int x, int y);
   void FocusActiveContent();
@@ -236,6 +247,8 @@ class BrowserWindow : public CefWindowDelegate {
   void FillBookmarkMenu(CefRefPtr<CefMenuModel> model, int64_t folder, int depth,
                         std::vector<std::string>* urls, int* next_submenu_id);
   Json StateJson();
+  // The address bar's shield for |tab|: null unless it shows a web page.
+  Json ShieldJson(const Tab& tab) const;
   Json TorJson() const;
   // The toolbar's update button: null, or the ready version.
   static Json UpdateJson();
@@ -285,6 +298,7 @@ class BrowserWindow : public CefWindowDelegate {
   };
   std::vector<Prompt> prompts_;
   https_first::Exceptions https_exceptions_;
+  const std::shared_ptr<adblock::SiteList> ads_allowed_;
 
   // Find bar.
   bool find_open_ = false;

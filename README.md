@@ -26,6 +26,9 @@ official Tor client.
   the network. Tor windows suggest bookmarks only.
 - **Download protection:** *Ask before downloading* (on by default) and *Disable downloads*, which blocks
   every kind of download.
+- **Ad blocking:** a built-in ad blocker with the EasyList filters: ad requests are blocked before they
+  are sent, ad boxes are hidden and ad pop-ups are blocked, in every window (Tor windows too). The shield
+  next to the address bar shows what it blocked and can allow ads on a site.
 - **Privacy:** tracker blocking, third-party cookie blocking, HTTPS-first, pop-up blocking, permissions
   denied unless allowed, WebRTC leak protection, clearing data on exit, private windows, and no telemetry
   (a test checks that TorFox contacts nothing on start-up).

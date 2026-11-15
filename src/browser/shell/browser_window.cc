@@ -16,6 +16,7 @@
 #include "src/browser/app/context_manager.h"
 #include "src/browser/app/download_service.h"
 #include "src/browser/app/places_service.h"
+#include "src/browser/app/privacy_service.h"
 #include "src/browser/app/services.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
@@ -54,6 +55,9 @@ constexpr char kTorLocalRefused[] =
 constexpr int kAppMenuBase = 1000;  // + browsing::Command
 constexpr int kStarRemove = 1;
 constexpr int kStarEdit = 2;
+constexpr int kShieldAllow = 3;
+constexpr int kShieldBlock = 4;
+constexpr int kShieldSettings = 5;
 constexpr int kBookmarkMenuEmpty = 90000;
 constexpr int kBookmarkSubmenuBase = 100000;
 constexpr std::size_t kMaxBookmarkMenuItems = 500;
@@ -228,7 +232,9 @@ BrowserWindow::BrowserWindow(std::string first_url, bool private_window, bool to
       web_context_(std::move(web_context)),
       tor_retired_(tor && GetServices().contexts ? GetServices().contexts->TorRetired(web_context_)
                                                  : nullptr),
-      shell_height_(std::make_shared<int>(kStripHeight + kToolbarHeight)) {}
+      shell_height_(std::make_shared<int>(kStripHeight + kToolbarHeight)),
+      ads_allowed_(!private_ && GetServices().privacy ? GetServices().privacy->normal_ads_allowed()
+                                                      : std::make_shared<adblock::SiteList>()) {}
 
 CefRefPtr<CefBrowserView> BrowserWindow::CreateView(BrowserRole role,
                                                     int tab_id,
@@ -939,6 +945,121 @@ BrowserWindow::Result BrowserWindow::StarActivePage(int x, int y) {
   return {};
 }
 
+Json BrowserWindow::ShieldJson(const Tab& t) const {
+  const std::string scheme = guards::SchemeOf(t.url);
+  if (!t.client || t.client->role() != BrowserRole::kWebTab ||
+      (scheme != "http" && scheme != "https")) {
+    return Json(nullptr);
+  }
+  PrivacyService* privacy = GetServices().privacy;
+  const bool enabled = privacy && privacy->block_ads();
+  const bool allowed = ads_allowed_->Covers(guards::HostOf(t.url));
+  return {{"enabled", enabled},
+          {"allowed", allowed},
+          {"ads", t.client->ads_blocked()},
+          {"trackers", t.client->trackers_blocked()}};
+}
+
+void BrowserWindow::OnBlockedCountChanged(int tab_id) {
+  if (tab_id != active_tab_id_ || state_subscribers_.empty() || closing_window_) {
+    return;
+  }
+  if (const Tab* t = FindTab(tab_id)) {
+    PushEvent({{"type", "shield"}, {"tab", tab_id}, {"shield", ShieldJson(*t)}});
+  }
+}
+
+BrowserWindow::Result BrowserWindow::ShowShieldMenu(int x, int y) {
+  Tab* t = ActiveTab();
+  if (!t || ShieldJson(*t).is_null()) {
+    return {false, "Ads are blocked on web pages only."};
+  }
+  PrivacyService* privacy = GetServices().privacy;
+  const bool enabled = privacy && privacy->block_ads();
+  const std::string host = guards::HostOf(t->url);
+  const bool allowed = ads_allowed_->Covers(host);
+  const int ads = t->client->ads_blocked();
+  const int trackers = t->client->trackers_blocked();
+  const int tab_id = t->id;
+  // Allowing ads on "www.example.com" allows them on example.com, which
+  // covers www too. Blocking them again removes every entry covering the
+  // page's host.
+  std::string site = host;
+  if (site.rfind("www.", 0) == 0 && site.find('.', 4) != std::string::npos) {
+    site.erase(0, 4);
+  }
+
+  CefRefPtr<BrowserWindow> self = this;
+  CefRefPtr<menus::Delegate> delegate =
+      new menus::Delegate([self, site, host, tab_id](int id, cef_event_flags_t) {
+        if (id == kShieldSettings) {
+          self->OpenInternalPage("settings");
+          return;
+        }
+        if (id != kShieldAllow && id != kShieldBlock) {
+          return;
+        }
+        const bool allow = id == kShieldAllow;
+        const std::string& name = allow ? site : host;
+        bool ok = false;
+        if (!self->private_) {
+          PrivacyService* privacy = GetServices().privacy;
+          ok = privacy && privacy->SetAdsAllowed(name, allow);
+        } else if (allow) {
+          ok = self->ads_allowed_->Covers(name) || self->ads_allowed_->Add(name);
+        } else {
+          self->ads_allowed_->Remove(name);
+          ok = true;
+        }
+        test_log::Event("ads_allowed_changed", {{"site", name}, {"allowed", allow}, {"ok", ok}});
+        if (!ok) {
+          self->ShowNotice(allow ? "Ads could not be allowed on " + site + "."
+                                 : "The change could not be saved.");
+          return;
+        }
+        // Reload the page the menu was for, so the change shows.
+        if (Tab* tab = self->FindTab(tab_id); tab && tab->client && tab->client->browser()) {
+          tab->client->browser()->Reload();
+        }
+        self->PushState();
+      });
+  CefRefPtr<CefMenuModel> model = CefMenuModel::CreateMenuModel(delegate);
+  // The first line says what happened on this page; it is not a command.
+  constexpr int kInfo = 90;
+  std::string info;
+  if (!enabled) {
+    info = "Ad blocking is off";
+  } else if (allowed) {
+    info = "Ads are allowed on this site";
+  } else {
+    info = std::to_string(ads) + (ads == 1 ? " ad" : " ads") + " blocked on this page";
+  }
+  if (trackers > 0) {
+    info += ", " + std::to_string(trackers) + (trackers == 1 ? " tracker" : " trackers") + " blocked";
+  }
+  model->AddItem(kInfo, info);
+  model->SetEnabled(kInfo, false);
+  model->AddSeparator();
+  if (enabled) {
+    const std::string when = private_ ? " until this window closes" : "";
+    if (allowed) {
+      model->AddItem(kShieldBlock, "Block ads on " + site + " again");
+    } else {
+      model->AddItem(kShieldAllow, "Allow ads on " + site + when);
+    }
+  }
+  model->AddItem(kShieldSettings, "Ad blocking settings");
+  const CefPoint point = ShellToScreen(x, y);
+  CefRefPtr<CefWindow> window = window_;
+  CefPostTask(TID_UI, base::BindOnce(
+                          [](CefRefPtr<CefWindow> w, CefRefPtr<CefMenuModel> m,
+                             CefRefPtr<menus::Delegate> d, CefPoint p) {
+                            menus::Show(w, m, d, p, CEF_MENU_ANCHOR_TOPRIGHT, "shield");
+                          },
+                          window, model, delegate, point));
+  return {};
+}
+
 void BrowserWindow::ShowAppMenu(int x, int y) {
   using browsing::Command;
   CefRefPtr<BrowserWindow> self = this;
@@ -1524,7 +1645,8 @@ Json BrowserWindow::StateJson() {
              {"canGoForward", t.can_forward},
              {"bookmarkable", bookmarkable},
              {"bookmarked", bookmarked},
-             {"zoom", zoom}};
+             {"zoom", zoom},
+             {"shield", ShieldJson(t)}};
     }
   }
   Json update = UpdateJson();

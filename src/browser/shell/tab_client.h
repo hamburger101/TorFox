@@ -19,6 +19,7 @@
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
 #include "src/browser/platform/platform.h"
+#include "src/core/adblock/sites.h"
 #include "src/core/privacy/https_first.h"
 
 namespace torfox {
@@ -66,6 +67,9 @@ class TabClient : public CefClient,
   // The main-frame URL held back because tor was not connected (UI
   // thread); the window loads it once tor connects.
   std::string TakeTorPendingUrl();
+  // Ads and trackers blocked for the page the tab shows (any thread).
+  int ads_blocked() const { return ads_blocked_.load(); }
+  int trackers_blocked() const { return trackers_blocked_.load(); }
 
   // CefClient
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
@@ -225,11 +229,19 @@ class TabClient : public CefClient,
                                  int error_code,
                                  const CefString& error_string) override;
 
-  // CefResourceRequestHandler (IO thread)
+  // CefResourceRequestHandler (IO thread). Web tabs use a handler per
+  // request instead, which also knows the request's initiator and calls
+  // BeforeResourceLoad.
   ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser,
                                    CefRefPtr<CefFrame> frame,
                                    CefRefPtr<CefRequest> request,
                                    CefRefPtr<CefCallback> callback) override;
+  // Every request policy (IO thread). |initiator| is the origin of the
+  // document that made the request, or empty if not known.
+  ReturnValue BeforeResourceLoad(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 CefRefPtr<CefRequest> request,
+                                 const std::string& initiator);
   void OnProtocolExecution(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
                            CefRefPtr<CefRequest> request,
@@ -257,6 +269,17 @@ class TabClient : public CefClient,
   https_first::Exceptions* HttpsExceptions() const;
   // A mailto: or tel: link: asks, then opens the app (UI thread).
   void OpenExternalApp(CefRefPtr<CefBrowser> browser, const std::string& url, bool user_gesture);
+  // Ad blocking (EasyList), for web tabs: whether it applies to a page
+  // whose top-level document is |top_url| (off in Settings, or ads allowed
+  // on the site). Any thread.
+  bool BlocksAdsOn(const std::string& top_url) const;
+  // Element hiding for the document |frame| just started loading (UI thread).
+  void HideAds(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame);
+  // One more request blocked: counts it and tells the window soon (any
+  // thread). ResetBlocked starts the counts again for a new page.
+  void CountBlocked(std::atomic<int>& counter);
+  void ResetBlocked();
+  void NotifyBlocked();  // UI thread.
   // A native question for this tab; |done| always runs (false if no
   // prompt could be shown).
   std::shared_ptr<platform::PromptHandle> Ask(const char* kind,
@@ -273,6 +296,12 @@ class TabClient : public CefClient,
   const bool tor_;
   const std::shared_ptr<TorService> tor_service_;  // Tor windows only.
   const std::shared_ptr<const std::atomic<bool>> tor_retired_;  // Tor windows only.
+  // The window's sites with ads allowed (web tabs only), read on the
+  // network thread; the window may close first.
+  const std::shared_ptr<adblock::SiteList> ads_allowed_;
+  std::atomic<int> ads_blocked_{0};
+  std::atomic<int> trackers_blocked_{0};
+  std::atomic<bool> notify_pending_{false};
   std::string tor_pending_url_;
   CefRefPtr<BrowserWindow> window_;  // Cleared in OnBeforeClose.
   CefRefPtr<CefMessageRouterBrowserSide> router_;  // Internal roles only.

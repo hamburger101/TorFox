@@ -97,6 +97,7 @@ set(TORFOX_BROWSER_SOURCES
   app/browser_app.cc app/browser_app.h
   app/browser_registry.cc app/browser_registry.h
   app/fault_injection.cc app/fault_injection.h
+  app/content_filter.cc app/content_filter.h
   app/context_manager.cc app/context_manager.h
   app/download_service.cc app/download_service.h
   app/renderer_app.cc app/renderer_app.h

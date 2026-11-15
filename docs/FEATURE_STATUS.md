@@ -14,8 +14,9 @@ Legend:
 **macOS:** the build files and platform code exist but have never been compiled, so every macOS entry is
 ⬜ or 🟡 until CI builds and tests them.
 
-Last updated: Stage 10 (2026-11-15): automatic updates, What's new, Settings > Memory and security polish
-([`STAGE10_FINDINGS.md`](STAGE10_FINDINGS.md)). All 23 of Stage 10's mutations were run and caught (§5 there). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
+Last updated: Stage 11 (2026-11-15): the built-in ad blocker ([`STAGE11_FINDINGS.md`](STAGE11_FINDINGS.md)).
+Stage 10 (automatic updates, What's new, Settings > Memory and security polish) is in
+[`STAGE10_FINDINGS.md`](STAGE10_FINDINGS.md); all 23 of its mutations were run and caught (§5 there). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
 [`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md), [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md),
 [`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md), [`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md),
 [`STAGE6_FINDINGS.md`](STAGE6_FINDINGS.md), [`STAGE7_FINDINGS.md`](STAGE7_FINDINGS.md),
@@ -64,6 +65,17 @@ made with the bundled tor on the real Tor network.
 | Downloads | Drag-out of links/images; print to PDF | 🟡 | 🟡 | Not testable by automation (findings §6) |
 | Privacy | Tracker blocking (EasyPrivacy domains, third-party requests only; setting) | ✅ M | ⬜ | `TrackerTest`, `Trackers.*` |
 | Privacy | Tracker blocking for WebSockets | ❌ | ⬜ | CEF does not show WebSockets to the request guard (Stage 4 findings §6) |
+| Privacy | Tracker and ad blocking for the requests a service worker makes itself, in normal, private and Tor windows | ✅ M | ⬜ | `WorkerTest`, `AdBlockTorWorkerTest` (Stage 11 findings §2.1) |
+| Privacy | Ad blocking (EasyList, compiled in): ad requests cancelled before they are sent, in normal, private and Tor windows (setting) | ✅ M | ⬜ | `test_adblock.py`, `AdBlockTorTest`, `AdBlock.*` |
+| Privacy | Ad blocking: `$third-party`, `domain=`, exceptions, `$important`, and page exceptions (`$document`, `$elemhide`, `$generichide`, `$genericblock`) | ✅ M | ⬜ | `AdBlock.*` (unit), `test_third_party_rules_leave_a_sites_own_requests_alone` |
+| Privacy | Ad blocking never blocks a page the user opens (`$document` blocking rules are ignored) | ✅ M | ⬜ | `test_pages_are_never_blocked`, `AdBlock.RulesNotUnderstoodAreNeverApplied` |
+| Privacy | Ad boxes hidden: every site's rules in the top-level document, a site's own rules in its frames; selectors that could escape their style rule are ignored | ✅ M | ⬜ | `AdBoxTest`, `AdBlockTorTest`, `AdBlock.ElementHiding`, `AdBlock.SelectorsThatCouldEscapeTheirRuleAreIgnored` |
+| Privacy | Ad pop-ups (`$popup` rules) blocked, even after a click | ✅ M | ⬜ | `AdPopupTest` |
+| Privacy | Shield in the toolbar: what was blocked on the page; allow ads on a site and block them again (saved for normal windows, kept in memory by each private or Tor window) | ✅ M | ⬜ | `ShieldMenuTest`, `PrivateWindowAdBlockTest`, `AdBlockTorTest` |
+| Privacy | Ad blocking for WebSockets | ❌ | ⬜ | `test_ad_websockets_are_blocked` (expected failure): CEF does not show WebSockets to the request guard |
+| Privacy | Hiding the boxes of blocked images and frames | ⬜ | ⬜ | Not done: a blocked image shows as a broken image unless a hiding rule covers its box (Stage 11 findings §3) |
+| Privacy | uBlock Origin's own filter syntax: scriptlets (`##+js`), procedural filters, `$redirect`, `$csp`, `$removeparam`, regular expressions | ⛔ | ⛔ | Ignored rule by rule: TorFox applies only rules it fully understands (Stage 11 findings §1) |
+| Privacy | Filter list updates between TorFox releases | ⛔ | ⛔ | The list is compiled in and changes only with a signed TorFox update; the ad blocker downloads nothing (Stage 11 findings §1) |
 | Privacy | Third-party cookie blocking (setting applies at once) | ✅ M | ⬜ | `CookieTest` |
 | Privacy | JavaScript optimizer (setting): off in Tor windows by default, or off everywhere; Chromium starts those renderers with `--js-flags=--disable-optimizing-compilers` | ✅ M | ⬜ | `test_js_optimizer.py` (each tab's renderer command line, with normal-window controls); what V8 does with the switch is Chromium's |
 | Privacy | HTTPS-first: upgrade, question before http, per-session exceptions, no redirect loop (setting) | ✅ M | ⬜ | `HttpsFirstTest`, `HttpsFirst.*` |

@@ -18,6 +18,16 @@ interface TabState {
   loading: boolean;
 }
 
+/** The ad blocker on the page a tab shows (null: not a web page). */
+interface ShieldState {
+  /** Settings > Privacy & Security > Block ads. */
+  enabled: boolean;
+  /** The user allowed ads on this site. */
+  allowed: boolean;
+  ads: number;
+  trackers: number;
+}
+
 interface NavState {
   url?: string;
   internal?: boolean;
@@ -27,6 +37,7 @@ interface NavState {
   bookmarkable?: boolean;
   bookmarked?: boolean;
   zoom?: number;
+  shield?: ShieldState | null;
 }
 
 interface TorStatus {
@@ -63,6 +74,7 @@ type ShellEvent =
   | { type: "focusAddress" }
   | { type: "focusFind" }
   | { type: "star" }
+  | { type: "shield"; tab: number; shield: ShieldState | null }
   | { type: "notice"; text: string }
   | { type: "suggestOpened"; ok: boolean };
 
@@ -245,6 +257,12 @@ export class TorFoxShell extends LitElement {
           this.editing = false;
           this.notice = "";
           this.input?.blur();
+        }
+        return;
+      case "shield":
+        // More was blocked on the page the window shows.
+        if (e.tab === this.activeId) {
+          this.nav = { ...this.nav, shield: e.shield };
         }
         return;
       case "find":
@@ -475,6 +493,23 @@ export class TorFoxShell extends LitElement {
     const button = this.el<HTMLElement>("#star");
     const at = button ? anchor(button, "right") : { x: 0, y: 0 };
     await this.run("bookmarks.star", at);
+  }
+
+  /** The ad blocker's button: what it blocked on this page, and its menu. */
+  private renderShield(): unknown {
+    const shield = this.nav.shield;
+    if (!shield) {
+      return nothing;
+    }
+    const on = shield.enabled && !shield.allowed;
+    const blocked = shield.ads + shield.trackers;
+    const title = !shield.enabled ? "Ad blocking is off"
+      : shield.allowed ? "Ads are allowed on this site"
+      : blocked === 0 ? "Ad blocker: nothing blocked on this page"
+      : `Ad blocker: ${shield.ads} ${shield.ads === 1 ? "ad" : "ads"} and ${shield.trackers} ${shield.trackers === 1 ? "tracker" : "trackers"} blocked on this page`;
+    return html`<button class="icon shield ${on ? "on" : "off"}" id="shield" title=${title} aria-label=${title}
+      @click=${(e: MouseEvent) => this.run("adblock.menu", anchor(e.currentTarget as Element, "right"))}>${icons.shield}${on && blocked > 0
+        ? html`<span class="badge">${blocked > 99 ? "99+" : blocked}</span>` : nothing}</button>`;
   }
 
   // ----- Tabs -----
@@ -728,6 +763,7 @@ export class TorFoxShell extends LitElement {
                 @click=${() => this.star()}>${nav.bookmarked ? icons.starFilled : icons.star}</button>`
             : nothing}
         </form>
+        ${this.renderShield()}
         ${this.downloads.count > 0
           ? html`<button class="icon downloads ${this.downloads.active > 0 ? "active" : ""}" id="downloads"
               title=${this.downloads.active > 0 ? `Downloads (${this.downloads.active} in progress)` : "Downloads"}
@@ -777,8 +813,30 @@ export class TorFoxShell extends LitElement {
       width: 15px;
       height: 15px;
     }
-    .downloads {
+    .downloads,
+    .shield {
       position: relative;
+    }
+    .shield.on {
+      color: var(--accent);
+    }
+    .shield.off {
+      opacity: 0.6;
+    }
+    .shield .badge {
+      position: absolute;
+      top: 2px;
+      right: 0;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 3px;
+      border-radius: 7px;
+      background: var(--accent-strong);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 14px;
+      text-align: center;
     }
     .downloads.active {
       color: var(--accent);

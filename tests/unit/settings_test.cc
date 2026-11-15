@@ -48,6 +48,8 @@ TEST(SettingsSchema, SaferDefaults) {
   EXPECT_EQ(def("search.engine"), Json("duckduckgo"));
   EXPECT_EQ(def("privacy.httpsFirst"), Json(true));
   EXPECT_EQ(def("privacy.blockTrackers"), Json(true));
+  EXPECT_EQ(def("privacy.blockAds"), Json(true));
+  EXPECT_EQ(def("privacy.adsAllowedSites"), Json(""));
   EXPECT_EQ(def("privacy.blockThirdPartyCookies"), Json(true));
   EXPECT_EQ(def("privacy.blockPopups"), Json(true));
   EXPECT_EQ(def("privacy.jsOptimizer"), Json("off-in-tor"));
@@ -68,6 +70,7 @@ TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
   const std::set<std::string_view> active = {
       "general.startupPage", "search.engine", "appearance.theme", "appearance.showBookmarksBar", "downloads.askBeforeDownload",
       "downloads.disableDownloads", "privacy.httpsFirst", "privacy.blockTrackers",
+      "privacy.blockAds", "privacy.adsAllowedSites",
       "privacy.blockThirdPartyCookies", "privacy.blockPopups", "privacy.useSystemProxy",
       "privacy.jsOptimizer",
       "privacy.clearOnExit.history",
@@ -105,6 +108,15 @@ TEST(SettingsSchema, ValidatesTypesAndConstraints) {
   EXPECT_FALSE(IsValid(*custom, Json(std::string(custom->max_length + 1, 'a'))));
   EXPECT_FALSE(IsValid(*custom, Json(std::string("a\x01b"))));
   EXPECT_FALSE(IsValid(*custom, Json(std::string("bad\xFF"))));
+
+  // Sites where ads are allowed: host names, one per line.
+  const Def* ads = Find("privacy.adsAllowedSites");
+  ASSERT_NE(ads, nullptr);
+  EXPECT_TRUE(IsValid(*ads, Json("")));
+  EXPECT_TRUE(IsValid(*ads, Json("example.com\nshop.example.org\n")));
+  EXPECT_FALSE(IsValid(*ads, Json("https://example.com/\n")));
+  EXPECT_FALSE(IsValid(*ads, Json("example.com shop.test")));
+  EXPECT_FALSE(IsValid(*ads, Json(true)));
 
   EXPECT_EQ(Find("no.such.key"), nullptr);
 }

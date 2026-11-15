@@ -140,6 +140,22 @@ export const SETTINGS: Record<string, SettingLabel> = {
     description: "Block other sites' requests to known tracking domains (EasyPrivacy list).",
     group: "Browsing protection",
   },
+  "privacy.blockAds": {
+    title: "Block ads",
+    description:
+      "Block ads and hide the boxes they leave, with the EasyList filters built into TorFox, in " +
+      "every window (Tor windows too). Sites can tell that ads are blocked. To allow ads on a " +
+      "site, use the shield next to the address bar.",
+    group: "Browsing protection",
+  },
+  "privacy.adsAllowedSites": {
+    title: "Sites with ads allowed",
+    description:
+      "For normal windows: one site per line, such as example.com; a site covers its subdomains. " +
+      "Private and Tor windows keep their own list, which is forgotten when they close.",
+    group: "Browsing protection",
+    invalid: "Each line must be a site name such as example.com, at most 1000 of them. Nothing was saved.",
+  },
   "privacy.blockThirdPartyCookies": {
     title: "Block third-party cookies",
     description: "Stop embedded sites from setting or reading cookies.",

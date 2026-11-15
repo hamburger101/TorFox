@@ -35,6 +35,7 @@
 #include "src/browser/shell/browser_window.h"
 #include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
+#include "src/core/adblock/filters.h"
 #include "src/core/cmdline/policy.h"
 #include "src/core/settings/store.h"
 #include "src/core/update/whats_new.h"
@@ -236,6 +237,15 @@ void BrowserApp::OnContextInitialized() {
   // Settings > Privacy & Security.
   privacy_ = std::make_unique<PrivacyService>(settings_.get(), options_.https_test_ports);
   g_services.privacy = privacy_.get();
+  // The ad blocker's rules (EasyList) take a few tens of milliseconds to
+  // index: on another thread, so the first window does not wait. A request
+  // that needs them sooner waits for them (adblock::BuiltIn).
+  CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce([] {
+                const adblock::Engine& engine = adblock::BuiltIn();
+                test_log::Event("adblock_ready", {{"requestRules", engine.request_rules()},
+                                                  {"hidingRules", engine.hiding_rules()},
+                                                  {"ignored", engine.ignored_rules()}});
+              }));
   g_services.startup_notice = startup_notice_;
   g_services.whats_new_from = whats_new_from_;
   g_services.whats_new_verified = whats_new_verified_;

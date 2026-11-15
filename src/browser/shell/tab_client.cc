@@ -14,6 +14,7 @@
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/app_common.h"
+#include "src/browser/app/content_filter.h"
 #include "src/browser/app/download_service.h"
 #include "src/browser/app/fault_injection.h"
 #include "src/browser/app/privacy_service.h"
@@ -24,15 +25,16 @@
 #include "src/browser/shell/browser_window.h"
 #include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
+#include "src/core/adblock/filters.h"
 #include "src/core/browsing/context_menu.h"
 #include "src/core/browsing/places.h"
 #include "src/core/browsing/shortcuts.h"
 #include "src/core/downloads/policy.h"
 #include "src/core/privacy/external_protocols.h"
-#include "src/core/privacy/trackers.h"
 #include "src/core/tor/onion.h"
 #include "src/core/url/guards.h"
 #include "src/core/url/internal_url.h"
+#include "src/core/json.h"
 #include "src/core/url/nav_input.h"
 
 namespace torfox {
@@ -68,7 +70,73 @@ bool IsWebUrl(const std::string& url) {
   return scheme == "http" || scheme == "https";
 }
 
+// The top-level document of a request's page, as well as the network thread
+// knows it: the main frame's address, unless the request itself names
+// another site (the tab has just started showing a page of that site; the
+// main frame's own requests then name the page as their initiator).
+std::string TopUrlOf(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                     const std::string& initiator, const std::string& first_party) {
+  CefRefPtr<CefFrame> main = browser ? browser->GetMainFrame() : nullptr;
+  const std::string main_url = main ? main->GetURL().ToString() : std::string();
+  std::string top = content_filter::TopUrl(main_url, first_party);
+  if (top != main_url && frame && frame->IsMain()) {
+    top = content_filter::TopUrl(initiator, first_party);
+  }
+  return top;
+}
+
+// The document that made a request: its initiator (an origin), or if that
+// is unknown or opaque, the nearest frame with a web address.
+std::string DocumentUrlOf(const std::string& initiator, CefRefPtr<CefFrame> frame,
+                          const std::string& top) {
+  if (IsWebUrl(initiator)) {
+    return initiator;
+  }
+  int depth = 0;
+  for (CefRefPtr<CefFrame> f = frame; f && depth < 64; f = f->GetParent(), ++depth) {
+    std::string url = f->GetURL().ToString();
+    if (IsWebUrl(url)) {
+      return url;
+    }
+  }
+  return top;
+}
+
+// The script that applies a document's element-hiding rules: a constructed
+// style sheet, which is not a <style> element in the page. The CSS is a JSON
+// string, so it can only ever be data.
+std::string HidingScript(const std::string& css) {
+  return "(()=>{try{const s=new CSSStyleSheet();s.replaceSync(" + DumpJson(Json(css)) +
+         ");document.adoptedStyleSheets=[...document.adoptedStyleSheets,s];}catch(e){}})();";
+}
+
 }  // namespace
+
+// Web tabs' handler for one request: OnBeforeResourceLoad is not told the
+// request's initiator, which the ad blocker needs.
+class WebRequestHandler : public CefResourceRequestHandler {
+ public:
+  WebRequestHandler(CefRefPtr<TabClient> client, std::string initiator)
+      : client_(std::move(client)), initiator_(std::move(initiator)) {}
+
+  ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser,
+                                   CefRefPtr<CefFrame> frame,
+                                   CefRefPtr<CefRequest> request,
+                                   CefRefPtr<CefCallback> callback) override {
+    return client_->BeforeResourceLoad(browser, frame, request, initiator_);
+  }
+  void OnProtocolExecution(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           CefRefPtr<CefRequest> request,
+                           bool& allow_os_execution) override {
+    client_->OnProtocolExecution(browser, frame, request, allow_os_execution);
+  }
+
+ private:
+  const CefRefPtr<TabClient> client_;
+  const std::string initiator_;
+  IMPLEMENT_REFCOUNTING(WebRequestHandler);
+};
 
 TabClient::TabClient(BrowserRole role,
                      int tab_id,
@@ -81,6 +149,7 @@ TabClient::TabClient(BrowserRole role,
       tor_(window && window->is_tor()),
       tor_service_(tor_ ? GetServices().tor : nullptr),
       tor_retired_(tor_ ? window->tor_retired() : nullptr),
+      ads_allowed_(role == BrowserRole::kWebTab && window ? window->ads_allowed() : nullptr),
       window_(window),
       router_(IsInternalRole(role) ? router : nullptr),
       initial_url_(std::move(initial_url)) {}
@@ -702,6 +771,26 @@ bool TabClient::OnBeforePopup(CefRefPtr<CefBrowser> browser,
     LogBlock("popup_blocked", role_, url, "disallowed URL");
     return true;
   }
+  // Ad pop-ups ($popup rules) are blocked even after a click: that is how
+  // most of them open.
+  CefRefPtr<CefFrame> main = browser->GetMainFrame();
+  const std::string top = main ? main->GetURL().ToString() : std::string();
+  if (BlocksAdsOn(top)) {
+    const std::string opener = frame ? frame->GetURL().ToString() : std::string();
+    adblock::Request ad;
+    ad.url = url;
+    ad.frame_url = opener;
+    ad.top_url = top;
+    ad.type = adblock::kPopup;
+    if (const adblock::Verdict v = adblock::BuiltIn().Check(ad); v.block) {
+      LogBlock("ad_popup_blocked", role_, url, std::string(v.rule));
+      CountBlocked(ads_blocked_);
+      if (window_) {
+        window_->ShowNotice("Ad pop-up blocked: " + SiteName(url));
+      }
+      return true;
+    }
+  }
   OpenInNewTab(url, true);
   return true;
 }
@@ -770,6 +859,9 @@ void TabClient::OnLoadStart(CefRefPtr<CefBrowser> browser,
                             TransitionType transition_type) {
   if (frame->IsMain()) {
     test_log::Event("load_start", {{"role", std::string(RoleName(role_))}, {"tab", tab_id_}});
+  }
+  if (role_ == BrowserRole::kWebTab) {
+    HideAds(browser, frame);
   }
 }
 
@@ -1180,6 +1272,9 @@ CefRefPtr<CefResourceRequestHandler> TabClient::GetResourceRequestHandler(
     bool is_download,
     const CefString& request_initiator,
     bool& disable_default_handling) {
+  if (role_ == BrowserRole::kWebTab) {
+    return new WebRequestHandler(this, request_initiator.ToString());
+  }
   return this;
 }
 
@@ -1202,6 +1297,14 @@ CefResourceRequestHandler::ReturnValue TabClient::OnBeforeResourceLoad(
     CefRefPtr<CefFrame> frame,
     CefRefPtr<CefRequest> request,
     CefRefPtr<CefCallback> callback) {
+  return BeforeResourceLoad(browser, frame, request, std::string());
+}
+
+CefResourceRequestHandler::ReturnValue TabClient::BeforeResourceLoad(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefRequest> request,
+    const std::string& initiator) {
   const std::string url = request->GetURL().ToString();
   const std::string why = ResourceBlockReason(url);
   if (!why.empty() && !fault_injection::SkipResourceGuard()) {
@@ -1212,20 +1315,89 @@ CefResourceRequestHandler::ReturnValue TabClient::OnBeforeResourceLoad(
     LogBlock("tor_blocked", role_, url, "tor not connected");
     return RV_CANCEL;
   }
-  // Tracker blocking: requests a page makes to a listed domain of another
-  // site. Pages of the listed site itself still work.
-  if (role_ == BrowserRole::kWebTab && request->GetResourceType() != RT_MAIN_FRAME) {
-    PrivacyService* privacy = GetServices().privacy;
-    if (privacy && privacy->block_trackers()) {
-      const trackers::Verdict v = trackers::Check(
-          guards::HostOf(url), guards::HostOf(request->GetFirstPartyForCookies().ToString()));
-      if (v.block) {
-        LogBlock("tracker_blocked", role_, url, std::string(v.listed));
-        return RV_CANCEL;
-      }
-    }
+  if (role_ != BrowserRole::kWebTab) {
+    return RV_CONTINUE;
+  }
+  const cef_resource_type_t type = request->GetResourceType();
+  if (type == RT_MAIN_FRAME) {
+    // A new page (or a redirect on the way to it): it starts with nothing
+    // blocked. TorFox never blocks the page itself.
+    ResetBlocked();
+    return RV_CONTINUE;
+  }
+  // Tracker and ad blocking, in every web window (Tor windows included).
+  content_filter::Request r;
+  r.url = url;
+  r.type = type;
+  r.first_party = request->GetFirstPartyForCookies().ToString();
+  r.top = TopUrlOf(browser, frame, initiator, r.first_party);
+  r.document = DocumentUrlOf(initiator, frame, r.top);
+  const content_filter::Decision d = content_filter::Check(r, ads_allowed_.get());
+  if (d.block) {
+    LogBlock(d.ad ? "ad_blocked" : "tracker_blocked", role_, url, d.why);
+    CountBlocked(d.ad ? ads_blocked_ : trackers_blocked_);
+    return RV_CANCEL;
   }
   return RV_CONTINUE;
+}
+
+bool TabClient::BlocksAdsOn(const std::string& top_url) const {
+  return role_ == BrowserRole::kWebTab && ads_allowed_ &&
+         content_filter::BlocksAdsOn(top_url, ads_allowed_.get());
+}
+
+void TabClient::CountBlocked(std::atomic<int>& counter) {
+  counter.fetch_add(1);
+  // At most one update every 300 ms: a page may block hundreds of requests.
+  if (!notify_pending_.exchange(true)) {
+    CefPostDelayedTask(TID_UI, base::BindOnce(&TabClient::NotifyBlocked, CefRefPtr<TabClient>(this)),
+                       300);
+  }
+}
+
+void TabClient::ResetBlocked() {
+  const int before = ads_blocked_.exchange(0) + trackers_blocked_.exchange(0);
+  if (before > 0 && !notify_pending_.exchange(true)) {
+    CefPostTask(TID_UI, base::BindOnce(&TabClient::NotifyBlocked, CefRefPtr<TabClient>(this)));
+  }
+}
+
+void TabClient::NotifyBlocked() {
+  CEF_REQUIRE_UI_THREAD();
+  notify_pending_ = false;
+  if (window_) {
+    window_->OnBlockedCountChanged(tab_id_);
+  }
+}
+
+void TabClient::HideAds(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame) {
+  CEF_REQUIRE_UI_THREAD();
+  const std::string url = frame->GetURL().ToString();
+  if (!IsWebUrl(url)) {
+    return;
+  }
+  CefRefPtr<CefFrame> main = frame->IsMain() ? frame : browser->GetMainFrame();
+  const std::string top = frame->IsMain() || !main ? url : main->GetURL().ToString();
+  if (!BlocksAdsOn(top)) {
+    return;
+  }
+  const adblock::Engine& engine = adblock::BuiltIn();
+  const adblock::PageOptions page = engine.ForPage(url, frame->IsMain() ? std::string() : top);
+  const bool top_disabled = !frame->IsMain() && engine.ForPage(top).disabled;
+  if (page.disabled || page.no_hiding || top_disabled) {
+    return;
+  }
+  // The rules for every site only in the top-level document: frames get
+  // their own site's rules (ad frames are blocked by request rules).
+  const bool generic = frame->IsMain() && !page.no_generic_hiding;
+  const std::string css = engine.HidingCss(guards::HostOf(url), generic);
+  if (css.empty()) {
+    return;
+  }
+  frame->ExecuteJavaScript(HidingScript(css), url, 0);
+  test_log::Event("ads_hidden", {{"tab", tab_id_},
+                                 {"main", frame->IsMain()},
+                                 {"bytes", static_cast<int64_t>(css.size())}});
 }
 
 void TabClient::OpenExternalApp(CefRefPtr<CefBrowser> browser,

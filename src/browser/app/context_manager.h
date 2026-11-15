@@ -50,8 +50,10 @@ class ContextManager {
 
   // Creates a new private context. |done| runs on the UI thread once the
   // context's storage and privacy preferences have been checked; it never
-  // runs after Shutdown().
-  void CreatePrivate(PrivateCallback done);
+  // runs after Shutdown(). |web|: a private window's context, whose workers'
+  // requests get tracker and ad blocking; false for TorFox's own requests
+  // (the updater).
+  void CreatePrivate(PrivateCallback done, bool web = true);
 
   // Chromium's default download folder for web contexts, where it writes
   // a download's first bytes before TorFox picks the real path

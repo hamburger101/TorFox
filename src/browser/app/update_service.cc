@@ -683,7 +683,8 @@ void UpdateService::WithContext(std::function<void()> then) {
         for (std::function<void()>& w : waiting) {
           w();
         }
-      });
+      },
+      /*web=*/false);
 }
 
 void UpdateService::Get(const std::string& url, uint64_t max_bytes, Body done) {

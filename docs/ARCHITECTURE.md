@@ -53,7 +53,7 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
 |---|---|---|---|
 | Base (global) | Disk, never hosts content | Proxy pref `direct` (also in Local State) | Holds the strict baseline prefs |
 | Internal | Off-the-record (OTR) | None; http(s) requests are cancelled; proxy pref `direct` | Only context with the `torfox` scheme handler |
-| Normal | Disk profile | Direct, or the system's proxy settings if the user turns that on | HTTPS-first, trackers, 3P cookies, pop-ups, permissions. `.onion` is cancelled; typed onion addresses open in a Tor window |
+| Normal | Disk profile | Direct, or the system's proxy settings if the user turns that on | HTTPS-first, trackers, ads, 3P cookies, pop-ups, permissions. `.onion` is cancelled; typed onion addresses open in a Tor window |
 | Private | Its own OTR profile, one per private window | As Normal | No history; its downloads list is its own and is dropped with the window |
 | Tor | Its own OTR profile, shared by all Tor windows until New identity | SOCKS5 to tor only | See below |
 
@@ -128,6 +128,26 @@ Security. The pure rules live in `src/core/privacy/` and are unit tested without
   http. Accepted sites are remembered in memory: one list for normal windows, one per private window.
 - **Trackers:** `OnBeforeResourceLoad` cancels a subresource whose host is on the compiled-in EasyPrivacy
   domain list when the request is third-party (registrable domains differ, using the Public Suffix List).
+- **Ads:** TorFox's own filter engine (`src/core/adblock/`) for the Adblock Plus rule syntax, with
+  EasyList compiled in (`third_party/easylist`, pinned to a commit and SHA-256 by
+  `scripts/update_adblock.py`, checked again by `scripts/gen_adblock.py` at build time). It is built on a
+  background thread at start-up (about 30 ms, 8 MB). Every web window uses it, Tor windows included:
+  - requests: `content_filter::Check` (shared with tracker blocking) runs in `OnBeforeResourceLoad` with
+    the request's initiator (the document that made it) and the tab's top-level page. A per-request
+    handler (`WebRequestHandler`) carries the initiator, which CEF gives only to
+    `GetResourceRequestHandler`. Main-frame requests are never checked;
+  - requests no tab makes (service and shared workers): CEF hands them to the request context, whose
+    handler (`content_filter::ContextRequestHandler`) runs the same check after the Tor gate. The
+    updater's private context is not a web context and is not filtered;
+  - element hiding: `OnLoadStart` gives each new document a constructed style sheet
+    (`document.adoptedStyleSheets`) with `display:none!important` for its rules: the rules for every site
+    (about 520 KB) in top-level documents only, a site's own rules in every frame of that site;
+  - pop-ups: `$popup` rules are checked in `OnBeforePopup`, also after a click;
+  - sites with ads allowed: normal windows share the setting `privacy.adsAllowedSites`
+    (`PrivacyService::normal_ads_allowed`); each private or Tor window has its own list in memory
+    (`BrowserWindow::ads_allowed`). Requests of private and Tor contexts that belong to no tab are always
+    filtered. The toolbar's shield shows per-tab counts (atomic counters, pushed at most every 300 ms)
+    and its menu (`adblock.menu`) changes the list.
 - **Cookies and pop-ups:** `profile.cookie_controls_mode`, re-applied to every open context when the
   setting changes. Pop-ups are decided in `OnBeforePopup`, since Chromium's own blocker is set to allow;
   allowed ones open as tabs.

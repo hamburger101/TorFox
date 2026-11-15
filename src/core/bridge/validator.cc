@@ -124,7 +124,7 @@ constexpr CommandSpec Cmd(std::string_view name, std::span<const ArgSpec> args,
   return CommandSpec{name, args, persistent};
 }
 
-const std::array<CommandSpec, 34> kShellCommands = {
+const std::array<CommandSpec, 35> kShellCommands = {
     Cmd("state.subscribe", kNoArgs, true),
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("tab.new", kNoArgs),
@@ -148,6 +148,7 @@ const std::array<CommandSpec, 34> kShellCommands = {
     Cmd("find.stop", kNoArgs),
     Cmd("zoom.change", kZoomArgs),
     Cmd("bookmarks.star", kMenuArgs),
+    Cmd("adblock.menu", kMenuArgs),
     Cmd("bookmarks.folderMenu", kFolderMenuArgs),
     Cmd("app.menu", kMenuArgs),
     Cmd("app.openSettings", kNoArgs),

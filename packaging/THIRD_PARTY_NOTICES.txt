@@ -29,6 +29,13 @@ EasyPrivacy (tracker domains, an adaptation: whole-domain rules only)
   list is distributed under the same license.
   https://creativecommons.org/licenses/by-sa/3.0/
 
+EasyList (ad-blocking rules, an adaptation: rules in syntax TorFox does not
+implement left out, the rest sorted)
+  By The EasyList authors (https://easylist.to/). TorFox uses it under the
+  Creative Commons Attribution-ShareAlike 3.0 Unported license; the adapted
+  list is distributed under the same license.
+  https://creativecommons.org/licenses/by-sa/3.0/
+
 Public Suffix List
   Mozilla Public License 2.0 (licenses/TorFox-MPL-2.0.txt).
   https://publicsuffix.org/

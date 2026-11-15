@@ -397,6 +397,83 @@ class TorWindowTest(TorBase):
         wait_for(lambda: len(self.tf.events("window_created", tor=True)) > created, 20, "Tor window")
 
 
+class AdBlockTorTest(TorBase):
+    """The ad blocker works in Tor windows too, and a Tor window keeps its
+    own allowed sites in memory (test_adblock.py has the rest)."""
+
+    def routes(self) -> None:
+        super().routes()
+        # adnxs.com is on EasyList (||adnxs.com^); .ad--banner is hidden on
+        # every site. The fake tor relays every connection to the Tor side.
+        self.both("/ads", f"""<!doctype html><title>ads</title>
+            <img src="http://adnxs.com:{self.direct.port}/t.gif">
+            <div id="box" class="ad--banner">ad</div><div id="text">text</div>""")
+        self.torside.raw("/t.gif", 200, {"Content-Type": "image/gif", "Cache-Control": "no-store"}, b"GIF89a")
+
+    def display(self, page, element_id: str) -> str:
+        return page.evaluate(f"getComputedStyle(document.getElementById('{element_id}')).display")
+
+    def test_tor_windows_block_ads_and_keep_their_own_list(self) -> None:
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        mark = self.mark()
+        url = self.url("/ads")
+        page = self.load(shell, url, "ads")
+        ad = f"http://adnxs.com:{self.direct.port}/t.gif"
+        blocked = self.wait_since(mark, "ad_blocked")
+        self.assertEqual((blocked["url"], blocked["why"]), (ad, "||adnxs.com^"))
+        wait_for(lambda: self.display(page, "box") == "none", 10, "the ad box hidden")
+        self.assertEqual(self.display(page, "text"), "block")
+        time.sleep(0.5)
+        # Never sent to tor, and never sent directly.
+        self.assertFalse([s for s in self.rec("socks") if "adnxs" in s["host"]])
+        self.assertNotIn("GET /t.gif", self.torside.requests)
+        self.assert_nothing_direct()
+
+        # Allowing ads in a Tor window is for that window only, and not saved.
+        self.choice.write_text("Allow ads on site.test until this window closes", encoding="utf-8")
+        self.assertTrue(bridge_call(shell, "adblock.menu", {"x": 10, "y": 10})["ok"])
+        menu = self.wait_since(mark, "menu_shown", kind="shield")
+        self.assertGreater(menu["picked"], 0)
+        changed = self.wait_since(mark, "ads_allowed_changed")
+        self.assertEqual((changed["site"], changed["allowed"], changed["ok"]), ("site.test", True, True))
+        wait_for(lambda: "GET /t.gif" in self.torside.requests, 20, "the ad through tor once allowed")
+        self.assertIn(("adnxs.com", self.direct.port), {(s["host"], s["port"]) for s in self.rec("socks")})
+        self.assert_nothing_direct()
+        settings = json.loads(bridge_call(self.settings_page(), "settings.get")["response"])["settings"]
+        self.assertEqual(next(s["value"] for s in settings if s["key"] == "privacy.adsAllowedSites"), "")
+
+
+class AdBlockTorWorkerTest(TorBase):
+    """A Tor window's service worker: its own requests (no tab sees them) go
+    through the Tor context's gate and then tracker and ad blocking."""
+
+    TLS_HOST = "secure.tor.test"   # Service workers need a secure context.
+    TLS_OTHER = ["adnxs.com"]      # On EasyList.
+
+    def test_a_tor_windows_worker_cannot_fetch_ads(self) -> None:
+        s = self.sites
+        ad = s.url("https", "adnxs.com", "/w.gif")
+        s.raw("adnxs.com", "/w.gif", 200, {"Content-Type": "image/gif", "Access-Control-Allow-Origin": "*",
+                                          "Cache-Control": "no-store"}, b"GIF89a")
+        s.raw(self.TLS_HOST, "/sw.js", 200, {"Content-Type": "text/javascript", "Cache-Control": "no-store"},
+              f"self.addEventListener('install', e => e.waitUntil(fetch('{ad}').catch(() => 0)));".encode())
+        s.html(self.TLS_HOST, "/worker", """<!doctype html><title>worker</title><script>
+            navigator.serviceWorker.register('/sw.js').then(
+              () => document.title = 'registered', e => document.title = 'failed ' + e);</script>""")
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        mark = self.mark()
+        url = s.url("https", self.TLS_HOST, "/worker")
+        self.load(shell, url, "registered")
+        wait_for(lambda: s.seen(self.TLS_HOST, "/sw.js"), 20, "the worker script through tor")
+        blocked = self.wait_since(mark, "ad_blocked", role="context")
+        self.assertEqual((blocked["url"], blocked["why"]), (ad, "||adnxs.com^"))
+        time.sleep(0.5)
+        self.assertEqual(s.seen("adnxs.com"), [])
+        self.assertFalse([r for r in self.rec("socks") if r["host"] == "adnxs.com"])
+
+
 class TorFailsClosedTest(TorBase):
     def test_when_tor_dies_nothing_loads_until_it_is_back(self) -> None:
         shell = self.open_tor()

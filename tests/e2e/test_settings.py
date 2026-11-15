@@ -138,6 +138,8 @@ class SettingsPersistenceTest(unittest.TestCase):
                     value = not s["default"]
                 elif s["type"] == "enum":
                     value = next(v for v in s["values"] if v != s["default"])
+                elif s["key"] == "privacy.adsAllowedSites":
+                    value = "example.com\nnews.example.org"
                 else:
                     self.assertEqual(s["key"], "tor.bridges.custom", "a string setting this test does not know")
                     value = OBFS4

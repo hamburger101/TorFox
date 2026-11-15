@@ -58,6 +58,10 @@ CTX = "src/browser/app/context_manager.cc"
 MINISIGN = "src/core/update/minisign.cc"
 RELEASE = "src/core/update/release.cc"
 UPDATER = "src/browser/app/update_service.cc"
+FILTER = "src/browser/app/content_filter.cc"
+ADBLOCK = "src/core/adblock/filters.cc"
+WINDOW = "src/browser/shell/browser_window.cc"
+AB = "e2e:test_adblock"
 UPD = "e2e:test_updates.UpdateTest"
 AUTO = "e2e:test_updates.AutoUpdateTest"
 ISS = "packaging/windows/TorFox.iss"
@@ -436,7 +440,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         ("src/core/privacy/https_first.cc", "  if (!IsUpgradableHost(host)) {", "  if (host.empty()) {"),
     ], ["unit:HttpsFirst.LeavesOtherUrlsAlone", HTTPS + ".test_local_names_are_not_upgraded"]),
     "trackers-not-blocked": ([
-        (TAB, '      if (v.block) {\n        LogBlock("tracker_blocked"', '      if (false) {\n        LogBlock("tracker_blocked"'),
+        (FILTER, "    if (v.block) {\n      return {true, false, std::string(v.listed)};",
+         "    if (false) {\n      return {true, false, std::string(v.listed)};"),
     ], [PRIV + ".TrackerTest.test_third_party_trackers_are_blocked"]),
     "trackers-first-party-blocked": ([
         ("src/core/privacy/trackers.cc",
@@ -786,8 +791,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], ["unit:MemoryReport.WhatARendererSaysOnlyAttributesTorFoxsOwnHelpers"]),
     # Only Settings may ask for the memory report.
     "memory-query-from-the-toolbar": ([
-        ("src/core/bridge/validator.cc", "const std::array<CommandSpec, 34> kShellCommands = {",
-         "const std::array<CommandSpec, 35> kShellCommands = {"),
+        ("src/core/bridge/validator.cc", "const std::array<CommandSpec, 35> kShellCommands = {",
+         "const std::array<CommandSpec, 36> kShellCommands = {"),
         ("src/core/bridge/validator.cc",
          '    Cmd("update.install", kNoArgs),\n};\n\nconst std::array<CommandSpec, 3> kSuggestCommands',
          '    Cmd("update.install", kNoArgs),\n    Cmd("memory.query", kNoArgs),\n};\n\n'
@@ -813,6 +818,76 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     "js-optimizer-setting-ignored-by-open-windows": ([
         (APP, "      ok = contexts_->ApplyJsOptimizer(window->web_context(), &error);\n", ""),
     ], ["e2e:test_js_optimizer.JsOptimizerTest.test_a_change_applies_to_pages_opened_after_it"]),
+    # ----- The ad blocker (Stage 11) -----
+    "ads-not-blocked": ([
+        (FILTER, "  if (v.block) {\n    return {true, true, std::string(v.rule)};",
+         "  if (false) {\n    return {true, true, std::string(v.rule)};"),
+    ], [AB + ".AdRequestTest.test_ad_requests_are_blocked_before_they_are_sent",
+        TOR + ".AdBlockTorTest.test_tor_windows_block_ads_and_keep_their_own_list"]),
+    "ads-not-blocked-in-tor-windows": ([
+        (TAB, "  // Tracker and ad blocking, in every web window (Tor windows included).\n",
+         "  // Tracker and ad blocking, in every web window (Tor windows included).\n"
+         "  if (tor_) {\n    return RV_CONTINUE;\n  }\n"),
+    ], [TOR + ".AdBlockTorTest.test_tor_windows_block_ads_and_keep_their_own_list"]),
+    "ads-pages-checked": ([
+        (TAB, "    ResetBlocked();\n    return RV_CONTINUE;\n  }", "    ResetBlocked();\n  }"),
+    ], [AB + ".AdRequestTest.test_pages_are_never_blocked"]),
+    "ads-third-party-option-ignored": ([
+        (ADBLOCK, "    if ((r.party == kThirdParty && !ctx.ThirdParty()) ||\n"
+                  "        (r.party == kFirstParty && ctx.ThirdParty()) || !DomainsApply(entries, ctx.host)) {",
+         "    if (!DomainsApply(entries, ctx.host)) {"),
+    ], ["unit:AdBlock.ThirdPartyAndFirstParty",
+        AB + ".AdRequestTest.test_third_party_rules_leave_a_sites_own_requests_alone"]),
+    "ads-setting-ignored": ([
+        (FILTER, "  if (!privacy || !privacy->block_ads()) {\n    return false;\n  }\n  return !(ads_allowed",
+         "  if (!privacy) {\n    return false;\n  }\n  return !(ads_allowed"),
+    ], [AB + ".AdBlockOffTest.test_turning_ad_blocking_off"]),
+    "ads-allowed-sites-ignored": ([
+        (FILTER, "  return !(ads_allowed && ads_allowed->Covers(guards::HostOf(top_url)));", "  return true;"),
+    ], [AB + ".ShieldMenuTest.test_allowing_ads_on_a_site_and_blocking_them_again",
+        AB + ".WorkerTest.test_allowed_sites_apply_to_their_workers"]),
+    "ads-private-windows-share-the-normal-list": ([
+        (WINDOW, "      ads_allowed_(!private_ && GetServices().privacy ? GetServices().privacy->normal_ads_allowed()",
+         "      ads_allowed_(GetServices().privacy ? GetServices().privacy->normal_ads_allowed()"),
+    ], [AB + ".PrivateWindowAdBlockTest.test_private_windows_block_ads_and_keep_their_own_list"]),
+    "ads-private-windows-save-their-list": ([
+        (WINDOW, "        if (!self->private_) {\n          PrivacyService* privacy",
+         "        if (true) {\n          PrivacyService* privacy"),
+    ], [AB + ".PrivateWindowAdBlockTest.test_private_windows_block_ads_and_keep_their_own_list",
+        TOR + ".AdBlockTorTest.test_tor_windows_block_ads_and_keep_their_own_list"]),
+    "ads-allowed-sites-not-validated": ([
+        ("src/core/settings/schema.cc",
+         'String("privacy.adsAllowedSites", "privacy", A, 65536, &adblock::SitesTextIsValid),',
+         'String("privacy.adsAllowedSites", "privacy", A, 65536, nullptr),'),
+    ], ["unit:SettingsSchema.ValidatesTypesAndConstraints",
+        AB + ".ShieldMenuTest.test_invalid_allowed_sites_are_refused"]),
+    "ad-popups-not-blocked": ([
+        (TAB, "    if (const adblock::Verdict v = adblock::BuiltIn().Check(ad); v.block) {",
+         "    if (const adblock::Verdict v = adblock::BuiltIn().Check(ad); v.block && v.rule.empty()) {"),
+    ], [AB + ".AdPopupTest.test_ad_popups_are_blocked_even_after_a_click"]),
+    "ad-boxes-not-hidden": ([
+        (TAB, "  frame->ExecuteJavaScript(HidingScript(css), url, 0);",
+         "  frame->ExecuteJavaScript(HidingScript(std::string()), url, 0);"),
+    ], [AB + ".AdBoxTest.test_ad_boxes_are_hidden",
+        TOR + ".AdBlockTorTest.test_tor_windows_block_ads_and_keep_their_own_list"]),
+    "ad-generic-hiding-in-frames": ([
+        (TAB, "  const bool generic = frame->IsMain() && !page.no_generic_hiding;",
+         "  const bool generic = !page.no_generic_hiding;"),
+    ], [AB + ".AdBoxTest.test_frames_get_their_own_sites_rules_only"]),
+    "ad-unsafe-selectors-used": ([
+        (ADBLOCK, "  if (!PlainCssSelector(selector) || !SafeSelector(selector)) {",
+         "  if (!PlainCssSelector(selector)) {"),
+    ], ["unit:AdBlock.SelectorsThatCouldEscapeTheirRuleAreIgnored"]),
+    # Requests no tab sees: a service worker's, in each kind of window.
+    "worker-requests-not-filtered-in-normal-windows": ([
+        (CTX, "    if (kind_ != Kind::kNormal) {\n      return nullptr;\n    }",
+         "    if (true) {\n      return nullptr;\n    }"),
+    ], [AB + ".WorkerTest.test_a_service_workers_requests_are_filtered"]),
+    "worker-requests-not-filtered-in-private-and-tor-windows": ([
+        (CTX, "    return new content_filter::ContextRequestHandler(request_initiator.ToString(), gate_, nullptr);",
+         "    return gate_;"),
+    ], [AB + ".WorkerTest.test_private_windows_workers_are_filtered",
+        TOR + ".AdBlockTorWorkerTest.test_a_tor_windows_worker_cannot_fetch_ads"]),
 }
 
 
