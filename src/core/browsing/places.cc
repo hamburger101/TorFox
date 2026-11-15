@@ -196,6 +196,16 @@ std::string Utf8Path(const std::filesystem::path& path) {
   return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
 }
 
+// SQLITE_OPEN_NOFOLLOW refuses a path with a symbolic link anywhere in it.
+// On macOS /var and /tmp are links, and a user's home folder may be one, so
+// the folder's real path is used: only a link at the database file itself
+// (or at its journal) is refused.
+std::filesystem::path InRealFolder(const std::filesystem::path& path) {
+  std::error_code ec;
+  const std::filesystem::path folder = std::filesystem::canonical(path.parent_path(), ec);
+  return ec ? path : folder / path.filename();
+}
+
 HistoryEntry ReadHistory(Stmt& s) {
   HistoryEntry e;
   e.url = s.Text(0);
@@ -224,7 +234,7 @@ constexpr char kBookmarkColumns[] = "id, coalesce(parent, 0), position, kind, ti
 sqlite3* OpenChecked(const std::filesystem::path& path, std::string* why) {
   sqlite3* db = nullptr;
   const int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOFOLLOW;
-  const int rc = sqlite3_open_v2(Utf8Path(path).c_str(), &db, flags, nullptr);
+  const int rc = sqlite3_open_v2(Utf8Path(InRealFolder(path)).c_str(), &db, flags, nullptr);
   // close_v2 defers the close until every statement is finalized, so an
   // early return never leaves the file open (and locked) behind us.
   auto fail = [&db, why](std::string reason) -> sqlite3* {

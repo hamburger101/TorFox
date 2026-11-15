@@ -336,5 +336,49 @@ TEST(PlacesFile, NewerAndForeignDatabasesAreSetAsideNotModified) {
   }
 }
 
+// The database is opened with SQLITE_OPEN_NOFOLLOW, which refuses a path
+// with a link anywhere in it; TorFox resolves the folder first, so a linked
+// folder (macOS's /var, a linked home folder) works.
+TEST(PlacesFile, OpensThroughALinkedFolder) {
+  ScopedTempDir dir;
+  const auto real = dir.path() / "real";
+  const auto link = dir.path() / "link";
+  std::filesystem::create_directory(real);
+  std::error_code ec;
+  std::filesystem::create_directory_symlink(real, link, ec);
+  if (ec) {
+    GTEST_SKIP() << "symbolic links are not available here: " << ec.message();
+  }
+  auto p = OpenAt(link / "places.db");
+  ASSERT_TRUE(p);
+  EXPECT_TRUE(p->AddVisit("https://a.example/", "A", 1));
+  EXPECT_TRUE(std::filesystem::exists(real / "places.db"));
+}
+
+// A link at the database file itself is never followed: the file it points
+// to is left as it was.
+TEST(PlacesFile, ALinkAtTheDatabaseIsNotFollowed) {
+  ScopedTempDir dir;
+  const auto target = dir.path() / "elsewhere.txt";
+  {
+    std::ofstream out(target, std::ios::binary);
+    out << "a file the link points to";
+  }
+  const auto path = dir.path() / "places.db";
+  std::error_code ec;
+  std::filesystem::create_symlink(target, path, ec);
+  if (ec) {
+    GTEST_SKIP() << "symbolic links are not available here: " << ec.message();
+  }
+  Places::OpenStatus status;
+  std::string error;
+  auto p = Places::Open(path, 1000, &status, &error);
+  if (p) {
+    EXPECT_TRUE(p->AddVisit("https://a.example/", "A", 1));
+  }
+  p.reset();
+  EXPECT_EQ(ReadAll(target), "a file the link points to");
+}
+
 }  // namespace
 }  // namespace torfox::browsing

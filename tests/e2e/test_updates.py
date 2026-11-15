@@ -434,7 +434,9 @@ class UpdateTest(UpdateHelpers, unittest.TestCase):
                          self.marker.read_text(encoding="utf-8").splitlines(), 20,
                          "the installer to start")
         started = os.path.normcase(lines[1])
-        self.assertEqual(started, os.path.normcase(str(elsewhere / release["name"])), lines)
+        # realpath: the temporary folder may be named by a short (8.3) name,
+        # as on GitHub's runners; TorFox starts the installer by its real one.
+        self.assertEqual(started, os.path.normcase(os.path.realpath(elsewhere / release["name"])), lines)
         self.assertNotIn(os.path.normcase(str(link)), started)
 
     def test_no_update_is_offered_while_the_record_cannot_be_saved(self) -> None:
