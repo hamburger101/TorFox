@@ -28,7 +28,7 @@ made with the bundled tor on the real Tor network.
 |---|---|---|---|---|
 | Engine | Sandbox on for every process type, incl. network service (release build) | ✅ | 🟡 | `tests/platform/test_release_win.py`; macOS helpers initialise the sandbox, untested |
 | Engine | Command-line switches can't weaken a release build | ✅ M | ⬜ | `test_command_line_cannot_weaken_torfox`, `CmdlinePolicy.*` |
-| Engine | Release builds write no log files (Chromium, CEF or TorFox), even when switches ask for them; Chromium does not even create its (empty) `chrome_debug.log` | ✅ M | ⬜ | `test_release_builds_write_no_logs`, `CmdlinePolicy.ReleaseBuildsOpenNoLogFile` |
+| Engine | Release builds write no log files (Chromium, CEF or TorFox), even when switches ask for them; Chromium does not even create its (empty) `chrome_debug.log`. Exception: started with `--enable-logging`, CEF's launcher (`TorFox.exe`) writes its own two start-up lines, which name no page, to `debug.log` next to it (Stage 11 findings §9) | ✅ M | ⬜ | `test_release_builds_write_no_logs`, `CmdlinePolicy.ReleaseBuildsOpenNoLogFile` |
 | Engine | Site isolation (`--site-per-process`): frames of other sites run in other renderer processes, in normal and private windows | ✅ M | 🟡 | `test_site_isolation.py` (with a same-site control); Tor windows not covered |
 | UI isolation | `torfox://` unreachable from web content (all layers) | ✅ M | ⬜ | `test_isolation.py` (37 tests, several covering many URL variants; each guard layer on its own) |
 | UI isolation | Bridge absent from web pages; every message validated | ✅ M | ⬜ | `test_isolation.py`, `test_bridge.py`, `BridgeValidator.*` |

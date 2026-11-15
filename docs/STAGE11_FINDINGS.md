@@ -194,3 +194,39 @@ Sixteen mutations, each a small sabotage of the ad blocker that a test must catc
   own lists are not blocked.
 - **Web compatibility.** A site may break with its ads blocked. EasyList's exceptions handle the known cases;
   others need *Allow ads on this site*.
+
+## 9. The first signed release (v0.1.0)
+Setting up signed releases (`scripts/make_release_key.py`, `docs/RELEASING.md`) and running the release
+workflow for the first time found five problems. None was in a published release: the workflow publishes
+nothing unless every build and test passes and a maintainer approves the signing.
+
+- **macOS had never been compiled.** clang refused three things MSVC accepted: `BrowserWindow`'s implicit
+  destructor with `TabClient` only declared, a `switch` without the Tor kind (`-Wswitch`), and a unit test
+  that printed file times (gtest needs `std::format` for floating point, macOS 13.3+). Fixed.
+- **macOS: the history and bookmarks database did not open.** It is opened with `SQLITE_OPEN_NOFOLLOW`,
+  which refuses a path with a symbolic link anywhere in it. On macOS `/var` and `/tmp` are links, and a
+  user's home folder may be one. TorFox now resolves the folder first; a link at the database file itself
+  is still never followed (`PlacesFile.OpensThroughALinkedFolder`, `PlacesFile.ALinkAtTheDatabaseIsNotFollowed`,
+  which need symbolic links and so run on macOS, not on Windows without the privilege).
+- **macOS: the DMG's signature check failed.** Code signing allows only code in `Contents/Helpers`, and
+  tor's licences, GeoIP files and `pt_config.json` were there. They are now in `Contents/Resources/tor`;
+  CI checks that `Contents/Helpers` holds only code.
+- **Windows: the release workflow did not recognise the runner's Visual Studio** (it reports "18", not
+  "2026"). It now uses the major version, as CI did.
+- **Windows: release builds can write a `debug.log` next to `TorFox.exe`.** `TorFox.exe` is CEF's bootstrap,
+  which reads `--enable-logging` itself, before any TorFox code runs, and then writes its own start-up lines
+  ("Client DLL resource config not found", "No installer config found") to `debug.log`. They name no page or
+  site, and TorFox's own logging stays off (`--disable-logging` is forced in the browser). Without that
+  switch nothing is written. Stage 10's test did not see this on the development machine because an old
+  `debug.log` was already in the build folder; GitHub's fresh runner did. The test now allows that file
+  only if every line in it is the bootstrap's and it names neither the test page nor its server. This is a
+  known exception, not a fix: TorFox cannot stop CEF's bootstrap from reading its own command line.
+- **Tests and the real update source.** With the release key in `config/release.json`, test builds would
+  have checked the real GitHub. Test builds now leave the key out (`TORFOX_TEST_HOOKS`); the update tests
+  keep using their fake GitHub.
+
+Once while investigating, the release-build test's own check of the user's profile (set aside and put
+back, compared byte for byte) reported that `User Data\chrome_debug.log` differed. The profile was checked
+afterwards: no file in it had changed (all older than the test, and identical to a copy made before the
+next runs). The `chrome_debug.log` did not appear again in two further runs. Its cause is not known.
+
