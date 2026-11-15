@@ -46,6 +46,9 @@ TEST(InternalUrl, KnownPages) {
   EXPECT_FALSE(IsTabPage("nope"));
   EXPECT_TRUE(IsTabPage("settings"));
   EXPECT_TRUE(IsTabPage("downloads"));
+  // What's new opens in a tab after an update.
+  EXPECT_TRUE(IsInternalPage("whatsnew"));
+  EXPECT_TRUE(IsTabPage("whatsnew"));
   EXPECT_TRUE(IsInternalPage("newtab"));
   EXPECT_TRUE(IsInternalPage("settings"));
   EXPECT_FALSE(IsInternalPage("Settings"));

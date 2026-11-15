@@ -124,7 +124,7 @@ constexpr CommandSpec Cmd(std::string_view name, std::span<const ArgSpec> args,
   return CommandSpec{name, args, persistent};
 }
 
-const std::array<CommandSpec, 33> kShellCommands = {
+const std::array<CommandSpec, 34> kShellCommands = {
     Cmd("state.subscribe", kNoArgs, true),
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("tab.new", kNoArgs),
@@ -158,6 +158,8 @@ const std::array<CommandSpec, 33> kShellCommands = {
     Cmd("suggest.query", kSuggestQueryArgs),
     Cmd("suggest.highlight", kSuggestHighlightArgs),
     Cmd("suggest.hide", kNoArgs),
+    // The toolbar's "Relaunch to update", once an update is ready.
+    Cmd("update.install", kNoArgs),
 };
 
 const std::array<CommandSpec, 3> kSuggestCommands = {
@@ -171,7 +173,7 @@ const std::array<CommandSpec, 2> kNewTabCommands = {
     Cmd("nav.go", kNavGoArgs),
 };
 
-const std::array<CommandSpec, 9> kSettingsCommands = {
+const std::array<CommandSpec, 10> kSettingsCommands = {
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("settings.get", kNoArgs),
     Cmd("settings.set", kSettingsSetArgs),
@@ -182,6 +184,8 @@ const std::array<CommandSpec, 9> kSettingsCommands = {
     Cmd("update.check", kNoArgs),
     Cmd("update.download", kNoArgs),
     Cmd("update.install", kNoArgs),
+    // Settings > Memory.
+    Cmd("memory.query", kNoArgs),
 };
 
 const std::array<CommandSpec, 11> kBookmarksCommands = {
@@ -218,7 +222,13 @@ const std::array<CommandSpec, 7> kDownloadsCommands = {
     Cmd("downloads.clear", kNoArgs),
 };
 
-const std::array<PageSpec, 7> kPages = {
+// The page TorFox opens after it has been updated.
+const std::array<CommandSpec, 2> kWhatsNewCommands = {
+    Cmd("appearance.subscribe", kNoArgs, true),
+    Cmd("whatsnew.get", kNoArgs),
+};
+
+const std::array<PageSpec, 8> kPages = {
     PageSpec{"shell", kShellCommands},
     PageSpec{"newtab", kNewTabCommands},
     PageSpec{"settings", kSettingsCommands},
@@ -226,6 +236,7 @@ const std::array<PageSpec, 7> kPages = {
     PageSpec{"history", kHistoryCommands},
     PageSpec{"downloads", kDownloadsCommands},
     PageSpec{"suggest", kSuggestCommands},
+    PageSpec{"whatsnew", kWhatsNewCommands},
 };
 
 // ----- Validation -----------------------------------------------------------

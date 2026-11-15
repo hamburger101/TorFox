@@ -4,6 +4,7 @@
 
 #include "src/browser/shell/tab_client.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <system_error>
@@ -12,6 +13,7 @@
 #include "include/base/cef_callback.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "src/browser/app/app_common.h"
 #include "src/browser/app/download_service.h"
 #include "src/browser/app/fault_injection.h"
 #include "src/browser/app/privacy_service.h"
@@ -121,6 +123,22 @@ bool TabClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                          CefRefPtr<CefFrame> frame,
                                          CefProcessId source_process,
                                          CefRefPtr<CefProcessMessage> message) {
+  // Any renderer may send this; it is only a hint (app_common.h).
+  if (message->GetName() == kRendererPidMessage) {
+    CefRefPtr<CefListValue> args = message->GetArgumentList();
+    const int pid = args && args->GetSize() == 1 && args->GetType(0) == VTYPE_INT ? args->GetInt(0) : 0;
+    constexpr std::size_t kMaxPids = 32;
+    if (pid > 0) {
+      if (frame && frame->IsMain()) {
+        renderer_pids_.clear();
+      }
+      if (std::find(renderer_pids_.begin(), renderer_pids_.end(), pid) == renderer_pids_.end() &&
+          renderer_pids_.size() < kMaxPids) {
+        renderer_pids_.push_back(pid);
+      }
+    }
+    return true;
+  }
   // Web browsers never reach the bridge, whatever their renderer sends.
   if (!router_) {
     test_log::Event("bridge_reject",

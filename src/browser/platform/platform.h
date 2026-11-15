@@ -13,6 +13,7 @@
 
 #include "include/cef_command_line.h"
 #include "include/views/cef_window.h"
+#include "src/core/memory/report.h"
 
 // Small, per-OS services. Implemented in platform_win.cc and platform_mac.mm.
 namespace torfox::platform {
@@ -143,11 +144,65 @@ const char* UpdatePlatform();
 // opened so that it cannot be changed or replaced, hashed again through that
 // handle and only then started, while the handle is still held.
 //   Windows: runs the installer (for this user only, with no UAC prompt; it
-//            waits for TorFox to exit, installs silently and starts TorFox).
+//            waits for TorFox to exit and installs). |relaunch|: it shows its
+//            progress and starts TorFox again. Otherwise it installs with no
+//            window and starts TorFox only if someone opened it meanwhile
+//            (RequestStartAfterUpdate).
 //   macOS:   opens the disk image in Finder; the user copies TorFox to
 //            Applications (TorFox does not replace itself on macOS).
 bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, uint64_t size,
-                  std::string* error);
+                  bool relaunch, std::string* error);
+
+// Whether a ready update installs when TorFox closes. Windows: yes. macOS:
+// no, the user copies the new app from its disk image.
+bool InstallsUpdatesOnExit();
+
+// True while the operating system is ending the session (shut down, restart,
+// sign out): no update is started then, it could be cut off.
+bool SessionEnding();
+
+// Windows: an update setup is installing TorFox right now (it holds the mutex
+// "TorFoxUpdateInstalling", packaging/windows/TorFox.iss), so a TorFox
+// starting now would hold files it must replace. macOS: false.
+bool UpdateBeingInstalled();
+// Asks that setup to start TorFox once it has finished
+// (HKEY_CURRENT_USER\Software\TorFox, RelaunchAfterUpdate). False if it
+// could not be recorded.
+bool RequestStartAfterUpdate();
+// Forgets such a request; done at each normal start.
+void ClearStartAfterUpdate();
+// Windows: TorFox will hand an update over as it exits. From now until the
+// process exits (or ReleaseUpdateInstalling) it holds the setup's mutex
+// itself, so that a TorFox opened while this one shuts down, before the
+// setup holds the mutex, waits for the setup too. LaunchUpdate waits until
+// the setup holds it. macOS: nothing.
+void HoldUpdateInstalling();
+void ReleaseUpdateInstalling();
+
+// ----- Tor ------------------------------------------------------------------------
+
+// A loopback TCP port (127.0.0.1) that TorFox holds for as long as it runs:
+// TorFox listens on it and resets every connection at once, reading
+// nothing. No other program can take 127.0.0.1 on it (Windows:
+// SO_EXCLUSIVEADDRUSE; macOS: no SO_REUSEADDR or SO_REUSEPORT), and one that
+// listens on every address of the port is never given a connection to
+// 127.0.0.1, which matches TorFox's more specific listener first. Merely
+// binding the port without listening would not do: on Windows a wildcard
+// listener would then be given the connection
+// (test_tor.ProxyLayerTest.test_the_placeholder_port_is_torfoxs_own).
+// The Tor context points at it while tor is not running. Reserved on the
+// first call; 0 if it could not be. Any thread.
+int ReservedLoopbackPort();
+
+// ----- Settings > Memory --------------------------------------------------------
+
+// TorFox's processes and the memory each uses: this one, the Chromium helpers
+// started from TorFox's own files, and the bundled tor with its pluggable
+// transports. Anything else this process started (an app opened for a link)
+// is left out. Empty if the processes could not be listed. Any thread.
+//   Windows: the private working set, as Task Manager's Memory column shows.
+//   macOS:   the physical footprint, as Activity Monitor's Memory column shows.
+std::vector<memory::Process> TorFoxProcesses(const std::filesystem::path& tor_dir);
 
 }  // namespace torfox::platform
 

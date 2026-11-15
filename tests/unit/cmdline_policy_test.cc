@@ -76,6 +76,16 @@ TEST(CmdlinePolicy, TestBuildsLeaveLoggingToCef) {
   Input in;
   in.test_hooks = true;
   EXPECT_EQ(Apply(in).switches.count("log-severity"), 0u);
+  EXPECT_EQ(Apply(in).switches.count("disable-logging"), 0u);
+}
+
+TEST(CmdlinePolicy, ReleaseBuildsOpenNoLogFile) {
+  // A user's --enable-logging cannot win over it either.
+  Input in;
+  in.user_switches = {{"enable-logging", ""}, {"disable-logging", ""}};
+  Plan p = Apply(in);
+  EXPECT_EQ(p.switches.at("disable-logging"), "");
+  EXPECT_EQ(p.switches.count("enable-logging"), 0u);
 }
 
 TEST(CmdlinePolicy, AddsForcedSwitches) {

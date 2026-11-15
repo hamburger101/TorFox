@@ -55,15 +55,52 @@ bool SessionService::enabled() const {
 
 browsing::Session SessionService::TakeStartupSession() {
   CEF_REQUIRE_UI_THREAD();
-  if (!enabled()) {
+  std::error_code ec;
+  // Removed whatever happens: it is for this one start.
+  const bool relaunched = std::filesystem::remove(RelaunchMarker(), ec);
+  const bool once = relaunched && settings_ && !settings_->store().GetBool(kClearHistorySetting);
+  if (!enabled() && !once) {
     Remove("startup");
     return {};
   }
   const ReadResult r = ReadFileLimited(file_, browsing::kMaxSessionBytes);
-  if (r.status != ReadStatus::kOk) {
-    return {};
+  browsing::Session session;
+  if (r.status == ReadStatus::kOk) {
+    session = browsing::ParseSession(r.data);
   }
-  return browsing::ParseSession(r.data);
+  if (!enabled()) {
+    Remove("relaunch");  // Kept only for the relaunch.
+  }
+  if (relaunched) {
+    test_log::Event("session_relaunch", {{"windows", session.size()}, {"kept", enabled()}});
+  }
+  return session;
+}
+
+std::filesystem::path SessionService::RelaunchMarker() const {
+  return file_.parent_path() / "session-relaunch";
+}
+
+void SessionService::PrepareRelaunch() {
+  CEF_REQUIRE_UI_THREAD();
+  if (shut_down_ || !settings_ || settings_->store().GetBool(kClearHistorySetting)) {
+    return;
+  }
+  const browsing::Session session = collect_ ? collect_() : browsing::Session();
+  std::size_t tabs = 0;
+  for (const browsing::SessionWindow& w : session) {
+    tabs += w.urls.size();
+  }
+  if (session.empty() || tabs == 0) {
+    return;
+  }
+  const bool ok = WriteFileAtomically(file_, browsing::SerializeSession(session)) &&
+                  WriteFileAtomically(RelaunchMarker(), "1\n");
+  relaunch_ = ok;
+  test_log::Event("session_saved", {{"windows", session.size()},
+                                    {"tabs", tabs},
+                                    {"ok", ok},
+                                    {"relaunch", true}});
 }
 
 void SessionService::Changed() {
@@ -111,7 +148,7 @@ void SessionService::Remove(const char* why) {
 
 void SessionService::Shutdown() {
   shut_down_ = true;
-  if (!enabled()) {
+  if (!enabled() && !relaunch_) {
     Remove("exit");
   }
 }

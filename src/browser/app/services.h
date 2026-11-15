@@ -10,6 +10,7 @@
 #include <string>
 
 #include "include/wrapper/cef_message_router.h"
+#include "src/core/memory/report.h"
 
 namespace torfox {
 
@@ -45,6 +46,20 @@ struct Services {
   UpdateService* updates = nullptr;
   // Closes every window, which quits TorFox.
   std::function<void()> close_all_windows;
+  // "Relaunch to update" (the toolbar, Settings > Updates): asks first if
+  // private or Tor windows are open (the prompt belongs to |tab_id| in
+  // |requester|), then hands the ready update over and closes every window.
+  // |done| runs once: (true, "") if TorFox is now closing.
+  std::function<void(BrowserWindow* requester, int tab_id,
+                     std::function<void(bool ok, const std::string& error)> done)>
+      relaunch_to_update;
+  // Settings > Memory: what every window's renderers said (UI thread).
+  std::function<std::vector<memory::Renderer>()> collect_renderers;
+  // After an update: the version TorFox was before (What's new), and
+  // whether the first normal window still has to open What's new.
+  std::string whats_new_from;
+  bool whats_new_verified = false;  // BrowserApp::set_whats_new_from
+  bool show_whats_new = false;
   // Shown once in the first window (for example: clearing data failed).
   std::string startup_notice;
   CefRefPtr<CefMessageRouterBrowserSide> router;

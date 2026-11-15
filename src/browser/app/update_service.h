@@ -25,6 +25,11 @@ class SettingsService;
 // Settings > Updates: finds, downloads and checks new releases on GitHub
 // Releases, and hands a checked one over when TorFox closes.
 //
+// With Settings > Updates > "Download updates automatically" on (the
+// default), a verified update is downloaded as soon as it is found, the
+// toolbar offers "Relaunch to update", and on Windows an update that is
+// still waiting installs when TorFox closes (without starting it again).
+//
 // Nothing is trusted until the release manifest's minisign signature has
 // verified with the public key compiled into TorFox (config/release.json);
 // then the release must be newer than this TorFox and not older than any
@@ -44,7 +49,8 @@ class UpdateService {
     kUpToDate,
     kAvailable,      // A verified, newer release.
     kDownloading,
-    kReady,          // Downloaded and checked; installs when TorFox closes.
+    kReady,          // Downloaded and checked; installs on a relaunch, or
+                     // when TorFox closes (automatic installs, Windows).
     kError,
   };
 
@@ -73,6 +79,10 @@ class UpdateService {
     std::filesystem::path file;
     std::string sha256;
     uint64_t size = 0;
+    // True: start TorFox again once installed ("Relaunch to update").
+    // False: TorFox was closed with an update waiting; install it only.
+    bool relaunch = true;
+    std::string version;  // The release's, as the signed manifest gives it.
   };
 
   UpdateService(SettingsService* settings, ContextManager* contexts,
@@ -88,7 +98,10 @@ class UpdateService {
   void Download();  // kAvailable -> kDownloading -> kReady (or kError).
   // kReady: checks the file once more. True if TorFox should now close and
   // hand it over (TakeHandoff()).
-  bool PrepareInstall(std::string* error);
+  bool PrepareInstall(bool relaunch, std::string* error);
+  // TorFox is closing: if an update is ready, automatic installs are on and
+  // nothing is handed over yet, prepares it to install without a relaunch.
+  bool PrepareInstallOnExit();
   std::optional<Handoff> TakeHandoff();
   void Shutdown();
 
@@ -106,6 +119,7 @@ class UpdateService {
                                   const std::string& body)>;
 
   bool Enabled() const;
+  bool AutoInstall() const;
   void ApplySettings();
   void Tick(int generation);
   void StartCheck(bool automatic);

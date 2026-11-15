@@ -164,6 +164,25 @@ class ReleaseBuildTest(unittest.TestCase):
             self.assertFalse([d for d in decoys if d.exists()], "a switch wrote outside the profile")
             self.assertEqual(tf.close(), 0)
 
+    def test_release_builds_write_no_logs(self) -> None:
+        # Chromium's and CEF's logs could record the pages a user opens. A
+        # release build writes none, even when asked to on the command line,
+        # and TorFox's own test log does not exist in it.
+        names = {"debug.log", "cef.log", "chrome_debug.log", "test-log.jsonl"}
+        install = release_exe().parent
+        before = {p.relative_to(install) for p in install.rglob("*")}
+        page = self.fixture.html("/no-log-marker-7f3a", "<!doctype html><title>log probe</title>"
+                                 "<script>console.error('no-log-marker-7f3a')</script>")
+        with ReleaseTorFox(["--enable-logging", "--v=2", "--log-level=0", page]) as tf:
+            wait_for(lambda: "GET /no-log-marker-7f3a" in self.fixture.requests, 30, "the page")
+            time.sleep(3)
+            self.assertEqual(tf.close(), 0)
+            found = [p for p in user_data_dir().rglob("*")
+                     if p.is_file() and (p.name.lower() in names or p.suffix.lower() == ".jsonl")]
+            self.assertEqual(found, [])
+        after = {p.relative_to(install) for p in install.rglob("*")}
+        self.assertEqual(sorted(map(str, after - before)), [], "files appeared next to TorFox.exe")
+
     def test_release_builds_ignore_the_test_update_source(self) -> None:
         # Test builds can be pointed at a fake GitHub with their own key
         # (tests/e2e/test_updates.py). In a release build that switch must do

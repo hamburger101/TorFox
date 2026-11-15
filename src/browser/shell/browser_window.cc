@@ -20,6 +20,7 @@
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
 #include "src/browser/app/tor_service.h"
+#include "src/browser/app/update_service.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
@@ -387,6 +388,14 @@ void BrowserWindow::OpenFirstTabs() {
     if (Tab* first = ActiveTab()) {
       LoadInTab(*first, BrowserRole::kWebTab, first_url_);
     }
+  }
+  // After an update: the first normal window to open shows What's new, in
+  // front. Never a private or Tor window.
+  Services& services = GetServices();
+  if (services.show_whats_new && !private_) {
+    services.show_whats_new = false;
+    test_log::Event("whats_new_opened", {{"window", id_}, {"from", services.whats_new_from}});
+    OpenInternalPage("whatsnew");
   }
 }
 
@@ -1518,6 +1527,8 @@ Json BrowserWindow::StateJson() {
              {"zoom", zoom}};
     }
   }
+  Json update = UpdateJson();
+  update_ready_shown_ = !update.is_null();
   return {{"type", "state"},
           {"private", private_},
           {"tor", tor_ ? TorJson() : Json(nullptr)},
@@ -1526,7 +1537,61 @@ Json BrowserWindow::StateJson() {
           {"nav", nav},
           {"findOpen", find_open_},
           {"bookmarksBar", BookmarksBarVisible()},
-          {"downloads", DownloadsJson()}};
+          {"downloads", DownloadsJson()},
+          {"update", update}};
+}
+
+Json BrowserWindow::UpdateJson() {
+  UpdateService* updates = GetServices().updates;
+  if (!updates) {
+    return Json(nullptr);
+  }
+  const UpdateService::Status s = updates->status();
+  if (s.state != UpdateService::State::kReady) {
+    return Json(nullptr);
+  }
+  // Windows: "Relaunch to update" installs and starts TorFox again. macOS:
+  // TorFox closes and opens the disk image.
+  return {{"version", s.version}, {"restarts", platform::InstallsUpdatesOnExit()}};
+}
+
+void BrowserWindow::CollectRenderers(std::vector<memory::Renderer>* out) const {
+  const std::string kind = tor_ ? "tor" : private_ ? "private" : "normal";
+  for (const Tab& t : tabs_) {
+    if (!t.client) {
+      continue;
+    }
+    for (long pid : t.client->renderer_pids()) {
+      memory::Renderer r;
+      r.pid = pid;
+      r.tab = true;
+      r.tab_key = static_cast<int64_t>(id_) * 1000000 + t.id;
+      r.title = t.title.empty() ? t.url : t.title;
+      r.window = kind;
+      r.active = t.id == active_tab_id_;
+      out->push_back(std::move(r));
+    }
+  }
+  for (const CefRefPtr<TabClient>& own : {shell_client_, suggest_client_}) {
+    if (!own) {
+      continue;
+    }
+    for (long pid : own->renderer_pids()) {
+      memory::Renderer r;
+      r.pid = pid;
+      r.window = kind;
+      out->push_back(std::move(r));
+    }
+  }
+}
+
+void BrowserWindow::UpdateStatusChanged() {
+  // Only when the button appears or goes: not for each percent downloaded.
+  const bool ready = !UpdateJson().is_null();
+  if (ready == update_ready_shown_ || state_subscribers_.empty()) {
+    return;
+  }
+  PushEvent(StateJson());  // Remembers what it sent.
 }
 
 Json BrowserWindow::TorJson() const {

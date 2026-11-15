@@ -308,6 +308,10 @@ bool UpdateService::Enabled() const {
   return settings_ && settings_->store().GetBool("updates.enabled");
 }
 
+bool UpdateService::AutoInstall() const {
+  return Enabled() && settings_->store().GetBool("updates.autoInstall");
+}
+
 void UpdateService::Start() {
   CEF_REQUIRE_UI_THREAD();
   // Downloads of an earlier session (installed, abandoned or partial).
@@ -352,6 +356,10 @@ void UpdateService::ApplySettings() {
   }
   if (status_.state == State::kOff) {
     SetState(State::kIdle);
+  }
+  // Automatic installs turned on with an update waiting: fetch it now.
+  if (AutoInstall() && status_.state == State::kAvailable) {
+    Download();
   }
   // Automatic checks may have been turned on: look again soon.
   const int generation = ++generation_;
@@ -503,6 +511,12 @@ void UpdateService::OnManifest(bool automatic, const update::LatestRelease& late
   status_.notes = c.release.notes;
   status_.size = asset_.size;
   SetState(State::kAvailable);
+  if (AutoInstall()) {
+    // Like any download it is checked against the signed size and SHA-256;
+    // the toolbar says when it is ready.
+    Download();
+    return;
+  }
   if (automatic && notify && settings_->store().GetBool("updates.notify")) {
     notify(version);
   }
@@ -570,7 +584,7 @@ void UpdateService::Download() {
   });
 }
 
-bool UpdateService::PrepareInstall(std::string* error) {
+bool UpdateService::PrepareInstall(bool relaunch, std::string* error) {
   CEF_REQUIRE_UI_THREAD();
   if (status_.state != State::kReady) {
     *error = "No update is ready to install.";
@@ -581,16 +595,26 @@ bool UpdateService::PrepareInstall(std::string* error) {
     std::error_code ec;
     std::filesystem::remove(FinalPath(), ec);
     *error = "The downloaded update changed on this computer, so TorFox deleted it.";
-    test_log::Event("update_install", {{"ok", false}, {"error", *error}});
+    test_log::Event("update_install", {{"ok", false}, {"error", *error}, {"relaunch", relaunch}});
     SetState(State::kError, *error);
     return false;
   }
-  handoff_ = Handoff{FinalPath(), asset_.sha256, asset_.size};
+  handoff_ = Handoff{FinalPath(), asset_.sha256, asset_.size, relaunch, status_.version};
   test_log::Event("update_install", {{"ok", true},
                                      {"file", FinalPath().filename().string()},
                                      {"sha256", asset_.sha256},
-                                     {"size", asset_.size}});
+                                     {"size", asset_.size},
+                                     {"relaunch", relaunch}});
   return true;
+}
+
+bool UpdateService::PrepareInstallOnExit() {
+  CEF_REQUIRE_UI_THREAD();
+  if (shut_down_ || handoff_ || status_.state != State::kReady || !AutoInstall()) {
+    return false;
+  }
+  std::string error;
+  return PrepareInstall(/*relaunch=*/false, &error);
 }
 
 std::optional<UpdateService::Handoff> UpdateService::TakeHandoff() {

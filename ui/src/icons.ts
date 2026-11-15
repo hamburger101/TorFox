@@ -27,6 +27,7 @@ export const icons = {
   onion: base(svg`<path d="M8 2c-.3 1.4-1.4 2.2-2.6 3.2C4 6.3 3 7.6 3 9.4 3 12 5.2 14 8 14s5-2 5-4.6c0-1.8-1-3.1-2.4-4.2C9.4 4.2 8.3 3.4 8 2Z"/><path d="M8 5.2c-.9.9-2.2 2.1-2.2 4.2S6.8 12.6 8 12.6s2.2-1.1 2.2-3.2S8.9 6.1 8 5.2Z"/>`),
   appearance: base(svg`<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11Z" fill="currentColor"/>`),
   update: base(svg`<path d="M8 13.5V5M4.8 8.2 8 5l3.2 3.2"/><path d="M3 2.5h10"/>`),
+  memory: base(svg`<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.2 1.8v2.2M9.8 1.8v2.2M6.2 12v2.2M9.8 12v2.2M1.8 6.2h2.2M1.8 9.8h2.2M12 6.2h2.2M12 9.8h2.2"/>`),
   info: base(svg`<circle cx="8" cy="8" r="5.8"/><path d="M8 7.2v3.8M8 5v.1"/>`),
   home: base(svg`<path d="M2.8 7.4 8 3l5.2 4.4"/><path d="M4.3 6.3v6.7h7.4V6.3"/><path d="M6.8 13V9.8h2.4V13"/>`),
   star: base(svg`<path d="m8 2.3 1.75 3.6 3.95.55-2.86 2.77.68 3.93L8 11.3l-3.52 1.85.68-3.93L2.3 6.45l3.95-.55L8 2.3Z"/>`),

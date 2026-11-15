@@ -444,6 +444,60 @@ class ProxyLayerTest(TorBase):
         self.assert_nothing_direct()
         self.assertEqual(self.torside.requests, [])
 
+    def test_the_placeholder_port_is_torfoxs_own(self) -> None:
+        # Until tor reports its port, the Tor context points at a placeholder.
+        # A fixed port (9, as before) could be taken by any program, which
+        # would then be sent the names Tor windows open. TorFox holds its own
+        # and resets every connection to it; no other program can take it.
+        shell = self.open_tor()
+        ready = self.tf.wait_log("context_ready", kind="tor")
+        port = ready["placeholder"]
+        self.assertGreater(port, 0)
+        self.assertNotEqual(port, 9)
+        self.assertEqual((ready["socks_port"], ready["proxy_port"]), (0, port))
+        for reuse in (False, True):
+            with self.subTest("127.0.0.1", reuse=reuse):
+                squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    if reuse:
+                        squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    with self.assertRaises(OSError):
+                        squatter.bind(("127.0.0.1", port))
+                finally:
+                    squatter.close()
+        # Windows lets another program listen on every address of the port;
+        # it must never be given a connection to 127.0.0.1.
+        wild = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(wild.close)
+        wild.bind(("0.0.0.0", port))
+        wild.listen(8)
+        wild.settimeout(0.2)
+        # TorFox's listener resets the connection without reading.
+        probe = socket.create_connection(("127.0.0.1", port), timeout=10)
+        with probe:
+            probe.settimeout(5)
+            try:
+                probe.sendall(b"\x05\x01\x00")
+                got = probe.recv(16)
+            except (ConnectionResetError, ConnectionAbortedError):
+                got = b""
+            self.assertEqual(got, b"")
+        mark = self.mark()
+        self.assertTrue(self.go(shell, self.url("/page"))["ok"])
+        self.assertNotEqual(self.wait_since(mark, "load_error")["code"], 0)
+        reached = []
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            try:
+                conn, _ = wild.accept()
+            except (socket.timeout, TimeoutError):
+                continue
+            with conn:
+                reached.append(conn.recv(64))
+        self.assertEqual(reached, [], "a Tor window's request reached another program")
+        self.assert_nothing_direct()
+        self.assertEqual(self.torside.requests, [])
+
 
 class ProxyLayerAfterDeathTest(TorBase):
     EXTRA_ARGS = ["--torfox-test-skip-guards=tor"]
@@ -475,6 +529,9 @@ class ProxyLayerAfterDeathTest(TorBase):
         self.wait_since(mark, "tor_stopped")
         wait_for(lambda: (self.tor_status(shell) or {"connected": True})["connected"] is False, 10,
                  "Tor shown as not connected")
+        placeholder = self.tf.events("context_ready", kind="tor")[0]["placeholder"]
+        moved = self.since(mark, "tor_proxy_port")[-1]
+        self.assertEqual((moved["port"], moved["ok"]), (placeholder, True))
         squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.addCleanup(squatter.close)
         squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -552,6 +609,32 @@ class TorProcessTest(TorBase):
         self.tf.proc.wait(10)
         wait_for(lambda: not process_alive(pid), 10, "the job to end tor")
         self.assertFalse([e for e in self.rec("exit") if e["pid"] == pid], "tor was killed, it did not exit")
+
+    def test_settings_memory_counts_tor_and_never_names_tor_tabs(self) -> None:
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        pid = self.tf.events("tor_started")[-1]["pid"]
+        self.load(shell, self.url("/page"), "Tor page")
+        page = self.settings_page()
+
+        def with_tor_tab():
+            r = bridge_call(page, "memory.query")
+            self.assertTrue(r["ok"], r)
+            rep = json.loads(r["response"])
+            return rep if any(t["window"] == "tor" for row in rep["tabs"] for t in row["tabs"]) else None
+        rep = wait_for(with_tor_tab, 15, "the Tor tab in the report")
+        # tor itself, as its own row; not as a helper or a tab.
+        self.assertIn(pid, rep["tor"]["pids"])
+        self.assertGreater(rep["tor"]["bytes"], 0)
+        self.assertNotIn(pid, rep["helpers"]["pids"] + rep["interface"]["pids"])
+        self.assertFalse([row for row in rep["tabs"] if pid in row["pids"]])
+        text = json.dumps(rep)
+        self.assertNotIn("Tor page", text)
+        self.assertNotIn("site.test", text)
+        for row in rep["tabs"]:
+            for t in row["tabs"]:
+                if t["window"] == "tor":
+                    self.assertEqual(t["title"], "")
 
     def test_tor_is_not_started_until_a_tor_window_opens(self) -> None:
         time.sleep(1.5)
@@ -944,6 +1027,9 @@ class TorContextGateTest(TorBase):
                        ".querySelector('#tor-identity').click(); 1")
         retired = self.wait_since(mark, "tor_context_retired")
         self.assertTrue(retired["proxy_changed"], retired)
+        # Moved to TorFox's own placeholder port, which nothing listens on.
+        placeholder = self.tf.events("context_ready", kind="tor")[0]["placeholder"]
+        self.assertEqual(retired["port"], placeholder)
         self.assertTrue(self.wait_since(mark, "tor_newnym")["ok"])
         self.wait_since(mark, "tor_new_identity")
         # Requests already on their way when the context was retired may

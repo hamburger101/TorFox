@@ -31,6 +31,8 @@ add_executable(torfox_unit_tests
   tabs_zoom_test.cc
   test_util.h
   update_test.cc
+  whats_new_test.cc
+  memory_report_test.cc
 )
 SET_EXECUTABLE_TARGET_PROPERTIES(torfox_unit_tests)
 target_link_libraries(torfox_unit_tests PRIVATE torfox_core torfox_gtest torfox_sodium)

@@ -83,6 +83,12 @@ class TorService : public std::enable_shared_from_this<TorService> {
   static const char* StateName(State state);
   // tor's own version, once TorFox has taken control of it (empty before).
   std::string version() const;
+  // The folder tor runs from (its pluggable transports are inside it), for
+  // Settings > Memory. Test builds with a scripted tor: that script's
+  // interpreter's folder.
+  std::filesystem::path program_dir() const {
+    return options_.test_exe.empty() ? options_.paths.dir : options_.test_exe.parent_path();
+  }
 
   // Any thread.
   bool connected() const { return connected_.load(); }

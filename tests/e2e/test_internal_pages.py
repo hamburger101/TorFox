@@ -157,10 +157,10 @@ class SettingsPageTest(unittest.TestCase):
     def root(self, expr: str):
         return self.page.evaluate(f"(() => {{ const r = document.querySelector('tf-settings').shadowRoot; return {expr}; }})()")
 
-    def test_all_eight_sections(self) -> None:
+    def test_all_nine_sections(self) -> None:
         names = self.root("[...r.querySelectorAll('.nav-item span')].map(s => s.textContent)")
         self.assertEqual(names, ["General", "Search Engine", "Privacy & Security", "Downloads",
-                                 "Tor Network", "Appearance", "Updates", "About TorFox"])
+                                 "Tor Network", "Appearance", "Memory", "Updates", "About TorFox"])
 
     def test_planned_settings_are_disabled_and_labelled(self) -> None:
         # Since Stage 7 every setting is active; a setting added before its
@@ -183,11 +183,13 @@ class SettingsPageTest(unittest.TestCase):
         # downloads: tests/e2e/test_downloads.py; privacy and permissions:
         # tests/e2e/test_privacy.py; Tor: tests/e2e/test_tor.py; on startup:
         # tests/e2e/test_startup.py; search engine: tests/e2e/test_browsing.py;
-        # updates: tests/e2e/test_updates.py).
+        # updates: tests/e2e/test_updates.py; the JavaScript optimizer:
+        # tests/e2e/test_js_optimizer.py).
         data = json.loads(bridge_call(self.page, "settings.get")["response"])
         self.assertEqual(sorted(s["key"] for s in data["settings"] if s["status"] == "active"),
                          sorted(["general.startupPage", "search.engine",
                                  "updates.enabled", "updates.autoCheck", "updates.notify",
+                                 "updates.autoInstall", "privacy.jsOptimizer",
                                  "appearance.theme", "appearance.showBookmarksBar",
                                  "downloads.askBeforeDownload", "downloads.disableDownloads",
                                  "privacy.httpsFirst", "privacy.blockTrackers",

@@ -61,18 +61,19 @@ class ContextManager {
   // The Tor context, shared by every Tor window until New Identity drops
   // it: off the record, and its only route out is tor's SOCKS port
   // (fixed_servers, socks5://127.0.0.1:<port>, never DIRECT, loopback
-  // included). Before tor has reported a port it is kTorPlaceholderPort,
-  // where nothing should listen, so a request that got past the Tor
-  // windows' guards would fail rather than leave directly. |done| runs once
+  // included). Before tor has reported a port it is the placeholder,
+  // platform::ReservedLoopbackPort(): TorFox's own, never listening, so a
+  // request that got past the Tor windows' guards is refused rather than
+  // sent anywhere. Without it there is no Tor context. |done| runs once
   // the context and its preferences have been read back. While the context
   // exists, later calls get the same one.
   void CreateTor(int socks_port, PrivateCallback done);
   // Points the Tor context (if any, and any created later) at |socks_port|,
-  // or at kTorPlaceholderPort when it is 0 (tor has stopped).
+  // or at the placeholder when it is 0 (tor has stopped).
   bool SetTorPort(int socks_port, std::string* error);
   // Retires the Tor context (New Identity): from now on it sends nothing.
   // The guards of its windows and its own gate cancel every request
-  // (TorRetired()), and its proxy points at kTorPlaceholderPort, so even a
+  // (TorRetired()), and its proxy points at the placeholder, so even a
   // request no guard sees (a WebSocket) cannot reach tor. Windows that still
   // hold it keep it until they close; the next CreateTor() makes a new one.
   // False, with |error|, if the proxy could not be changed (the context is
@@ -86,7 +87,8 @@ class ContextManager {
   // example) are cancelled unless |allowed| returns true. Called on the IO
   // thread; set before the first Tor context is created.
   void SetTorGate(std::function<bool()> allowed) { tor_gate_ = std::move(allowed); }
-  static constexpr int kTorPlaceholderPort = 9;
+  // The Tor context's proxy port: tor's, or the placeholder.
+  int TorProxyPort() const;
 
   // Settings > Privacy & Security > Block third-party cookies, for web
   // contexts: applied to Normal now (if it exists) and to every context
@@ -100,6 +102,15 @@ class ContextManager {
   // web contexts ("system" or "direct"), the same way.
   bool SetUseSystemProxy(bool use_system, std::string* error);
   bool ApplyProxyMode(CefRefPtr<CefRequestContext> context, std::string* error);
+
+  // Settings > Privacy & Security > JavaScript optimizer ("off-in-tor",
+  // "on" or "off"): Chromium's per-site V8 optimizer setting, for every web
+  // context. Where it is off, each site's renderer process is started with
+  // --js-flags=--disable-optimizing-compilers, so it applies to pages opened from then
+  // on. Set on Normal and Tor now and on contexts created later; apply it
+  // to private windows' contexts with ApplyJsOptimizer.
+  bool SetJsOptimizer(const std::string& mode, std::string* error);
+  bool ApplyJsOptimizer(CefRefPtr<CefRequestContext> context, std::string* error);
 
   // History > Clear history: Chromium's per-site zoom levels and scores in
   // the Normal profile (chromium_profile::ScrubSiteRecords does the same
@@ -128,7 +139,7 @@ class ContextManager {
   RetiredFlag tor_pending_retired_;  // The Tor context being created.
   // Retired by DropTor(), possibly still in use.
   std::vector<std::pair<CefRefPtr<CefRequestContext>, RetiredFlag>> old_tor_;
-  int tor_port_ = kTorPlaceholderPort;
+  int tor_port_ = 0;  // tor's SOCKS port; 0 while tor has none.
   bool tor_pending_ = false;
   std::vector<PrivateCallback> tor_waiting_;
   std::function<bool()> tor_gate_;
@@ -137,6 +148,8 @@ class ContextManager {
   std::filesystem::path download_dir_;
   bool block_third_party_cookies_ = true;
   bool use_system_proxy_ = false;
+  std::string js_optimizer_ = "off-in-tor";
+  bool JsOptimizerOff(Kind kind) const;
   DoneCallback done_;
   int pending_ = 0;
   bool failed_ = false;

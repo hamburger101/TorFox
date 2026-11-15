@@ -16,6 +16,8 @@ Both check: that the setup runs without administrator rights; what is
 installed (and what is not), the shortcut and the uninstall entry; that the
 installed TorFox runs sandboxed; that an update
 (/TORFOXUPDATE) waits for TorFox to close, installs and starts TorFox again;
+that an update after TorFox closed (/TORFOXNORELAUNCH) does not start it, and a
+TorFox opened while an update installs exits at once and is started afterwards;
 that Setup and Uninstall refuse to run while TorFox is open; and that
 uninstalling removes the program but keeps the user's data.
 
@@ -55,6 +57,8 @@ if sys.platform == "win32":
 
 SETUP_DIR = pathlib.Path(os.environ.get("TORFOX_SETUP_DIR", REPO / "out" / "dist"))
 UPDATE_ARGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TORFOXUPDATE"]
+# TorFox closed with an update waiting (TorFox's updater, platform_win.cc LaunchUpdate).
+INSTALL_ON_EXIT_ARGS = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TORFOXUPDATE", "/TORFOXNORELAUNCH"]
 QUIET_ARGS = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
 SHIPPED = ["TorFox.exe", "TorFox.dll", "libcef.dll", "chrome_elf.dll", "icudtl.dat", "resources.pak",
            "v8_context_snapshot.bin", "locales/en-US.pak", "tor/tor.exe",
@@ -157,10 +161,15 @@ class InstalledTorFox:
 
 
 def close_pid(pid: int, timeout: float = 30.0) -> None:
-    for hwnd in _top_level_windows(pid):
-        _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-    wait_for(lambda: not [p for p in wpi.all_processes() if p["ProcessId"] == pid], timeout,
-             f"TorFox ({pid}) to close")
+    # A TorFox the setup has just started may not have its window yet: ask
+    # again until it has gone.
+    def closed() -> bool:
+        if not [p for p in wpi.all_processes() if p["ProcessId"] == pid]:
+            return True
+        for hwnd in _top_level_windows(pid):
+            _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        return False
+    wait_for(closed, timeout, f"TorFox ({pid}) to close", interval=0.5)
 
 
 class InstallerTests:
@@ -321,6 +330,69 @@ class InstallerTests:
                                      and p["ParentProcessId"] not in
                                      {q["ProcessId"] for q in processes_in(self.app)}],
                             60, "TorFox to start again")
+        for p in browsers:
+            close_pid(p["ProcessId"])
+
+    def torfox_browsers(self) -> list[dict]:
+        """TorFox's main processes started from the program folder."""
+        inside = processes_in(self.app)
+        ids = {q["ProcessId"] for q in inside}
+        return [p for p in inside if p["Name"] == "TorFox.exe" and p["ParentProcessId"] not in ids]
+
+    def start_request(self):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\TorFox") as k:
+                return winreg.QueryValueEx(k, "RelaunchAfterUpdate")[0]
+        except FileNotFoundError:
+            return None
+
+    def test_an_update_after_torfox_closed_installs_without_starting_it(self) -> None:
+        # TorFox was closed with an update waiting: it installs, and TorFox
+        # stays closed.
+        if not self.variant.update_setup.is_file():
+            self.skipTest(f"{self.variant.update_setup} not found")
+        self.install()
+        self.assertEqual(self.run_setup(self.variant.update_setup, INSTALL_ON_EXIT_ARGS), 0)
+        self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.update_version)
+        self.assertIn("Update: holding TorFoxUpdateInstalling", self.last_log_text())
+        time.sleep(10)
+        self.assertEqual(self.torfox_browsers(), [])
+
+    def test_torfox_opened_during_an_update_starts_once_it_has_finished(self) -> None:
+        # The user opens TorFox while the update installs: that TorFox must
+        # not run from the files being replaced. It exits at once and asks
+        # the setup to start TorFox when it is done.
+        if not self.variant.update_setup.is_file():
+            self.skipTest(f"{self.variant.update_setup} not found")
+        self.install()
+        self.addCleanup(lambda: self.start_request() is not None and winreg.DeleteValue(
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\TorFox", 0, winreg.KEY_SET_VALUE),
+            "RelaunchAfterUpdate"))
+        with self.start() as tf:
+            wait_for(lambda: "GET /page" in self.fixture.requests, 60, "the page request")
+            log = self.log_path(self.variant.update_setup)
+            setup = subprocess.Popen([str(self.variant.update_setup), *INSTALL_ON_EXIT_ARGS, f"/LOG={log}"])
+            self.addCleanup(lambda: setup.poll() is None and setup.kill())
+
+            def waiting():
+                try:
+                    return "Update: waiting for TorFox to exit" in log.read_text(encoding="utf-8",
+                                                                                errors="replace")
+                except FileNotFoundError:
+                    return False
+            wait_for(waiting, 120, "the update to wait for TorFox")
+            started = time.monotonic()
+            second = subprocess.run([str(self.app / "TorFox.exe")], timeout=60)
+            self.assertEqual(second.returncode, 0)
+            self.assertLess(time.monotonic() - started, 20, "the second TorFox did not stop at once")
+            self.assertEqual(self.start_request(), 1)
+            # It opened no window in the running TorFox either.
+            self.assertEqual(len(_top_level_windows(tf.proc.pid)), 1)
+            self.assertEqual(tf.close(), 0)
+        self.assertEqual(setup.wait(600), 0)
+        self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.update_version)
+        browsers = wait_for(self.torfox_browsers, 60, "the setup to start TorFox")
+        self.assertIsNone(self.start_request())
         for p in browsers:
             close_pid(p["ProcessId"])
 

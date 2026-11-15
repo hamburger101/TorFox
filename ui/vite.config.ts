@@ -33,6 +33,7 @@ export default defineConfig({
         history: `${root}pages/history/index.html`,
         downloads: `${root}pages/downloads/index.html`,
         suggest: `${root}pages/suggest/index.html`,
+        whatsnew: `${root}pages/whatsnew/index.html`,
       },
     },
   },

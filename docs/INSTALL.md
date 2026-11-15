@@ -27,9 +27,12 @@ TorFox is open. It removes the program files, shortcuts and the uninstall entry.
 (settings, bookmarks, history, Tor state) in `%LOCALAPPDATA%\TorFox` is **kept**, so a reinstall finds it
 again. Delete that folder yourself to remove it. Downloaded files stay in your Downloads folder.
 
-**Updates:** TorFox downloads and checks the new setup, then asks you to restart it. The setup waits up
-to a minute for TorFox to close, installs and starts TorFox again, with no prompt. If TorFox is still
-open after a minute, the setup stops without changing anything.
+**Updates:** TorFox downloads and checks each new setup by itself, then shows *Relaunch to update* in the
+toolbar. Relaunching closes TorFox; the setup waits up to a minute for it to close, installs and starts
+TorFox again, with no prompt, and your normal windows' tabs come back. If you close TorFox instead, the
+update installs in the background and TorFox stays closed until you open it. If TorFox is still open
+after a minute, the setup stops without changing anything. Settings → Updates can turn automatic
+downloads off ([`UPDATING.md`](UPDATING.md)).
 
 **Installed an earlier test build for all users?** Setups from before this change installed TorFox in
 `C:\Program Files\TorFox`. The new setup does not replace that copy; it installs a second one for you.
@@ -56,8 +59,9 @@ Requirements: macOS 13 Ventura or later.
 **Uninstall:** quit TorFox and move it from Applications to the Bin. Your profile in
 `~/Library/Application Support/TorFox` is kept. Delete that folder to remove it.
 
-**Updates:** TorFox downloads and checks the new disk image, then opens it. Quit TorFox and drag the new
-TorFox onto Applications, replacing the old one, then allow it in Privacy & Security as above.
+**Updates:** TorFox downloads and checks the new disk image by itself, then shows *Relaunch to update*.
+That opens the image after TorFox quits. Drag the new TorFox onto Applications, replacing the old one,
+then allow it in Privacy & Security as above.
 
 ## Building from source
 See the README.

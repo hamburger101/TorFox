@@ -97,26 +97,142 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\TorFox.exe"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\TorFox.exe"; Tasks: desktopicon
 
+[Registry]
+; TorFox writes HKCU\Software\TorFox only to ask an update in progress to
+; start it afterwards ([Code]); nothing is created here, the uninstaller
+; removes the key.
+Root: HKCU; Subkey: "Software\TorFox"; Flags: dontcreatekey uninsdeletekey
+
 [Run]
-; An interactive install offers to start TorFox; an update starts it again.
+; An interactive install offers to start TorFox. An update starts it again
+; after "Relaunch to update" (or if TorFox was opened while it installed).
 ; Setup never asks for elevation, so TorFox runs as the user who started
 ; Setup (runasoriginaluser stays as a second guard).
 Filename: "{app}\TorFox.exe"; Description: "{cm:LaunchProgram,TorFox}"; Flags: nowait postinstall skipifsilent runasoriginaluser
-Filename: "{app}\TorFox.exe"; Flags: nowait runasoriginaluser; Check: IsUpdate
+Filename: "{app}\TorFox.exe"; Flags: nowait runasoriginaluser; Check: StartAfterUpdate; BeforeInstall: UpdateFinished
 
 [Code]
 const
   RunningMutex = 'TorFoxBrowserRunning';
   UpdateWaitSeconds = 60;
+  // Held while an update installs: a TorFox started meanwhile does not run
+  // (it would hold files this setup replaces); it records a request instead,
+  // and this setup starts TorFox when it has finished
+  // (src/browser/platform/platform_win.cc).
+  InstallingMutex = 'TorFoxUpdateInstalling';
+  // TorFox holds the mutex itself from before it shuts down until this
+  // setup sets this event, once it holds the mutex too: no TorFox can start
+  // in between (LaunchUpdate in platform_win.cc).
+  StartedEvent = 'TorFoxUpdateStarted';
+  EVENT_MODIFY_STATE = $0002;
+  TorFoxKey = 'Software\TorFox';
+  StartRequestValue = 'RelaunchAfterUpdate';
 
-function IsUpdate: Boolean;
+var
+  InstallingHandle: NativeInt;
+  TorFoxStarted: Boolean;
+
+function CreateMutex(Attributes: NativeInt; InitialOwner: BOOL; Name: String): NativeInt;
+external 'CreateMutexW@kernel32.dll stdcall';
+
+function CloseHandle(Handle: NativeInt): BOOL;
+external 'CloseHandle@kernel32.dll stdcall';
+
+function OpenEvent(DesiredAccess: DWORD; InheritHandle: BOOL; Name: String): NativeInt;
+external 'OpenEventW@kernel32.dll stdcall';
+
+function SetEvent(Handle: NativeInt): BOOL;
+external 'SetEvent@kernel32.dll stdcall';
+
+function HasParam(const Name: String): Boolean;
 var
   I: Integer;
 begin
   Result := False;
   for I := 1 to ParamCount do
-    if CompareText(ParamStr(I), '/TORFOXUPDATE') = 0 then
+    if CompareText(ParamStr(I), Name) = 0 then
       Result := True;
+end;
+
+function IsUpdate: Boolean;
+begin
+  Result := HasParam('/TORFOXUPDATE');
+end;
+
+// After "Relaunch to update" TorFox starts again; after TorFox was closed
+// with an update waiting (/TORFOXNORELAUNCH), only if it was opened while
+// the update installed.
+function StartAfterUpdate: Boolean;
+begin
+  Result := IsUpdate and (not HasParam('/TORFOXNORELAUNCH') or
+                          RegValueExists(HKCU, TorFoxKey, StartRequestValue));
+end;
+
+procedure ReleaseInstalling;
+begin
+  if InstallingHandle <> 0 then
+  begin
+    CloseHandle(InstallingHandle);
+    InstallingHandle := 0;
+  end;
+end;
+
+// Just before the [Run] entry starts TorFox.
+procedure UpdateFinished;
+begin
+  ReleaseInstalling;
+  RegDeleteValue(HKCU, TorFoxKey, StartRequestValue);
+  TorFoxStarted := True;
+end;
+
+function InitializeSetup: Boolean;
+var
+  Started: NativeInt;
+begin
+  Result := True;
+  if IsUpdate then
+  begin
+    InstallingHandle := CreateMutex(0, False, InstallingMutex);
+    Log('Update: holding ' + InstallingMutex);
+    // TorFox may stop waiting now. (No event: this setup was started some
+    // other way.)
+    Started := OpenEvent(EVENT_MODIFY_STATE, False, StartedEvent);
+    if Started <> 0 then
+    begin
+      SetEvent(Started);
+      CloseHandle(Started);
+      Log('Update: told TorFox');
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // The files are in place: TorFox may start from here on.
+  if CurStep = ssPostInstall then
+    ReleaseInstalling;
+end;
+
+procedure DeinitializeSetup;
+var
+  Code: Integer;
+begin
+  ReleaseInstalling;
+  // The setup did not get as far as starting TorFox (it failed, or the
+  // request came after its [Run] entry was checked), but should have: after
+  // "Relaunch to update", or because TorFox was opened while the update was
+  // being installed. Start it now, installed or not; a TorFox that was not
+  // updated says so when it starts (update::CheckHandoff).
+  if not TorFoxStarted and StartAfterUpdate then
+  begin
+    RegDeleteValue(HKCU, TorFoxKey, StartRequestValue);
+    try
+      ExecAsOriginalUser(ExpandConstant('{app}\TorFox.exe'), '', '', SW_SHOWNORMAL,
+                         ewNoWait, Code);
+    except
+      Log('Could not start TorFox: ' + GetExceptionMessage);
+    end;
+  end;
 end;
 
 // A WQL string literal matching paths that start with Dir (LIKE wildcards

@@ -4,6 +4,11 @@
 
 """Stage 7: Settings > Updates against a fake GitHub on loopback.
 
+UpdateTest checks each step with automatic downloads off; AutoUpdateTest
+the default, Chrome-like flow: a verified update downloads by itself, the
+toolbar offers "Relaunch to update", and an update still waiting when
+TorFox closes is installed without starting TorFox again.
+
 The test build is pointed at the fake (--torfox-test-update-config, test
 builds only) with a key made for each run; releases are signed with it by
 scripts/minisign.py, whose output the official minisign verifies (and whose
@@ -26,7 +31,7 @@ import tempfile
 import time
 import unittest
 
-from harness import REPO, Fixture, TorFox, bridge_call, wait_for
+from harness import REPO, Fixture, TorFox, bridge_call, click, shell_state, wait_for, wait_state
 
 sys.path.insert(0, str(REPO / "scripts"))
 import minisign  # noqa: E402
@@ -37,6 +42,8 @@ FAKE_INSTALLER = (REPO / "out" / "test" / "tests" / "e2e" / "helpers" / "Release
 REPOSITORY = "test/TorFox"
 PLATFORM = "windows-x64"
 INSTALLER_ARGS = "/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE"
+# TorFox closed with an update waiting: no window, and no relaunch.
+INSTALL_ON_EXIT_ARGS = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE /TORFOXNORELAUNCH"
 
 
 class Key:
@@ -49,8 +56,10 @@ class Key:
         return minisign.sign(self.seed, self.key_id, data, comment)
 
 
-@unittest.skipUnless(sys.platform == "win32", "the update E2E tests run on Windows")
-class UpdateTest(unittest.TestCase):
+class UpdateHelpers:
+    # Settings written before the first start.
+    PRESET: dict = {}
+
     def setUp(self) -> None:
         if not FAKE_INSTALLER.is_file():
             self.fail(f"{FAKE_INSTALLER} is missing: build out/test (TORFOX_TEST_HOOKS=ON)")
@@ -62,6 +71,11 @@ class UpdateTest(unittest.TestCase):
         self.marker = self.user_data.parent / (self.user_data.name + "-installer.txt")
         self.addCleanup(lambda: self.marker.unlink(missing_ok=True))
         self.installer = FAKE_INSTALLER.read_bytes()
+        self.choice = self.user_data.parent / (self.user_data.name + "-dialog.txt")
+        self.addCleanup(lambda: self.choice.unlink(missing_ok=True))
+        if self.PRESET:
+            (self.user_data / "settings.json").write_text(
+                json.dumps({"format": 1, "settings": self.PRESET}), encoding="utf-8")
 
     # ----- The fake GitHub -------------------------------------------------------------
 
@@ -109,8 +123,8 @@ class UpdateTest(unittest.TestCase):
     # ----- TorFox ------------------------------------------------------------------------
 
     def torfox(self, delay_ms: int = 600000, extra_origins: list[str] | None = None,
-               configured: bool = True) -> TorFox:
-        args = []
+               configured: bool = True, extra_args: list[str] | None = None) -> TorFox:
+        args = [f"--torfox-test-dialog-choice={self.choice}", *(extra_args or [])]
         if configured:
             config = self.user_data.parent / (self.user_data.name + "-update.json")
             config.write_text(json.dumps({"origin": self.github.origin,
@@ -158,6 +172,35 @@ class UpdateTest(unittest.TestCase):
     def assert_nothing_in_updates(self) -> None:
         folder = self.user_data / "Updates"
         self.assertEqual(sorted(p.name for p in folder.iterdir()) if folder.exists() else [], [])
+
+    def installer_started(self) -> list[str]:
+        return wait_for(lambda: self.marker.exists() and
+                        self.marker.read_text(encoding="utf-8").splitlines(), 20,
+                        "the installer to start")
+
+    def preset(self, settings: dict) -> None:
+        (self.user_data / "settings.json").write_text(
+            json.dumps({"format": 1, "settings": {**self.PRESET, **settings}}), encoding="utf-8")
+
+    def wait_ready_by_itself(self, tf: TorFox, release: dict) -> dict:
+        """The automatic check finds |release| and downloads it, unasked."""
+        check = tf.wait_log("update_check", timeout=20, automatic=True)
+        self.assertEqual(check["result"], "available")
+        done = tf.wait_log("update_download", timeout=30)
+        self.assertEqual((done["result"], done["sha256"]), ("ok", release["sha256"]))
+        return wait_state(tf.shell(), lambda s: s["update"], "the toolbar's relaunch button", 15)
+
+    def relaunch_from(self, shell) -> None:
+        """Asks for the relaunch from the toolbar, without waiting for the
+        reply (TorFox may close before it arrives)."""
+        shell.evaluate("window.torfoxQuery({request: JSON.stringify({cmd: 'update.install'}),"
+                       " persistent: false, onSuccess: () => {}, onFailure: () => {}}), true")
+
+
+@unittest.skipUnless(sys.platform == "win32", "the update E2E tests run on Windows")
+class UpdateTest(UpdateHelpers, unittest.TestCase):
+    # Each step on its own: nothing is downloaded until the user asks.
+    PRESET = {"updates.autoInstall": False}
 
     # ----- Tests -------------------------------------------------------------------------
 
@@ -209,6 +252,38 @@ class UpdateTest(unittest.TestCase):
                 f"GET {self.download_path(release['tag'], 'manifest.json.minisig')}",
                 f"GET {self.download_path(release['tag'], 'manifest.json')}",
                 f"GET {release['path']}"]))
+
+    def test_with_automatic_updates_off_closing_torfox_installs_nothing(self) -> None:
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox() as tf:
+            page = self.settings(tf)
+            self.assertEqual(self.check(page)["state"], "available")
+            self.act(page, "update.download")
+            self.assertEqual(self.wait_status(page, {"ready", "error"})["state"], "ready")
+            # The user downloaded it: the toolbar offers the relaunch too, but
+            # closing TorFox does not install it.
+            self.assertEqual(shell_state(tf.shell())["update"], {"version": "9.1.0", "restarts": True})
+            self.assertEqual(tf.close(), 0)
+            self.assertEqual(tf.events("update_install"), [])
+            self.assertEqual(tf.events("update_handoff"), [])
+        time.sleep(1)
+        self.assertFalse(self.marker.exists())
+        # Kept for later: the next start finds it again.
+        self.assertTrue((self.user_data / "Updates" / release["name"]).exists())
+
+    def test_turning_automatic_updates_on_downloads_the_update_found(self) -> None:
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox() as tf:
+            page = self.settings(tf)
+            self.assertEqual(self.check(page)["state"], "available")
+            time.sleep(1)
+            self.assertEqual(self.requests_for(release["path"]), [])
+            r = bridge_call(page, "settings.set", {"key": "updates.autoInstall", "value": True})
+            self.assertTrue(r["ok"], r)
+            s = self.wait_status(page, {"ready", "error"}, timeout=30)
+            self.assertEqual(s["state"], "ready", s)
+            self.assertEqual(len(self.requests_for(release["path"])), 1)
+            wait_state(tf.shell(), lambda st: st["update"] == {"version": "9.1.0", "restarts": True}, "relaunch button")
 
     def test_a_release_signed_with_another_key_is_ignored(self) -> None:
         release = self.publish("9.1.0", 2000000000, key=Key())
@@ -499,12 +574,16 @@ class UpdateTest(unittest.TestCase):
         release = self.publish("9.1.0", 2000000000)
         with self.torfox() as tf:
             shell = tf.shell()
-            commands = ("update.status", "update.check", "update.download", "update.install")
+            commands = ("update.status", "update.check", "update.download")
             for cmd in commands:
                 r = bridge_call(shell, cmd)
                 self.assertFalse(r["ok"], (cmd, r))
             self.assertEqual([e["reason"] for e in tf.events("bridge_reject")],
                              ["unknown_command"] * len(commands))
+            # The toolbar may only ask for a relaunch, which needs a ready update.
+            r = bridge_call(shell, "update.install")
+            self.assertEqual((r["ok"], r.get("message")), (False, "No update is ready to install."))
+            self.assertEqual(tf.events("update_install"), [])
             # Web pages have no bridge at all (test_isolation.py).
         self.assertEqual(self.github.requests, [])
         self.assertEqual(self.requests_for(release["path"]), [])
@@ -523,6 +602,279 @@ class UpdateTest(unittest.TestCase):
             self.assertEqual(self.status(page)["state"], "not_configured")
             self.assertEqual(tf.events("update_fetch"), [])
         self.assertEqual(self.github.requests, [])
+
+
+@unittest.skipUnless(sys.platform == "win32", "the update E2E tests run on Windows")
+class AutoUpdateTest(UpdateHelpers, unittest.TestCase):
+    """The default: updates download by themselves, like Chrome's."""
+
+    def test_an_update_downloads_by_itself_and_the_toolbar_offers_a_relaunch(self) -> None:
+        site = Fixture().__enter__()
+        self.addCleanup(site.__exit__, None, None, None)
+        url = site.html("/kept", "<!doctype html><title>Kept page</title><p>kept</p>")
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox(delay_ms=300) as tf:
+            shell = tf.shell()
+            self.assertTrue(bridge_call(shell, "nav.go", {"input": url})["ok"])
+            wait_state(shell, lambda s: s["tabs"][0]["url"] == url and not s["tabs"][0]["loading"],
+                       "the page")
+            state = self.wait_ready_by_itself(tf, release)
+            self.assertEqual(state["update"], {"version": "9.1.0", "restarts": True})
+            # Downloaded, not merely announced.
+            self.assertEqual(tf.events("update_notice"), [])
+            self.assertEqual((self.user_data / "Updates" / release["name"]).read_bytes(), self.installer)
+            # The button, clicked like a user would.
+            rect = wait_for(lambda: shell.evaluate(
+                "(() => { const b = document.querySelector('tf-shell').shadowRoot"
+                ".querySelector('#relaunch'); if (!b) return null; const r = b.getBoundingClientRect();"
+                " return r.width > 0 ? [r.left + r.width / 2, r.top + r.height / 2, b.textContent.trim()]"
+                " : null; })()"), 10, "the relaunch button")
+            self.assertEqual(rect[2], "Relaunch to update")
+            click(shell, rect[0], rect[1])
+            tf.proc.wait(30)
+            self.assertEqual(tf.proc.returncode, 0)
+            self.assertEqual([(e["ok"], e["relaunch"]) for e in tf.events("update_install")], [(True, True)])
+            self.assertEqual([(e["sha256"], e["relaunch"]) for e in tf.events("update_handoff")],
+                             [(release["sha256"], True)])
+            # No question: there was no private or Tor window to lose.
+            self.assertEqual(tf.events("dialog_shown"), [])
+        lines = self.installer_started()
+        self.assertTrue(lines[0].endswith(INSTALLER_ARGS), lines)
+        # TorFox held the setup's mutex from before it shut down, and waited
+        # until the setup said it holds the mutex too (fake_installer.c).
+        self.assertEqual(lines[2:6], ["installing-mutex=1", "parent-waited=1", "started-event=1",
+                                      "parent-exited=1"], lines)
+        self.assertEqual((self.user_data / "update-handoff").read_text(encoding="utf-8"), "9.1.0\n")
+        # The tabs are kept for the relaunch, although "On startup" is the
+        # default "Open a new tab".
+        self.assertTrue((self.user_data / "session-relaunch").exists())
+        saved = json.loads((self.user_data / "session.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["windows"], [{"tabs": [url], "active": 0}])
+
+        # The installer starts TorFox again (here the test does): the tabs
+        # come back once, then What's new opens in front.
+        (self.user_data / "last-version").write_text("0.0.1\n", encoding="utf-8")
+        with self.torfox() as tf:
+            shell = tf.shell()
+            relaunch = tf.wait_log("session_relaunch", timeout=10)
+            self.assertEqual((relaunch["windows"], relaunch["kept"]), (1, False))
+            state = wait_state(shell, lambda s: [t["url"] for t in s["tabs"]] == [url, "torfox://whatsnew/"],
+                               "the kept tab, then What's new")
+            self.assertEqual(state["nav"]["url"], "torfox://whatsnew/")
+            self.assertEqual(tf.events("whats_new_opened")[0]["from"], "0.0.1")
+            # The fake installer installed nothing: TorFox says so, and What's
+            # new does not say this version is the update TorFox checked.
+            self.assertEqual(tf.events("update_handoff_record")[0]["outcome"], "not_installed")
+            wait_state(shell, lambda s: "could not install the update to version 9.1.0" in (s["notice"] or ""),
+                       "the notice that the update did not install")
+            self.assertFalse((self.user_data / "update-handoff").exists())
+            page = tf.page_at("torfox://whatsnew/")
+            shown = wait_for(lambda: page.evaluate(
+                "document.querySelector('tf-whats-new')?.shadowRoot?.querySelector('#from')?.textContent"),
+                10, "What's new")
+            self.assertIn("updated from version 0.0.1", shown)
+            self.assertNotIn("signing key", shown)
+            self.assertFalse((self.user_data / "session-relaunch").exists())
+            self.assertFalse((self.user_data / "session.json").exists())
+            # Nothing waits any more.
+            self.assertIsNone(state["update"])
+        # Only once: the next start opens a new tab, as it is set to.
+        with self.torfox() as tf:
+            wait_state(tf.shell(), lambda s: [t["url"] for t in s["tabs"]] == ["torfox://newtab/"],
+                       "one new tab")
+            self.assertEqual(tf.events("session_relaunch"), [])
+            self.assertEqual(tf.events("whats_new_opened"), [])
+
+    def test_an_update_waiting_when_torfox_closes_installs_without_a_relaunch(self) -> None:
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox(delay_ms=300) as tf:
+            self.wait_ready_by_itself(tf, release)
+            self.assertEqual(tf.close(), 0)
+            self.assertEqual([(e["ok"], e["relaunch"]) for e in tf.events("update_install")], [(True, False)])
+            self.assertEqual([e["relaunch"] for e in tf.events("update_handoff")], [False])
+        lines = self.installer_started()
+        self.assertTrue(lines[0].endswith(INSTALL_ON_EXIT_ARGS), lines)
+        # TorFox held the setup's mutex from before it shut down, and waited
+        # until the setup said it holds the mutex too (fake_installer.c).
+        self.assertEqual(lines[2:6], ["installing-mutex=1", "parent-waited=1", "started-event=1",
+                                      "parent-exited=1"], lines)
+        self.assertEqual(pathlib.Path(lines[1]).resolve(),
+                         (self.user_data / "Updates" / release["name"]).resolve())
+        # Nothing is kept for a start that will not happen.
+        self.assertFalse((self.user_data / "session-relaunch").exists())
+        self.assertFalse((self.user_data / "session.json").exists())
+
+    def test_an_update_is_not_installed_while_windows_shuts_down(self) -> None:
+        # Windows is ending the session: an installer started now would be
+        # cut off. The update waits for the next start.
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox(delay_ms=300, extra_args=["--torfox-test-session-ending"]) as tf:
+            self.wait_ready_by_itself(tf, release)
+            self.assertEqual(tf.close(), 0)
+            self.assertEqual([e["why"] for e in tf.events("update_install_skipped")], ["session_ending"])
+            self.assertEqual(tf.events("update_install"), [])
+            self.assertEqual(tf.events("update_handoff"), [])
+        time.sleep(1)
+        self.assertFalse(self.marker.exists())
+        self.assertTrue((self.user_data / "Updates" / release["name"]).exists())
+
+    def test_private_windows_are_asked_about_before_a_relaunch(self) -> None:
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox(delay_ms=300) as tf:
+            shell = tf.shell()
+            self.wait_ready_by_itself(tf, release)
+            known = tf.shell_ids()
+            self.assertTrue(bridge_call(shell, "window.newPrivate")["ok"])
+            wait_for(lambda: tf.events("window_created", private=True), 15, "private window")
+            private = tf.new_shell(known)
+            wait_state(private, lambda s: s["private"], "private shell")
+            # Not now: nothing closes and nothing is installed.
+            self.choice.write_text("cancel", encoding="utf-8")
+            r = bridge_call(shell, "update.install")
+            self.assertEqual((r["ok"], r.get("message")), (False, "cancelled"))
+            shown = tf.events("dialog_shown")
+            self.assertEqual([(d["kind"], d["heading"], d["accept"], d["cancel"]) for d in shown],
+                             [("update_relaunch", "Your private or Tor window will close",
+                               "Relaunch", "Not now")])
+            self.assertIn("9.1.0", shown[0]["details"])
+            self.assertIn("Your normal windows open again", shown[0]["details"])
+            time.sleep(1)
+            self.assertIsNone(tf.proc.poll())
+            self.assertEqual(tf.events("update_install"), [])
+            self.assertFalse((self.user_data / "session-relaunch").exists())
+            # Relaunch: the normal window is kept, the private one is not.
+            self.choice.write_text("accept", encoding="utf-8")
+            self.relaunch_from(shell)
+            tf.proc.wait(30)
+            self.assertEqual(tf.proc.returncode, 0)
+            self.assertEqual(len(tf.events("dialog_shown")), 2)
+            self.assertEqual([e["relaunch"] for e in tf.events("update_handoff")], [True])
+        self.assertTrue(self.installer_started()[0].endswith(INSTALLER_ARGS))
+        saved = json.loads((self.user_data / "session.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["windows"], [{"tabs": ["torfox://newtab/"], "active": 0}])
+
+    def test_nothing_is_kept_for_a_relaunch_while_history_is_cleared_on_exit(self) -> None:
+        site = Fixture().__enter__()
+        self.addCleanup(site.__exit__, None, None, None)
+        url = site.html("/gone", "<!doctype html><title>Gone page</title><p>gone</p>")
+        self.preset({"privacy.clearOnExit.history": True})
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox(delay_ms=300) as tf:
+            shell = tf.shell()
+            self.assertTrue(bridge_call(shell, "nav.go", {"input": url})["ok"])
+            self.wait_ready_by_itself(tf, release)
+            # A private window, so that TorFox asks: it must not promise the
+            # normal windows back.
+            known = tf.shell_ids()
+            self.assertTrue(bridge_call(shell, "window.newPrivate")["ok"])
+            wait_for(lambda: tf.events("window_created", private=True), 15, "private window")
+            wait_state(tf.new_shell(known), lambda s: s["private"], "private shell")
+            self.choice.write_text("accept", encoding="utf-8")
+            self.relaunch_from(shell)
+            tf.proc.wait(30)
+            details = [d["details"] for d in tf.events("dialog_shown")]
+            self.assertEqual(len(details), 1)
+            self.assertIn("No tabs open again", details[0])
+            self.assertNotIn("open again;", details[0])
+            self.assertEqual([e["relaunch"] for e in tf.events("update_handoff")], [True])
+            self.assertEqual(tf.events("session_saved"), [])
+        self.installer_started()
+        self.assertFalse((self.user_data / "session-relaunch").exists())
+        self.assertFalse((self.user_data / "session.json").exists())
+        with self.torfox() as tf:
+            wait_state(tf.shell(), lambda s: [t["url"] for t in s["tabs"]] == ["torfox://newtab/"],
+                       "one new tab")
+            self.assertEqual(tf.events("session_relaunch"), [])
+        self.assertNotIn(b"Gone page", b"".join(p.read_bytes() for p in self.user_data.rglob("*")
+                                                if p.is_file() and p.suffix in (".json", "")))
+
+    def test_a_relaunch_marker_without_an_update_restores_only_once(self) -> None:
+        # The marker is a one-shot hint, removed at the next start whatever
+        # it finds; it never turns "Restore previous tabs" on.
+        site = Fixture().__enter__()
+        self.addCleanup(site.__exit__, None, None, None)
+        url = site.html("/once", "<!doctype html><title>Once</title>")
+        (self.user_data / "session.json").write_text(json.dumps(
+            {"format": 1, "windows": [{"tabs": [url], "active": 0}]}), encoding="utf-8")
+        (self.user_data / "session-relaunch").write_text("1\n", encoding="utf-8")
+        with self.torfox() as tf:
+            wait_state(tf.shell(), lambda s: [t["url"] for t in s["tabs"]] == [url], "the kept tab")
+        self.assertFalse((self.user_data / "session-relaunch").exists())
+        with self.torfox() as tf:
+            wait_state(tf.shell(), lambda s: [t["url"] for t in s["tabs"]] == ["torfox://newtab/"],
+                       "one new tab")
+
+
+@unittest.skipUnless(sys.platform == "win32", "the update E2E tests run on Windows")
+class UpdateBeingInstalledTest(unittest.TestCase):
+    """While the setup replaces TorFox's files (it holds a named mutex),
+    starting TorFox does not run the old copy: it asks the setup to start
+    TorFox when it is done, and exits."""
+
+    MUTEX = "TorFoxUpdateInstalling"
+    KEY = r"Software\TorFox"
+    VALUE = "RelaunchAfterUpdate"
+
+    def setUp(self) -> None:
+        import ctypes
+        import winreg
+        self.ctypes, self.winreg = ctypes, winreg
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel32.CreateMutexW.restype = ctypes.c_void_p
+        self.kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        self.kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        self.user_data = pathlib.Path(tempfile.mkdtemp(prefix="torfox-e2e-installing-"))
+        self.addCleanup(shutil.rmtree, self.user_data, True)
+        # The value lives in the real HKCU\Software\TorFox: put back what
+        # was there.
+        self.before = self.read_value()
+        self.addCleanup(self.restore_value)
+
+    def read_value(self):
+        try:
+            with self.winreg.OpenKey(self.winreg.HKEY_CURRENT_USER, self.KEY) as k:
+                return self.winreg.QueryValueEx(k, self.VALUE)
+        except FileNotFoundError:
+            return None
+
+    def restore_value(self) -> None:
+        if self.before is not None:
+            with self.winreg.CreateKey(self.winreg.HKEY_CURRENT_USER, self.KEY) as k:
+                self.winreg.SetValueEx(k, self.VALUE, 0, self.before[1], self.before[0])
+            return
+        try:
+            with self.winreg.OpenKey(self.winreg.HKEY_CURRENT_USER, self.KEY, 0,
+                                     self.winreg.KEY_SET_VALUE) as k:
+                self.winreg.DeleteValue(k, self.VALUE)
+        except FileNotFoundError:
+            pass
+
+    def run_once(self) -> tuple[int, list[dict]]:
+        tf = TorFox(user_data=self.user_data)
+        proc = subprocess.run(tf.args, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return proc.returncode, tf.log()
+
+    def test_a_start_during_an_update_asks_the_setup_to_start_torfox(self) -> None:
+        handle = self.kernel32.CreateMutexW(None, True, self.MUTEX)
+        self.assertTrue(handle, self.ctypes.get_last_error())
+        try:
+            code, log = self.run_once()
+        finally:
+            self.kernel32.CloseHandle(handle)
+        self.assertEqual(code, 0)
+        events = [e for e in log if e.get("ev") == "update_being_installed"]
+        self.assertEqual([e["start_requested"] for e in events], [True])
+        # No window, no browser: it stopped before CEF started.
+        self.assertFalse([e for e in log if e.get("ev") in ("startup", "window_created")])
+        self.assertEqual(self.read_value(), (1, self.winreg.REG_DWORD))
+        self.assertFalse((self.user_data / "User Data").exists())
+
+    def test_a_normal_start_clears_an_old_request(self) -> None:
+        with self.winreg.CreateKey(self.winreg.HKEY_CURRENT_USER, self.KEY) as k:
+            self.winreg.SetValueEx(k, self.VALUE, 0, self.winreg.REG_DWORD, 1)
+        with TorFox(user_data=self.user_data) as tf:
+            self.assertEqual(tf.events("update_being_installed"), [])
+        self.assertIsNone(self.read_value())
 
 
 if __name__ == "__main__":

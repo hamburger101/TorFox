@@ -62,6 +62,7 @@ class TabClient : public CefClient,
   void Close();
   // A tab in a Tor window (its context is the Tor context).
   bool tor() const { return tor_; }
+  const std::vector<long>& renderer_pids() const { return renderer_pids_; }
   // The main-frame URL held back because tor was not connected (UI
   // thread); the window loads it once tor connects.
   std::string TakeTorPendingUrl();
@@ -278,6 +279,9 @@ class TabClient : public CefClient,
   std::string initial_url_;
   CefRefPtr<CefBrowser> browser_;
   bool closing_ = false;
+  // The processes this browser's frames said they run in (Settings >
+  // Memory); reset with each new main-frame document. UI thread.
+  std::vector<long> renderer_pids_;
   // The main-frame URL whose load failed most recently: its error page is
   // not history.
   std::string failed_url_;

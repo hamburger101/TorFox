@@ -59,8 +59,13 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
 
 The Tor context:
 - **Proxy:** the proxy pref is applied in `OnRequestContextInitialized` and read back before any browser is created.
-  It is `fixed_servers`, never DIRECT, with bypass list `<-loopback>`. Until tor reports its SOCKS port, the
-  port is a placeholder (9) that nothing listens on.
+  It is `fixed_servers`, never DIRECT, with bypass list `<-loopback>`. Until tor reports its SOCKS port, after
+  tor stops and after New identity, the port is a placeholder: `platform::ReservedLoopbackPort()`, a
+  127.0.0.1 port TorFox listens on itself for as long as it runs and that resets every connection without
+  reading it. No other program can take 127.0.0.1 on that port (`SO_EXCLUSIVEADDRUSE` on Windows), and
+  one listening on every address of it is never given a connection to 127.0.0.1. A fixed port (9, before)
+  could be taken by any program, which would then be sent the names Tor windows open. Without the
+  placeholder there are no Tor windows.
 - **Traffic:** every request goes through Tor: onion and clearnet subresources alike. Chromium sends the host
   name to tor (SOCKS5 address type 3), so nothing is resolved locally.
 - **Hardening:** `webrtc.ip_handling_policy = disable_non_proxied_udp`, prediction off, third-party cookies
@@ -126,6 +131,11 @@ Security. The pure rules live in `src/core/privacy/` and are unit tested without
 - **Cookies and pop-ups:** `profile.cookie_controls_mode`, re-applied to every open context when the
   setting changes. Pop-ups are decided in `OnBeforePopup`, since Chromium's own blocker is set to allow;
   allowed ones open as tabs.
+- **JavaScript optimizer:** Chromium's per-site V8 optimizer content setting
+  (`profile.default_content_setting_values.javascript_optimizer`), set in every web context: blocked in
+  the Tor context unless the setting is *On*, and in normal and private contexts only for *Off everywhere*.
+  Chromium then starts each site's renderer with `--js-flags=--disable-optimizing-compilers` (no TurboFan
+  or Maglev). Renderers already running keep what they started with.
 - **Permissions:** camera and microphone (`OnRequestMediaAccessPermission`) and clipboard
   (`OnShowPermissionPrompt`) are denied, or asked about every time. Everything else is denied. Chromium's
   stored answer is reset right after each prompt, so nothing is remembered per site.
@@ -236,7 +246,7 @@ User-facing behaviour and limits: [`UPDATING.md`](UPDATING.md). Making a release
 - **`UpdateService`** (browser process, UI thread). States `not_configured / off / idle / checking /
   up_to_date / available / downloading / ready / error`, shown on `torfox://settings` through the bridge
   (`update.status`, `update.subscribe`, `update.check`, `update.download`, `update.install`, settings page
-  only).
+  only, except `update.install`, which the toolbar's *Relaunch to update* may also send).
   - Requests use `CefURLRequest` in an off-the-record context of their own, with
     `UR_FLAG_STOP_ON_REDIRECT`: TorFox checks each `Location` against the allowlist before following it (at
     most 5). No cookies, no cache, no credentials (`GetAuthCredentials` refuses).
@@ -244,13 +254,46 @@ User-facing behaviour and limits: [`UPDATING.md`](UPDATING.md). Making a release
     is hashed while it downloads into `Updates/<name>.part` and renamed only when size and hash match.
   - Automatic checks: a tick two minutes after start and then every hour. It checks only when the last
     check (or attempt) was more than a day ago.
-  - *Install*: the file is hashed again, all windows close, and after `CefShutdown`
-    `platform::LaunchUpdate` hashes it once more. On Windows it holds the file open without write sharing
-    while it hashes it and starts the installer
+  - *Automatic updates* (`updates.autoInstall`, default on): an `available` release is downloaded at once.
+    A `ready` update shows *Relaunch to update* in every window's toolbar (`BrowserWindow::UpdateJson`).
+  - *Relaunch* (`BrowserApp::RelaunchToUpdate`): with private or Tor windows open, the user is asked first.
+    Then the file is hashed again, `SessionService::PrepareRelaunch` saves the normal windows' tabs with a
+    one-time marker (`session-relaunch`; never while history is cleared on exit), and all windows close.
+    After `CefShutdown`, `platform::LaunchUpdate` hashes the file once more. On Windows it holds the file
+    open without write sharing while it hashes it and starts the installer
     (`/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE`, for this user, with no UAC prompt). On macOS it
-    opens the DMG.
+    opens the DMG. The next start takes the marker, restores those tabs once and removes both files.
+  - *On close* (Windows, `platform::InstallsUpdatesOnExit`): a `ready` update with automatic updates on is
+    handed over the same way in `BrowserApp::Shutdown`, with `/VERYSILENT … /TORFOXNORELAUNCH`. Not after
+    a fatal error, and not while Windows ends the session (`platform::SessionEnding`).
+  - *During the install*: the setup holds the `TorFoxUpdateInstalling` mutex from its start until its files
+    are in place. A TorFox started then (`platform::UpdateBeingInstalled`, checked before CEF starts) sets
+    `HKCU\Software\TorFox` `RelaunchAfterUpdate` and exits; the setup starts TorFox when it is done.
+    TorFox itself holds the mutex from before `CefShutdown` (`platform::HoldUpdateInstalling`) until the
+    setup sets `TorFoxUpdateStarted` from `InitializeSetup`, which `LaunchUpdate` waits for (at most 20 s),
+    so there is no gap between the two. Just before starting the setup, TorFox writes the version it hands
+    over to `update-handoff`; the next start reads it once (`update::CheckHandoff`): this version means
+    TorFox installed the update it checked, a newer one means the update did not install (a notice).
+  - *What's new*: `last-version` in the data folder names the version that last ran. When it names an older
+    one (`update::ShouldShowWhatsNew`), the first normal window opens `torfox://whatsnew/` (which says
+    the update was checked against the signing key only after `update-handoff` matched), whose only
+    commands are `whatsnew.get` and `appearance.subscribe`. Its notes are `docs/release-notes/<version>.txt`,
+    compiled in by CMake (at most 16 KiB, checked as UTF-8 and shown as text).
 - There is no OS code-signature check: TorFox has no code-signing certificates (it is not distributed
   through app stores).
+
+## Settings > Memory
+`memory.query` (settings page only) answers with a report built off the UI thread
+(`memory::BuildReport`, unit-tested):
+- **Processes:** `platform::TorFoxProcesses` lists this process and its descendants. A child counts only if
+  it started after its parent, which rules out reused process IDs. Helpers must run from TorFox's own
+  folder and tor and its transports from the tor folder; anything else (an app opened for a link) is left
+  out. Windows reports the private working set (Task Manager's *Memory*), macOS the physical footprint
+  (Activity Monitor's *Memory*).
+- **Tabs:** each renderer tells the browser its process ID (`torfox_renderer_pid`, at most 32 per tab), and
+  the report attributes a process to the tabs that named it only if it is one of TorFox's helpers, so a
+  renderer that lies can only mislabel memory. Private and Tor tabs are never named (no title, no URL).
+- The page asks every 2 seconds while the section is shown and the tab is visible.
 
 ## Security assumptions
 - **Chromium/CEF security:** Chromium's sandbox and site isolation are TorFox's primary defence against

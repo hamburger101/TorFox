@@ -143,9 +143,9 @@ alongside it, and [`INSTALL.md`](INSTALL.md) says how to remove the old one.
 ### 2.2 Others
 - **Withheld updates.** Signed releases do not expire, so someone who can answer for GitHub can hide newer
   releases (but not install older or unsigned ones).
-- **The placeholder port.** A retired or orphaned Tor context points at port 9 on loopback. TorFox's guards
-  refuse every request but WebSockets first, but a program listening on port 9 would be sent a WebSocket's
-  host name.
+- **The placeholder port** (fixed in Stage 10, [`STAGE10_FINDINGS.md`](STAGE10_FINDINGS.md) §1.1). A retired
+  or orphaned Tor context pointed at port 9 on loopback. TorFox's guards refuse every request but
+  WebSockets first, but a program listening on port 9 would have been sent a WebSocket's host name.
 - **WebSockets are not seen by TorFox's request guards** (CEF does not show them). Tor windows' WebSockets
   go through tor like everything else, and the resolver rules keep `.onion` names from DNS.
 - **macOS** has never been built or run. Everything above is verified on Windows only.

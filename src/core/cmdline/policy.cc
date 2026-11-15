@@ -232,6 +232,11 @@ Plan Apply(const Input& input) {
     // CefSettings too; forcing it here means no switch of the user's can
     // ever remove it.
     plan.switches["log-severity"] = "disable";
+    // CEF's Chromium logs to a file by default. With the severity above
+    // alone it still creates User Data\chrome_debug.log (empty, nothing
+    // reaches it); this switch stops it from opening the file at all
+    // (test_release_win.test_release_builds_write_no_logs).
+    plan.switches["disable-logging"] = "";
   }
 
   // 3. Merge feature lists. A feature TorFox enables can never stay disabled,

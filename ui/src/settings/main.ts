@@ -62,6 +62,52 @@ function formatBytes(n: number): string {
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
+interface MemoryGroup {
+  bytes: number;
+  processes: number;
+  pids: number[];
+}
+
+interface MemoryTab {
+  title: string;
+  window: "normal" | "private" | "tor";
+  active: boolean;
+}
+
+interface MemoryReport {
+  supported: boolean;
+  total: number;
+  processes: number;
+  browser: number;
+  interface: MemoryGroup;
+  helpers: MemoryGroup;
+  tor: MemoryGroup;
+  tabs: (MemoryGroup & { tabs: MemoryTab[] })[];
+}
+
+const MEMORY_POLL_MS = 2000;
+
+function formatMemory(n: number): string {
+  if (n >= 1024 * 1024 * 1024) {
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  if (n >= 1024 * 1024) {
+    const mb = n / (1024 * 1024);
+    return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  }
+  return `${Math.max(0, Math.round(n / 1024))} KB`;
+}
+
+function tabName(t: MemoryTab): string {
+  if (t.window === "tor") {
+    return "Tor tab";
+  }
+  if (t.window === "private") {
+    return "Private tab";
+  }
+  return t.title || "Untitled tab";
+}
+
 function formatTime(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString(undefined, {
     dateStyle: "medium",
@@ -85,6 +131,8 @@ export class TorFoxSettings extends LitElement {
     loadError: { state: true },
     updateStatus: { state: true },
     updateError: { state: true },
+    memory: { state: true },
+    memoryError: { state: true },
   };
 
   declare data: SettingsData | null;
@@ -94,7 +142,17 @@ export class TorFoxSettings extends LitElement {
   declare loadError: string;
   declare updateStatus: UpdateStatus | null;
   declare updateError: string;
+  declare memory: MemoryReport | null;
+  declare memoryError: string;
   private unsubscribeUpdates: (() => void) | null = null;
+  private memoryTimer = 0;
+  private memoryBusy = false;
+  // Measured again as soon as the tab is shown (polls skip a hidden page).
+  private readonly memoryOnVisible = () => {
+    if (!document.hidden) {
+      void this.queryMemory();
+    }
+  };
 
   constructor() {
     super();
@@ -105,6 +163,8 @@ export class TorFoxSettings extends LitElement {
     this.loadError = "";
     this.updateStatus = null;
     this.updateError = "";
+    this.memory = null;
+    this.memoryError = "";
   }
 
   override connectedCallback(): void {
@@ -118,7 +178,118 @@ export class TorFoxSettings extends LitElement {
   override disconnectedCallback(): void {
     this.unsubscribeUpdates?.();
     this.unsubscribeUpdates = null;
+    this.stopMemory();
     super.disconnectedCallback();
+  }
+
+  override updated(changed: Map<string, unknown>): void {
+    if (changed.has("section")) {
+      if (this.section === "memory") {
+        this.startMemory();
+      } else {
+        this.stopMemory();
+      }
+    }
+  }
+
+  // ----- Settings > Memory: polled only while the section is shown -----
+
+  private startMemory(): void {
+    if (this.memoryTimer) {
+      return;
+    }
+    void this.queryMemory();
+    this.memoryTimer = window.setInterval(() => void this.queryMemory(), MEMORY_POLL_MS);
+    document.addEventListener("visibilitychange", this.memoryOnVisible);
+  }
+
+  private stopMemory(): void {
+    if (this.memoryTimer) {
+      window.clearInterval(this.memoryTimer);
+      this.memoryTimer = 0;
+    }
+    document.removeEventListener("visibilitychange", this.memoryOnVisible);
+  }
+
+  private async queryMemory(): Promise<void> {
+    if (this.memoryBusy || document.hidden) {
+      return;
+    }
+    this.memoryBusy = true;
+    try {
+      this.memory = await call<MemoryReport>("memory.query");
+      this.memoryError = "";
+    } catch (err) {
+      this.memoryError = err instanceof BridgeError ? err.message : String(err);
+    } finally {
+      this.memoryBusy = false;
+    }
+  }
+
+  private renderMemoryRow(id: string, title: unknown, detail: string, bytes: number, total: number) {
+    const share = total > 0 ? Math.max(0.5, Math.min(100, (bytes * 100) / total)) : 0;
+    return html`<div class="row memory-row" data-kind=${id}>
+      <div class="row-text">
+        <div class="row-title">${title}</div>
+        ${detail ? html`<div class="row-desc">${detail}</div>` : nothing}
+        <div class="bar memory-bar" aria-hidden="true"><span style=${styleProps({ width: `${share}%` })}></span></div>
+      </div>
+      <div class="row-control"><span class="memory-value">${formatMemory(bytes)}</span></div>
+    </div>`;
+  }
+
+  private renderMemory() {
+    const m = this.memory;
+    if (this.memoryError && !m) {
+      return html`<div class="banner error" role="alert">${this.memoryError}</div>`;
+    }
+    if (!m) {
+      return html`<section class="card"><div class="row"><div class="row-text">
+        <div class="row-title"><span>Measuring…</span></div></div></div></section>`;
+    }
+    if (!m.supported) {
+      return html`<section class="card"><div class="row"><div class="row-text">
+        <div class="row-title"><span>TorFox could not measure its memory on this computer.</span></div>
+        </div></div></section>`;
+    }
+    const processes = (n: number) => (n === 1 ? "1 process" : `${n} processes`);
+    return html`
+      <section class="card memory-total" id="memory-total">
+        <div class="row">
+          <div class="row-text">
+            <div class="row-title"><span>TorFox is using</span></div>
+            <div class="row-desc">${processes(m.processes)}</div>
+          </div>
+          <div class="row-control"><span class="memory-big" id="memory-total-value">${formatMemory(m.total)}</span></div>
+        </div>
+      </section>
+      <section class="card" id="memory-tabs">
+        <h2>Tabs</h2>
+        ${m.tabs.length === 0
+          ? html`<div class="row"><div class="row-text"><div class="row-desc">No tab is using memory of its own right now.</div></div></div>`
+          : m.tabs.map((row) => this.renderMemoryRow("tab",
+              html`${row.tabs.map((t, i) => html`${i > 0 ? html`<span class="sep">, </span>` : nothing}<span
+                class="tab-name ${t.window}" title=${tabName(t)}>${tabName(t)}</span>`)}`,
+              row.tabs.length > 1
+                ? `${row.tabs.length} tabs share ${row.processes === 1 ? "this process" : `these ${row.processes} processes`}`
+                : row.processes > 1 ? `${processes(row.processes)} (frames from other sites)` : "",
+              row.bytes, m.total))}
+      </section>
+      <section class="card" id="memory-torfox">
+        <h2>TorFox</h2>
+        ${this.renderMemoryRow("browser", html`<span>Browser</span>`,
+          "Windows, settings, history, bookmarks and downloads", m.browser, m.total)}
+        ${this.renderMemoryRow("interface", html`<span>Toolbars and menus</span>`,
+          m.interface.processes ? processes(m.interface.processes) : "", m.interface.bytes, m.total)}
+        ${this.renderMemoryRow("helpers", html`<span>Graphics, network and other helpers</span>`,
+          m.helpers.processes ? processes(m.helpers.processes) : "", m.helpers.bytes, m.total)}
+        ${m.tor.processes > 0
+          ? this.renderMemoryRow("tor", html`<span>Tor</span>`,
+              `${processes(m.tor.processes)} (tor and its bridges)`, m.tor.bytes, m.total)
+          : nothing}
+      </section>
+      ${this.memoryError ? html`<div class="banner error" role="alert">${this.memoryError}</div>` : nothing}
+    `;
   }
 
   private async updateAction(cmd: string): Promise<void> {
@@ -126,7 +297,9 @@ export class TorFoxSettings extends LitElement {
     try {
       this.updateStatus = await call<UpdateStatus>(cmd);
     } catch (err) {
-      this.updateError = err instanceof BridgeError ? err.message : String(err);
+      const message = err instanceof BridgeError ? err.message : String(err);
+      // "Relaunch to update" asked first and the user chose Not now.
+      this.updateError = message === "cancelled" ? "" : message;
     }
   }
 
@@ -181,15 +354,19 @@ export class TorFoxSettings extends LitElement {
           aria-valuemax="100"><span style=${styleProps({ width: `${percent}%` })}></span></div>`;
         break;
       }
-      case "ready":
+      case "ready": {
+        const auto = this.data?.settings.find((s) => s.key === "updates.autoInstall")?.value === true;
         title = `TorFox ${u.version} is ready`;
         body = html`<div class="row-desc">The download matches the signed release.
           ${mac
             ? "TorFox will close and open the disk image; copy TorFox to Applications."
+            : auto
+            ? "Relaunch TorFox to install it now. If you close TorFox instead, it installs then."
             : "TorFox will close, install the update and start again."}</div>`;
         action = html`<button class="button primary" id="update-install"
-          @click=${() => this.updateAction("update.install")}>${mac ? "Close and open" : "Restart to update"}</button>`;
+          @click=${() => this.updateAction("update.install")}>${mac ? "Close and open" : "Relaunch to update"}</button>`;
         break;
+      }
       default:
         title = "TorFox could not update";
         body = html`<div class="row-error" role="alert">${u.message}</div>`;
@@ -386,6 +563,7 @@ export class TorFoxSettings extends LitElement {
           : nothing}
         ${current?.note ? html`<div class="banner">${current.note}</div>` : nothing}
         ${this.section === "updates" ? this.renderUpdates() : nothing}
+        ${this.section === "memory" ? this.renderMemory() : nothing}
         ${this.section === "about" ? this.renderAbout() : this.renderSettings(this.section)}
       </main>
     `;
@@ -705,6 +883,38 @@ export class TorFoxSettings extends LitElement {
       display: block;
       height: 100%;
       background: var(--accent);
+    }
+    .memory-big {
+      font-family: var(--font-display);
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
+    }
+    .memory-value {
+      font-variant-numeric: tabular-nums;
+      color: var(--fg);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .memory-row .row-title {
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .memory-bar {
+      height: 3px;
+      margin-top: 8px;
+    }
+    .tab-name.private {
+      color: var(--private);
+    }
+    .tab-name.tor {
+      color: var(--tor);
+    }
+    .sep {
+      color: var(--fg-faint);
     }
     .notes {
       padding: 4px 20px 16px;

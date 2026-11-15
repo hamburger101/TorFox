@@ -48,6 +48,26 @@ file(READ "${CMAKE_SOURCE_DIR}/deps.lock.json" _torfox_deps_lock)
 string(JSON TORFOX_TOR_BUNDLE_VERSION GET "${_torfox_deps_lock}" tor tor_browser_version)
 configure_file(app/version.h.in "${TORFOX_GEN_DIR}/src/browser/app/version.h" @ONLY)
 
+# This version's release notes (docs/release-notes/<version>.txt) for the
+# What's new page. A version without notes (a development build) has none;
+# scripts/release.py refuses to publish one. Adding or editing the file makes
+# CMake configure again.
+set(_torfox_notes_dir "${CMAKE_SOURCE_DIR}/docs/release-notes")
+set(_torfox_notes "${_torfox_notes_dir}/${PROJECT_VERSION}.txt")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_torfox_notes_dir}")
+set(TORFOX_RELEASE_NOTES_BYTES "")
+set(TORFOX_RELEASE_NOTES_SIZE 0)
+if(EXISTS "${_torfox_notes}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_torfox_notes}")
+  file(SIZE "${_torfox_notes}" TORFOX_RELEASE_NOTES_SIZE)
+  if(TORFOX_RELEASE_NOTES_SIZE GREATER 16384)
+    message(FATAL_ERROR "${_torfox_notes} is longer than 16 KiB.")
+  endif()
+  file(READ "${_torfox_notes}" _torfox_notes_hex HEX)
+  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," TORFOX_RELEASE_NOTES_BYTES "${_torfox_notes_hex}")
+endif()
+configure_file(app/release_notes.h.in "${TORFOX_GEN_DIR}/src/browser/app/release_notes.h" @ONLY)
+
 # The updater's repository and public key (config/release.json; never secrets).
 file(READ "${CMAKE_SOURCE_DIR}/config/release.json" _torfox_release)
 string(JSON _owner GET "${_torfox_release}" github_owner)
@@ -124,7 +144,7 @@ if(OS_WINDOWS)
   add_dependencies(${CEF_TARGET} libcef_dll_wrapper)
   target_link_libraries(${CEF_TARGET} PRIVATE
     torfox_core libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS}
-    dwmapi shell32 ole32 advapi32 user32)
+    dwmapi shell32 ole32 advapi32 user32 ws2_32)
 
   # bootstrap.exe, renamed, loads TorFox.dll and initialises the sandbox.
   COPY_SINGLE_FILE(${CEF_TARGET} "${CEF_BINARY_DIR}/bootstrap.exe" "${CEF_TARGET_OUT_DIR}/TorFox.exe")

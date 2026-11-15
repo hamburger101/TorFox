@@ -20,10 +20,12 @@
 #include "src/browser/app/tor_service.h"
 #include "src/browser/app/settings_service.h"
 #include "src/browser/app/test_log.h"
+#include "src/browser/app/release_notes.h"
 #include "src/browser/app/update_service.h"
 #include "src/browser/app/version.h"
 #include "src/browser/platform/platform.h"
 #include "src/browser/shell/browser_window.h"
+#include "src/core/update/whats_new.h"
 
 namespace torfox {
 
@@ -226,20 +228,23 @@ bool BridgeHandler::DispatchUpdates(const bridge::Validated& msg, int browser_id
   } else if (cmd == "update.download") {
     updates->Download();
   } else if (cmd == "update.install") {
-    std::string error;
-    if (!updates->PrepareInstall(&error)) {
-      callback->Failure(kFailed, error);
+    // "Relaunch to update", from the toolbar or Settings > Updates. A prompt
+    // it shows belongs to the sender: the shell's active tab, or that tab.
+    auto entry = Registry().Find(browser_id);
+    BrowserWindow* window = entry ? entry->window : nullptr;
+    if (!window || !GetServices().relaunch_to_update) {
+      callback->Failure(kFailed, "no window");
       return true;
     }
-    Reply(callback, UpdateStatusJson());
-    // TorFox closes; the update starts once it has shut down.
-    if (GetServices().close_all_windows) {
-      CefPostTask(TID_UI, base::BindOnce([] {
-                    if (GetServices().close_all_windows) {
-                      GetServices().close_all_windows();
-                    }
-                  }));
-    }
+    const int tab_id = entry->role == BrowserRole::kShell ? window->active_tab_id() : entry->tab_id;
+    GetServices().relaunch_to_update(window, tab_id,
+                                     [callback](bool ok, const std::string& error) {
+                                       if (ok) {
+                                         Reply(callback, UpdateStatusJson());
+                                       } else {
+                                         callback->Failure(kFailed, error);
+                                       }
+                                     });
     return true;
   }
   Reply(callback, UpdateStatusJson());
@@ -296,6 +301,36 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
     } else {
       callback->Failure(kFailed, std::string(ChangeResultName(result)));
     }
+    return;
+  }
+  if (cmd == "memory.query") {
+    // Listing processes takes a few milliseconds: not on the UI thread.
+    std::vector<memory::Renderer> renderers =
+        services.collect_renderers ? services.collect_renderers() : std::vector<memory::Renderer>();
+    const std::filesystem::path tor_dir =
+        services.tor ? services.tor->program_dir() : platform::BundledTorPaths().dir;
+    CefPostTask(TID_FILE_USER_VISIBLE,
+                base::BindOnce(
+                    [](std::vector<memory::Renderer> renderers, std::filesystem::path tor_dir,
+                       CefRefPtr<Callback> callback) {
+                      Json report =
+                          memory::BuildReport(platform::TorFoxProcesses(tor_dir), renderers);
+                      CefPostTask(TID_UI, base::BindOnce(
+                                              [](CefRefPtr<Callback> callback, Json report) {
+                                                Reply(callback, report);
+                                              },
+                                              callback, std::move(report)));
+                    },
+                    std::move(renderers), tor_dir, callback));
+    return;
+  }
+  if (cmd == "whatsnew.get") {
+    // The page TorFox opens after an update: this version's bundled notes,
+    // shown as text.
+    Reply(callback, {{"version", kTorFoxVersion},
+                     {"previous", services.whats_new_from},
+                     {"verified", services.whats_new_verified},
+                     {"notes", update::NormalizeNotes(ReleaseNotes())}});
     return;
   }
   if (cmd == "app.info") {

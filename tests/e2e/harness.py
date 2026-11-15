@@ -301,6 +301,7 @@ SHELL_STATE = """(() => {
     tabs: s.tabs, activeId: s.activeId, nav: s.nav, private: s.isPrivate,
     findOpen: s.findOpen, findCount: s.findCount, findActive: s.findActive,
     barVisible: s.barVisible, barItems: s.barItems, notice: s.notice, downloads: s.downloads,
+    update: s.readyUpdate,
   }));
 })()"""
 

@@ -222,6 +222,13 @@ void ContextManager::CreateTor(int socks_port, PrivateCallback done) {
     done(nullptr, "TorFox is not ready to open a Tor window.");
     return;
   }
+  // Without its own placeholder port, the Tor context would have nowhere
+  // safe to point while tor is not running: no Tor windows at all.
+  if (platform::ReservedLoopbackPort() <= 0) {
+    test_log::Event("tor_context_failed", {{"error", "placeholder"}});
+    done(nullptr, "TorFox could not reserve the local port Tor windows need. Restart TorFox.");
+    return;
+  }
   if (socks_port > 0) {
     tor_port_ = socks_port;
   }
@@ -258,19 +265,28 @@ void ContextManager::OnTorInitialized(PrivateHandler* handler,
   }
   tor_ = context;
   tor_retired_ = std::move(tor_pending_retired_);
-  test_log::Event("context_ready", {{"kind", "tor"}, {"socks_port", tor_port_}});
+  test_log::Event("context_ready", {{"kind", "tor"},
+                                    {"socks_port", tor_port_},
+                                    {"proxy_port", TorProxyPort()},
+                                    {"placeholder", platform::ReservedLoopbackPort()}});
   for (PrivateCallback& done : waiting) {
     done(context, std::string());
   }
 }
 
+int ContextManager::TorProxyPort() const {
+  return tor_port_ > 0 ? tor_port_ : platform::ReservedLoopbackPort();
+}
+
 bool ContextManager::SetTorPort(int socks_port, std::string* error) {
   CEF_REQUIRE_UI_THREAD();
-  tor_port_ = socks_port > 0 ? socks_port : kTorPlaceholderPort;
+  tor_port_ = socks_port > 0 ? socks_port : 0;
   if (!tor_) {
     return true;
   }
-  return SetPrefVerified(tor_, "tor", "proxy", TorProxyValue(tor_port_), error);
+  const bool ok = SetPrefVerified(tor_, "tor", "proxy", TorProxyValue(TorProxyPort()), error);
+  test_log::Event("tor_proxy_port", {{"port", TorProxyPort()}, {"ok", ok}});
+  return ok;
 }
 
 bool ContextManager::DropTor(std::string* error) {
@@ -280,8 +296,9 @@ bool ContextManager::DropTor(std::string* error) {
   }
   tor_retired_->store(true);
   const bool ok = SetPrefVerified(tor_, "tor (retired)", "proxy",
-                                  TorProxyValue(kTorPlaceholderPort), error);
-  test_log::Event("tor_context_retired", {{"proxy_changed", ok}});
+                                  TorProxyValue(platform::ReservedLoopbackPort()), error);
+  test_log::Event("tor_context_retired",
+                  {{"proxy_changed", ok}, {"port", platform::ReservedLoopbackPort()}});
   old_tor_.emplace_back(tor_, tor_retired_);
   tor_ = nullptr;
   tor_retired_ = nullptr;
@@ -468,9 +485,14 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
       return false;
     }
   }
+  if (kind != Kind::kInternal &&
+      !SetPrefVerified(context, name, "profile.default_content_setting_values.javascript_optimizer",
+                       IntValue(JsOptimizerOff(kind) ? 2 : 1), error)) {  // Block : allow.
+    return false;
+  }
   // Tor: tor's SOCKS port and nothing else.
   if (kind == Kind::kTor) {
-    return SetPrefVerified(context, name, "proxy", TorProxyValue(tor_port_), error);
+    return SetPrefVerified(context, name, "proxy", TorProxyValue(TorProxyPort()), error);
   }
   // Web contexts: direct unless the user chose the system's proxy settings.
   if (kind != Kind::kInternal &&
@@ -520,6 +542,29 @@ bool ContextManager::ApplyProxyMode(CefRefPtr<CefRequestContext> context, std::s
   const std::string name = context == normal_ ? "normal" : "private";
   return SetPrefVerified(context, name, "proxy",
                          ProxyValue(use_system_proxy_ ? "system" : "direct"), error);
+}
+
+bool ContextManager::JsOptimizerOff(Kind kind) const {
+  // Anything but "on" keeps it off in Tor windows.
+  return kind == Kind::kTor ? js_optimizer_ != "on" : js_optimizer_ == "off";
+}
+
+bool ContextManager::SetJsOptimizer(const std::string& mode, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  js_optimizer_ = mode;
+  return (!normal_ || ApplyJsOptimizer(normal_, error)) && (!tor_ || ApplyJsOptimizer(tor_, error));
+}
+
+bool ContextManager::ApplyJsOptimizer(CefRefPtr<CefRequestContext> context, std::string* error) {
+  CEF_REQUIRE_UI_THREAD();
+  const bool tor = IsTor(context);
+  const std::string name = tor ? "tor" : context == normal_ ? "normal" : "private";
+  const bool off = JsOptimizerOff(tor ? Kind::kTor : Kind::kNormal);
+  const bool ok =
+      SetPrefVerified(context, name, "profile.default_content_setting_values.javascript_optimizer",
+                      IntValue(off ? 2 : 1), error);
+  test_log::Event("js_optimizer", {{"context", name}, {"off", off}, {"ok", ok}});
+  return ok;
 }
 
 bool ContextManager::ClearSiteRecords(std::string* error) {

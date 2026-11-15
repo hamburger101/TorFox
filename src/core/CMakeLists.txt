@@ -128,6 +128,8 @@ add_library(torfox_core STATIC
   update/minisign.cc update/minisign.h
   update/release.cc update/release.h
   update/sha256.cc update/sha256.h
+  update/whats_new.cc update/whats_new.h
+  memory/report.cc memory/report.h
   url/guards.cc url/guards.h
   url/internal_url.cc url/internal_url.h
   url/nav_input.cc url/nav_input.h

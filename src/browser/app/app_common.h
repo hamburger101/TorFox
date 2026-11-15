@@ -22,6 +22,11 @@ CefMessageRouterConfig BridgeRouterConfig();
 inline constexpr char kExtraInfoInternal[] = "torfox.internal";
 // Web tabs of Tor windows: their renderers remove WebRTC (RendererApp).
 inline constexpr char kExtraInfoTor[] = "torfox.tor";
+// Renderer -> browser, as each frame's script context is created: the
+// renderer's process ID, for Settings > Memory. Any renderer can send it, so
+// the browser only uses it to attribute a process it has itself found to be
+// one of TorFox's helpers (platform::TorFoxProcesses).
+inline constexpr char kRendererPidMessage[] = "torfox_renderer_pid";
 
 }  // namespace torfox
 

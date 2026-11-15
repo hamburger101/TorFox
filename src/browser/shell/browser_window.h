@@ -26,6 +26,7 @@
 #include "src/core/browsing/tabs.h"
 #include "src/core/json.h"
 #include "src/core/privacy/https_first.h"
+#include "src/core/memory/report.h"
 
 namespace torfox {
 
@@ -95,6 +96,14 @@ class BrowserWindow : public CefWindowDelegate {
   https_first::Exceptions& https_exceptions() { return https_exceptions_; }
   // A short message in the address bar.
   void ShowNotice(const std::string& text);
+  // The tab the window shows (0 while it has none).
+  int active_tab_id() const { return active_tab_id_; }
+  // The updater's state changed: the toolbar shows "Relaunch to update"
+  // while an update is ready.
+  void UpdateStatusChanged();
+  // Settings > Memory: the processes this window's tabs and its own pages
+  // said they run in.
+  void CollectRenderers(std::vector<memory::Renderer>* out) const;
 
   // ----- Called by TabClient -----
   void OnClientCreated(TabClient* client, CefRefPtr<CefBrowser> browser);
@@ -228,6 +237,8 @@ class BrowserWindow : public CefWindowDelegate {
                         std::vector<std::string>* urls, int* next_submenu_id);
   Json StateJson();
   Json TorJson() const;
+  // The toolbar's update button: null, or the ready version.
+  static Json UpdateJson();
   // Tor's state changed: show it, and load what was waiting for it.
   void OnTorStatus();
   Json DownloadsJson() const;
@@ -277,6 +288,7 @@ class BrowserWindow : public CefWindowDelegate {
 
   // Find bar.
   bool find_open_ = false;
+  bool update_ready_shown_ = false;  // As last sent to the shell.
   int find_tab_id_ = 0;
   std::string find_text_;
   bool find_match_case_ = false;

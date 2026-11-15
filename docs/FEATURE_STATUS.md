@@ -14,7 +14,9 @@ Legend:
 **macOS:** the build files and platform code exist but have never been compiled, so every macOS entry is
 ⬜ or 🟡 until CI builds and tests them.
 
-Last updated: end of Stage 9 (2026-11-15). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
+Last updated: Stage 10 (2026-11-15): automatic updates, What's new, Settings > Memory and security polish
+([`STAGE10_FINDINGS.md`](STAGE10_FINDINGS.md)). Stage 10's rows carry no **M**: their mutation checks are
+written (`tests/e2e/run_mutations.py`) but have not been run yet (§5 there). The evidence is in [`STAGE1_FINDINGS.md`](STAGE1_FINDINGS.md),
 [`STAGE2_FINDINGS.md`](STAGE2_FINDINGS.md), [`STAGE3_FINDINGS.md`](STAGE3_FINDINGS.md),
 [`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md), [`STAGE5_FINDINGS.md`](STAGE5_FINDINGS.md),
 [`STAGE6_FINDINGS.md`](STAGE6_FINDINGS.md), [`STAGE7_FINDINGS.md`](STAGE7_FINDINGS.md),
@@ -26,6 +28,7 @@ made with the bundled tor on the real Tor network.
 |---|---|---|---|---|
 | Engine | Sandbox on for every process type, incl. network service (release build) | ✅ | 🟡 | `tests/platform/test_release_win.py`; macOS helpers initialise the sandbox, untested |
 | Engine | Command-line switches can't weaken a release build | ✅ M | ⬜ | `test_command_line_cannot_weaken_torfox`, `CmdlinePolicy.*` |
+| Engine | Release builds write no log files (Chromium, CEF or TorFox), even when switches ask for them; Chromium does not even create its (empty) `chrome_debug.log` | ✅ | ⬜ | `test_release_builds_write_no_logs`, `CmdlinePolicy.ReleaseBuildsOpenNoLogFile` |
 | Engine | Site isolation (`--site-per-process`): frames of other sites run in other renderer processes, in normal and private windows | ✅ M | 🟡 | `test_site_isolation.py` (with a same-site control); Tor windows not covered |
 | UI isolation | `torfox://` unreachable from web content (all layers) | ✅ M | ⬜ | `test_isolation.py` (37 tests, several covering many URL variants; each guard layer on its own) |
 | UI isolation | Bridge absent from web pages; every message validated | ✅ M | ⬜ | `test_isolation.py`, `test_bridge.py`, `BridgeValidator.*` |
@@ -63,6 +66,7 @@ made with the bundled tor on the real Tor network.
 | Privacy | Tracker blocking (EasyPrivacy domains, third-party requests only; setting) | ✅ M | ⬜ | `TrackerTest`, `Trackers.*` |
 | Privacy | Tracker blocking for WebSockets | ❌ | ⬜ | CEF does not show WebSockets to the request guard (Stage 4 findings §6) |
 | Privacy | Third-party cookie blocking (setting applies at once) | ✅ M | ⬜ | `CookieTest` |
+| Privacy | JavaScript optimizer (setting): off in Tor windows by default, or off everywhere; Chromium starts those renderers with `--js-flags=--disable-optimizing-compilers` | ✅ | ⬜ | `test_js_optimizer.py` (each tab's renderer command line, with normal-window controls); what V8 does with the switch is Chromium's |
 | Privacy | HTTPS-first: upgrade, question before http, per-session exceptions, no redirect loop (setting) | ✅ M | ⬜ | `HttpsFirstTest`, `HttpsFirst.*` |
 | Privacy | HTTPS-first for form posts | ⛔ | ⛔ | Not upgraded: repeating a POST would resend the form (Stage 4 findings §1) |
 | Privacy | Pop-ups without a click blocked with a notice; click-opened pop-ups open as tabs, no opener (setting) | ✅ M | ⬜ | `PopupTest`, `test_popup_*` |
@@ -85,6 +89,7 @@ made with the bundled tor on the real Tor network.
 | Tor | tor ends with TorFox, also when TorFox is killed (job object) | ✅ M | 🟡 | `test_tor_runs_in_a_job_and_exits_with_torfox`, `test_the_job_alone_ends_tor_if_torfox_is_killed`; macOS relies on `__OwningControllerProcess` and TAKEOWNERSHIP, untested there |
 | Tor | Every Tor-window request goes to tor's SOCKS port with the host name; nothing direct; no lookup that could leave the computer | ✅ M | ⬜ | `test_tor_window_waits_for_tor_then_loads_through_tor_only`, `TorDnsTest` (with a control) |
 | Tor | Fail closed while tor connects or after it stops: tab guard, context gate and proxy, each on its own; tor's old port is never used again | ✅ M | ⬜ | `TorWindowTest`, `TorFailsClosedTest`, `TorContextGateTest`, `ProxyLayerTest`, `ProxyLayerAfterDeathTest` |
+| Tor | While tor has no port (and after New identity) the proxy points at TorFox's own loopback listener, which resets every connection; no other program can take it or be given its connections | ✅ | 🟡 | `test_the_placeholder_port_is_torfoxs_own` (binds on 127.0.0.1 refused; a wildcard listener on the port receives nothing); macOS code never compiled |
 | Tor | A Tor window's traffic leaves through Tor and reaches onion services | ✅ live | ⬜ | `LiveTorTest`: check.torproject.org says `IsTor`, DuckDuckGo's onion service loads |
 | Tor | Onion addresses: v3 with checksum, typos and mixed input refused, opened in a Tor window from normal windows | ✅ M | ⬜ | `TorOnion.*`, `test_mistyped_onion_addresses_are_refused_and_never_searched`, `test_onion_addresses_from_a_normal_window_open_in_a_tor_window` |
 | Tor | Tor windows refuse local addresses (incl. workers), other apps, camera/microphone/clipboard and private-window links | ✅ M | ⬜ | `test_tor_windows_refuse_this_computer_and_the_local_network`, `TorContextGateTest`, `TorSecureContextTest`, `test_link_menu_never_leaves_tor` |
@@ -102,7 +107,9 @@ made with the bundled tor on the real Tor network.
 | Settings | Store: atomic writes, validation, corrupt-file backup and reset | ✅ | ⬜ | `SettingsStore.*`, `SettingsSchema.*`, `test_settings.py` |
 | Settings | Theme (dark, light, system) applied live and persists across restart | ✅ | ⬜ | `test_theme_persists_across_restart`, `test_the_ui_control_changes_the_setting` |
 | Settings | Every active setting persists across restart | ✅ | ⬜ | `test_every_active_setting_persists_across_restart` |
-| Settings | 8 sections, every setting active: General, Search, Privacy & Security, Downloads, Tor, Appearance, Updates, About | ✅ | ⬜ | `test_only_implemented_settings_are_active`, `test_planned_settings_are_disabled_and_labelled` (none left) |
+| Settings | 9 sections, every setting active: General, Search, Privacy & Security, Downloads, Tor, Appearance, Memory, Updates, About | ✅ | ⬜ | `test_only_implemented_settings_are_active`, `test_planned_settings_are_disabled_and_labelled` (none left) |
+| Settings | Memory: TorFox's total, each tab (or tabs sharing a process), the browser, toolbars, helpers and tor; updated every 2 s while shown | ✅ | 🟡 | `test_memory.py` against Windows' process list, `MemoryReport.*`, `test_settings_memory_counts_tor_and_never_names_tor_tabs`; macOS (`libproc`) never compiled |
+| Settings | Memory never names private or Tor tabs; a renderer can only mislabel TorFox's own helpers | ✅ | ⬜ | `test_private_tabs_are_not_named`, `MemoryReport.PrivateAndTorTabsAreNotNamed`, `MemoryReport.WhatARendererSaysOnlyAttributesTorFoxsOwnHelpers` |
 | Updates | Only releases signed with the compiled-in minisign key; other keys, legacy signatures, changed manifests and changed signed comments refused | ✅ M | 🟡 | `Minisign.*` (signatures made by the official minisign tool), `Release.Manifest*`, `test_a_release_signed_with_another_key_is_ignored`, `test_a_changed_manifest_or_signed_comment_is_ignored` |
 | Updates | Only strictly newer releases; an older signed release cannot be replayed, and is reported | ✅ M | 🟡 | `Release.OnlyNewerReleasesAreOffered`, `test_older_and_same_versions_are_never_offered`, `test_an_older_signed_release_cannot_be_replayed` |
 | Updates | No update is offered while the record of seen releases cannot be saved | ✅ M | 🟡 | `test_no_update_is_offered_while_the_record_cannot_be_saved` |
@@ -110,7 +117,15 @@ made with the bundled tor on the real Tor network.
 | Updates | The file must match the signed size and SHA-256, after download and again before install; it is started by its real path while still held open | ✅ M | 🟡 | `test_a_file_that_does_not_match_the_signed_release_is_deleted`, `test_a_file_changed_after_its_download_is_not_installed` |
 | Updates | Installed after TorFox exits (Windows: the installer is started after shutdown; macOS: the DMG is opened and the user copies the app) | ✅ | 🟡 | `test_a_signed_newer_release_is_checked_downloaded_and_installed_after_exit` (with a fake installer that records its arguments); the real setup with those arguments: `test_update_waits_for_torfox_then_installs_and_restarts_it` |
 | Updates | Settings: off means no contact with GitHub; automatic checks at most once a day; notices can be turned off | ✅ M | 🟡 | `test_with_updates_off_torfox_never_contacts_github`, `test_automatic_checks_*`, `test_notices_can_be_turned_off` |
-| Updates | Only the settings page can use the updater | ✅ | ⬜ | `test_only_the_settings_page_can_use_the_updater` |
+| Updates | Automatic updates (default): a verified update downloads by itself; *Relaunch to update* in the toolbar installs it and starts TorFox again; with the setting off nothing is downloaded or installed unasked | ✅ | 🟡 | `AutoUpdateTest.test_an_update_downloads_by_itself_and_the_toolbar_offers_a_relaunch` (button clicked), `test_with_automatic_updates_off_closing_torfox_installs_nothing`, `test_turning_automatic_updates_on_downloads_the_update_found`; macOS opens the DMG instead |
+| Updates | A relaunch keeps the normal windows' tabs once; asks first if private or Tor windows would close; keeps nothing while history is cleared on exit | ✅ | ⬜ | `AutoUpdateTest` (`test_private_windows_are_asked_about_before_a_relaunch`, `test_nothing_is_kept_for_a_relaunch_while_history_is_cleared_on_exit`, `test_a_relaunch_marker_without_an_update_restores_only_once`) |
+| Updates | Closing TorFox with an update waiting installs it silently without starting TorFox; not while Windows ends the session | ✅ | — | `test_an_update_waiting_when_torfox_closes_installs_without_a_relaunch`, `test_an_update_is_not_installed_while_windows_shuts_down` (through a test switch: a real shutdown is not tested) |
+| Updates | A TorFox started while an update installs exits before CEF starts and is started by the setup afterwards | ✅ | — | `UpdateBeingInstalledTest`, installer: `test_torfox_opened_during_an_update_starts_once_it_has_finished` |
+| Updates | No gap between TorFox and the setup: TorFox holds the setup's mutex from before Chromium shuts down until the setup says it holds it too | ✅ | — | the fake installer's record in `test_an_update_downloads_by_itself_…` and `test_an_update_waiting_when_torfox_closes_…` |
+| Updates | A start that races the setup's finish starts after all; a failed *Relaunch to update* still starts TorFox | 🟡 | — | not tested: the first race lasts microseconds, and failing the setup takes a minute |
+| Updates | What's new opens once after an update, with notes built into TorFox, shown as text; never for a new profile, a downgrade or a damaged record | ✅ | 🟡 | `test_whats_new.py`, `WhatsNew.*` |
+| Updates | What's new says the update was checked against the signing key only if TorFox installed that version itself; an update that did not install is reported at the next start | ✅ | — | `test_an_update_torfox_installed_itself_is_said_to_be_checked`, `test_an_update_that_did_not_install_is_reported_once`, `WhatsNew.HandoffRecordTellsWhetherTheUpdateInstalled`; macOS shows neither (the user installs the app) |
+| Updates | Only the settings page can use the updater; the toolbar can only ask for the relaunch of a ready update | ✅ | ⬜ | `test_only_the_settings_page_can_use_the_updater` |
 | Updates | Builds without a release key never look for updates (every build until the maintainer adds the key) | ✅ | 🟡 | `test_a_build_without_a_key_never_looks_for_updates` |
 | Updates | Release builds ignore the test update source | ✅ | — | `test_release_builds_ignore_the_test_update_source` |
 | Updates | Updating from the real GitHub | 🟡 | 🟡 | No release has been signed with the official key yet; tested against a fake GitHub |
@@ -119,6 +134,7 @@ made with the bundled tor on the real Tor network.
 | Packaging | The installed TorFox runs sandboxed | ✅ | — | `test_installed_torfox_runs_sandboxed` |
 | Packaging | Update setup waits for TorFox to close, installs and restarts it with no prompt, and removes stale optional files; gives up without changes if TorFox stays open | ✅ M | — | `test_update_waits_for_torfox_then_installs_and_restarts_it`, `test_update_gives_up_when_torfox_stays_open` (the setup is started with the arguments TorFox's updater uses) |
 | Packaging | Setup and uninstaller refuse while TorFox is open | ✅ M | — | `test_setup_and_uninstall_refuse_while_torfox_is_open` |
+| Packaging | Update after TorFox closed (`/TORFOXNORELAUNCH`) installs without starting TorFox | ✅ | — | `test_an_update_after_torfox_closed_installs_without_starting_it` |
 | Packaging | macOS DMG: ad-hoc signed app, mounts, copies out and starts | — | 🟡 | `packaging/macos/make_dmg.sh` and `check_dmg.sh` run on CI; never run yet (no Mac here, CI has not run) |
 | Packaging | Microsoft (Authenticode) and Apple (Developer ID, notarization) signing | ⛔ | ⛔ | Not distributed through stores; SmartScreen and Gatekeeper warn on first install ([`INSTALL.md`](INSTALL.md)) |
 | Release | Release workflow: fails closed without the tag, key, notes or secret; only tags on `main`; the secret is readable only by a sign job in the `release` environment that gets nothing but the manifest; actions pinned by commit; checks the signed release as TorFox will before publishing | 🟡 | 🟡 | `tests/tools/test_release.py` (manifest, check, preflight with the official minisign; the workflow's jobs, secret use and pins); the workflow itself has never run, and the environment's reviewers and tag rule are GitHub settings no test can see |

@@ -5,6 +5,7 @@
 #include "src/browser/app/renderer_app.h"
 
 #include "src/browser/app/app_common.h"
+#include "src/browser/platform/platform.h"
 #include "src/core/url/internal_url.h"
 
 namespace torfox {
@@ -74,6 +75,10 @@ void RendererApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
   if (tor_browsers_.count(browser->GetIdentifier()) != 0) {
     RemoveWebRtc(context);
   }
+  // Settings > Memory: which process this frame runs in.
+  CefRefPtr<CefProcessMessage> pid = CefProcessMessage::Create(kRendererPidMessage);
+  pid->GetArgumentList()->SetInt(0, static_cast<int>(platform::CurrentProcessId()));
+  frame->SendProcessMessage(PID_BROWSER, pid);
   if (!router_ || internal_browsers_.count(browser->GetIdentifier()) == 0 || !frame->IsMain()) {
     return;
   }

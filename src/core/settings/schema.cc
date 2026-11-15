@@ -12,8 +12,9 @@ namespace torfox::settings {
 
 namespace {
 
-constexpr std::array<std::string_view, 8> kSections = {
-    "general", "search", "privacy", "downloads", "tor", "appearance", "updates", "about",
+constexpr std::array<std::string_view, 9> kSections = {
+    "general", "search",  "privacy", "downloads", "tor",
+    "appearance", "memory", "updates", "about",
 };
 
 constexpr std::array<std::string_view, 2> kStartupPages = {"newtab", "restore"};
@@ -24,6 +25,9 @@ constexpr std::array<std::string_view, 2> kTorStart = {"on-demand", "at-launch"}
 constexpr std::array<std::string_view, 3> kBridgeModes = {"none", "builtin", "custom"};
 constexpr std::array<std::string_view, 3> kBridgeTypes = {"obfs4", "snowflake", "meek"};
 constexpr std::array<std::string_view, 3> kThemes = {"dark", "light", "system"};
+// Chromium's JavaScript optimizing compilers (TurboFan, Maglev), where most
+// browser exploits strike: off in Tor windows unless the user says.
+constexpr std::array<std::string_view, 3> kJsOptimizer = {"off-in-tor", "on", "off"};
 
 constexpr Def Bool(std::string_view key, std::string_view section, Status status, bool def) {
   Def d{};
@@ -70,7 +74,7 @@ constexpr Status A = Status::kActive;
 // Status::kPlanned (shown as "Not active yet") is for settings whose feature is
 // not built; every setting of this build is active.
 
-const std::array<Def, 24> kSettings = {
+const std::array<Def, 26> kSettings = {
     // General
     Enum("general.startupPage", "general", A, kStartupPages),
     // Search Engine
@@ -81,6 +85,7 @@ const std::array<Def, 24> kSettings = {
     Bool("privacy.blockThirdPartyCookies", "privacy", A, true),
     Bool("privacy.blockPopups", "privacy", A, true),
     Bool("privacy.useSystemProxy", "privacy", A, false),
+    Enum("privacy.jsOptimizer", "privacy", A, kJsOptimizer),
     Bool("privacy.clearOnExit.history", "privacy", A, false),
     Bool("privacy.clearOnExit.cookies", "privacy", A, false),
     Bool("privacy.clearOnExit.cache", "privacy", A, false),
@@ -102,6 +107,9 @@ const std::array<Def, 24> kSettings = {
     Bool("updates.enabled", "updates", A, true),
     Bool("updates.autoCheck", "updates", A, true),
     Bool("updates.notify", "updates", A, true),
+    // Download each verified update by itself; it installs when the user
+    // relaunches TorFox for it, or when TorFox closes (Windows).
+    Bool("updates.autoInstall", "updates", A, true),
 };
 
 bool IsValidUtf8(std::string_view s) {

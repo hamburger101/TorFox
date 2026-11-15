@@ -41,6 +41,7 @@ distribution. The result is the same.
 | `--use-fake-device-for-media-stream` | A fake camera and microphone for the permission tests |
 | `--disable-backgrounding-occluded-windows` | Passed to every test: a test window covered by other windows would otherwise count as hidden, and input that waits for a frame stalls ([`STAGE7_FINDINGS.md`](STAGE7_FINDINGS.md) §3.5) |
 | `--torfox-test-update-config=<file>` | Points the updater at a fake GitHub with its own key ([`tests/e2e/test_updates.py`](../tests/e2e/test_updates.py)) |
+| `--torfox-test-session-ending` | Makes TorFox behave as if Windows were ending the session when it closes, so a waiting update is not installed |
 
 None of this exists in a release build. The release platform test passes these switches and checks that they
 have no effect.
@@ -65,7 +66,7 @@ GoogleTest, in `tests/unit/`, covering:
 ## End-to-end tests (Windows)
 ```
 cd tests/e2e
-python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup test_updates test_site_isolation test_suggestions
+python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup test_updates test_site_isolation test_suggestions test_whats_new test_memory test_js_optimizer
 ```
 Each test starts the test build (`out/test/...`, or set `TORFOX_TEST_EXE`) with a fresh temporary profile.
 It drives TorFox over DevTools on loopback and serves fixtures from local HTTP servers. No internet access
@@ -92,8 +93,11 @@ TORFOX_LIVE_TESTS=1 python -m unittest -v test_tor.RealTorTest test_tor.RealTorN
 | `test_private.py` | Private windows: marking, no history, storage isolated from normal and other private windows, links stay private, nothing left on disk (with a control) |
 | `test_privacy.py` | Stage 4: trackers, HTTPS-first, third-party cookies, pop-ups, site permissions, email and phone links, WebRTC addresses, and clear-on-exit across real restarts (normal exit, crash, and a control). Fixture sites get real hostnames (`sites.py`) so that site and public-suffix rules apply |
 | `test_tor.py` | Stage 5, with a scripted tor (`fake_tor.py`) that implements tor's control port and records every SOCKS request: Tor windows wait for tor, then load only through it (host names, no local lookups); the `torrc` and control session; onion addresses and searches; local addresses, other apps, permissions, link menus, cookies and WebRTC in Tor windows (none in any frame, and no name WebRTC would look up reaches the resolver); tor dying and restarting, and its old port never used again; each fail-closed layer on its own; service workers; new identity, after which the old context sends nothing; the job object; bridges; non-ASCII profile folders |
-| `test_updates.py` | Stage 7, with a fake GitHub (a local server; real builds accept only GitHub's https hosts) and throw-away minisign keys made per run by `scripts/minisign.py`: a signed newer release is found, downloaded, checked and handed to the installer after TorFox exits (a fake installer records how it was started); releases signed with another key, changed manifests or signed comments, files that do not match the signed size and SHA-256 (at download and again just before install), older and same versions, replayed older releases (reported as such), redirects to other hosts and files of other repositories are all refused; the installer is started by its real path even when its folder has become a junction; nothing is offered while the record of seen releases cannot be saved; automatic checks at most once a day, the *Updates* toggles, no contact with GitHub when updates are off or the build has no key, and only the settings page can use the updater. Windows only |
+| `test_updates.py` | Stage 7, with a fake GitHub (a local server; real builds accept only GitHub's https hosts) and throw-away minisign keys made per run by `scripts/minisign.py`: a signed newer release is found, downloaded, checked and handed to the installer after TorFox exits (a fake installer records how it was started); releases signed with another key, changed manifests or signed comments, files that do not match the signed size and SHA-256 (at download and again just before install), older and same versions, replayed older releases (reported as such), redirects to other hosts and files of other repositories are all refused; the installer is started by its real path even when its folder has become a junction; nothing is offered while the record of seen releases cannot be saved; automatic checks at most once a day, the *Updates* toggles, no contact with GitHub when updates are off or the build has no key, and only the settings page can use the updater. `AutoUpdateTest`, the default: an update downloads by itself and the toolbar's *Relaunch to update* (clicked) hands it to the installer, keeps the normal windows' tabs once (also with *Open a new tab*) and the next start restores them and opens What's new; closing TorFox with an update waiting starts the installer silently with no relaunch; in both, the fake installer records that TorFox held the setup's mutex when it started it, was still waiting 1.5 s later and exited once the installer set `TorFoxUpdateStarted` (`tests/e2e/helpers/fake_installer.c`), and the restarted TorFox reports that the update did not install (the fake installs nothing); not while Windows ends the session; with a private window open TorFox asks first (*Not now* changes nothing); nothing is kept while history is cleared on exit, and then the prompt does not promise the tabs back. `UpdateBeingInstalledTest`: a TorFox started while the setup's mutex is held exits before CEF starts and records the request in `HKCU\Software\TorFox` (the value is restored afterwards). Windows only |
 | `test_site_isolation.py` | Stage 9: a frame of another site runs in its own renderer process (an out-of-process frame, seen as a DevTools target), a frame of the same site does not (the control), in normal and private windows |
+| `test_whats_new.py` | What's new opens once after an update (the record names an older version), with the notes built into TorFox (`docs/release-notes/<version>.txt`) as text; never for a new profile, the same or a newer version, or a damaged record; it says the update was checked against the signing key only when `update-handoff` names this version, and a record naming a newer version shows a notice once that the update did not install; only its page can ask for the notes, and it can ask for nothing else |
+| `test_memory.py` | Settings > Memory, checked against Windows' own process list (`Win32_Process`): every process counted is TorFox's or a descendant, tab rows are renderer processes, the GPU and network processes are helpers, nothing is counted twice or left out, the browser figure fits its committed private memory; private tabs are never named; the section updates while shown and pauses while hidden; only Settings can ask. Tor's row: `test_tor.TorProcessTest` |
+| `test_js_optimizer.py` | Settings > Privacy & Security > JavaScript optimizer, read from each tab's renderer command line (`--js-flags=--disable-optimizing-compilers`): off in Tor windows by default, on in normal and private windows; *Off everywhere* and *On*; a change applies to pages opened after it |
 | `test_suggestions.py` | Stage 9: address-bar suggestions. Typing lists matching bookmarks and history entries under the address bar; the arrow keys and Enter, or a click, open one in the active tab; Escape, leaving the address bar and switching tabs hide the list; the list's page can only say which row was clicked, cannot be opened in a tab, and closes with its window. Tor windows list bookmarks only (`test_tor.TorSuggestTest`) |
 | `test_downloads.py` | The download bypass matrix (11 vectors × Disable / Ask-cancel / Ask-accept / Allow), prompts held and cancelled by closing the tab or turning downloads off, staging folder, partial names, safe and unique names, Mark of the Web (private downloads keep it but record no address), File System Access pickers absent, the downloads page and private-window separation, names that fit the path limit and are reserved while waiting, failed, restarted and stalled downloads, `OnBeforeDownload` on its own (`InnerLayerTest`), Chromium's download records erased after a quit and a crash (`DownloadRecordsTest`), the real Downloads folder untouched |
 
@@ -114,7 +118,9 @@ python -m unittest discover -v -s tests/platform -p "test_*_win.py"
 ```
 These run the **release** build in `out/dev` (or `TORFOX_RELEASE_EXE`) the way a user would. They check:
 - the sandbox level of every process type;
-- that hostile command-line switches change nothing.
+- that hostile command-line switches change nothing;
+- that no log file is created, not even an empty one (Chromium's, CEF's or TorFox's test log), even with
+  logging switches, and nothing appears next to `TorFox.exe`.
 
 They use the real `%LOCALAPPDATA%\TorFox` folder and delete it afterwards only if the test created it.
 They are skipped while another TorFox is running, because a second launch would only open a window in the running one.
@@ -142,7 +148,9 @@ Each variant checks Setup's log (non-administrative install mode, under `HKEY_CU
 installed files against the setup's allowlist, the shortcut, the uninstall entry,
 that the installed TorFox runs sandboxed, the update path (the setup is started with the arguments TorFox's
 updater uses: it waits for TorFox to close, installs and starts TorFox again, or gives up after a minute
-without changing anything) and that the setup and uninstaller refuse while TorFox is open.
+without changing anything), the update after TorFox closed (`/TORFOXNORELAUNCH`: it installs and does not
+start TorFox), a TorFox opened while an update installs (it exits at once, and the setup starts TorFox when
+it is done) and that the setup and uninstaller refuse while TorFox is open.
 
 ## Release tooling
 ```

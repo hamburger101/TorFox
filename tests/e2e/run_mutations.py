@@ -59,6 +59,7 @@ MINISIGN = "src/core/update/minisign.cc"
 RELEASE = "src/core/update/release.cc"
 UPDATER = "src/browser/app/update_service.cc"
 UPD = "e2e:test_updates.UpdateTest"
+AUTO = "e2e:test_updates.AutoUpdateTest"
 ISS = "packaging/windows/TorFox.iss"
 PACKAGER = "scripts/package_windows.py"
 INST = "installer:"
@@ -314,7 +315,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], [TOR + ".TorContextGateTest.test_after_new_identity_the_old_context_sends_nothing"]),
     "tor-retired-context-keeps-proxy": ([
         (CTX, '  const bool ok = SetPrefVerified(tor_, "tor (retired)", "proxy",\n'
-              '                                  TorProxyValue(kTorPlaceholderPort), error);',
+              '                                  TorProxyValue(platform::ReservedLoopbackPort()), error);',
          "  const bool ok = true;"),
     ], [TOR + ".TorContextGateTest.test_after_new_identity_the_old_context_sends_nothing"]),
     # Site isolation turned off: the test must see frames of other sites
@@ -346,6 +347,11 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     "cmdline-release-logging-not-forced": ([
         (POLICY, '    plan.switches["log-severity"] = "disable";\n', ""),
     ], ["unit:CmdlinePolicy.TheUsersSwitchNeverRemovesCefsOwn"]),
+    # Chromium then creates User Data\chrome_debug.log (Stage 10 findings).
+    "cmdline-release-log-file-opened": ([
+        (POLICY, '    plan.switches["disable-logging"] = "";\n', ""),
+    ], ["unit:CmdlinePolicy.ReleaseBuildsOpenNoLogFile",
+        "platform:test_release_win.ReleaseBuildTest.test_release_builds_write_no_logs"]),
     # "x.onion." does not match "*.onion" (docs/STAGE9_FINDINGS.md).
     "onion-trailing-dot-resolvable": ([
         (POLICY, 'constexpr char kOnionRule[] = "MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND";',
@@ -486,8 +492,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], ["unit:ExternalProtocols.OnlyMailAndPhoneLinksMayOpenAnApp",
         EXT + ".test_other_schemes_never_launch"]),
     "clear-on-exit-skipped": ([
-        (APP, "  clear_data::Clear(normal_profile, clear_at_exit);\n  // Settings > Updates",
-         "  // Settings > Updates"),
+        (APP, "  clear_data::Clear(normal_profile, clear_at_exit);\n  // \"Relaunch to update\"",
+         "  // \"Relaunch to update\""),
     ], [CLEAR + ".test_chosen_data_is_cleared_when_torfox_closes"]),
     "history-kept-at-exit": ([
         (APP, "  if (exit_clear_.history && places_ && places_->places()) {", "  if (false) {"),
@@ -648,7 +654,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          "  while False do\n  begin\n    if UninstallSilent then"),
     ], [INST + "test_setup_and_uninstall_refuse_while_torfox_is_open"]),
     "update-not-restarted": ([
-        (ISS, 'Filename: "{app}\\TorFox.exe"; Flags: nowait runasoriginaluser; Check: IsUpdate\n', ""),
+        (ISS, 'Filename: "{app}\\TorFox.exe"; Flags: nowait runasoriginaluser; Check: StartAfterUpdate; '
+              'BeforeInstall: UpdateFinished\n', ""),
     ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it"]),
     "installer-keeps-stale-files": ([
         (ISS, 'Type: files; Name: "{app}\\dxil.dll"\n', ""),
@@ -685,6 +692,119 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         ("src/browser/shell/browser_window.cc",
          "    StartClose(suggest_client_, suggest_view, nullptr, suggest_overlay);\n", ""),
     ], ["e2e:test_suggestions.SuggestionsTest.test_the_list_closes_with_its_window"]),
+    # ----- Automatic updates, What's new, Settings > Memory -----
+    # Automatic updates follow their setting.
+    "update-auto-install-setting-ignored": ([
+        (UPDATER, '  return Enabled() && settings_->store().GetBool("updates.autoInstall");',
+         "  return Enabled();"),
+    ], [UPD + ".test_with_automatic_updates_off_closing_torfox_installs_nothing",
+        UPD + ".test_a_signed_newer_release_is_checked_downloaded_and_installed_after_exit"]),
+    # Never start the installer while Windows ends the session.
+    "update-installed-while-windows-shuts-down": ([
+        (APP, "      if (fatal_ || ending) {\n        test_log::Event(\"update_install_skipped\"",
+         "      if (fatal_) {\n        test_log::Event(\"update_install_skipped\""),
+    ], [AUTO + ".test_an_update_is_not_installed_while_windows_shuts_down"]),
+    # Private and Tor windows are not closed for a relaunch without asking.
+    "update-relaunch-closes-private-windows-unasked": ([
+        (APP, "  if (others == 0 || !requester) {\n    relaunch(std::move(done));",
+         "  if (true) {\n    relaunch(std::move(done));"),
+    ], [AUTO + ".test_private_windows_are_asked_about_before_a_relaunch"]),
+    # No tabs are kept for a relaunch while history is cleared on exit.
+    "update-relaunch-keeps-tabs-despite-clear-history": ([
+        ("src/browser/app/session_service.cc",
+         "  if (shut_down_ || !settings_ || settings_->store().GetBool(kClearHistorySetting)) {\n    return;",
+         "  if (shut_down_ || !settings_) {\n    return;"),
+    ], [AUTO + ".test_nothing_is_kept_for_a_relaunch_while_history_is_cleared_on_exit"]),
+    # A TorFox started while the setup replaces its files must not run.
+    "update-runs-while-being-installed": ([
+        (APP, "    if (platform::UpdateBeingInstalled()) {\n      const bool asked",
+         "    if (false) {\n      const bool asked"),
+    ], ["e2e:test_updates.UpdateBeingInstalledTest.test_a_start_during_an_update_asks_the_setup_to_start_torfox",
+        INST + "test_torfox_opened_during_an_update_starts_once_it_has_finished"]),
+    # The setup holds the mutex while it installs.
+    "installer-no-installing-mutex": ([
+        (ISS, "    InstallingHandle := CreateMutex(0, False, InstallingMutex);\n", ""),
+    ], [INST + "test_torfox_opened_during_an_update_starts_once_it_has_finished"]),
+    # After TorFox closed with an update waiting, the setup must not start it.
+    "installer-relaunches-after-install-on-exit": ([
+        (ISS, "  Result := IsUpdate and (not HasParam('/TORFOXNORELAUNCH') or\n",
+         "  Result := IsUpdate and (True or\n"),
+    ], [INST + "test_an_update_after_torfox_closed_installs_without_starting_it"]),
+    # What's new only after an update, never after a downgrade.
+    # From TorFox's shutdown until the setup holds the mutex, a TorFox opened
+    # meanwhile would start normally (Stage 10 review, finding 1).
+    "update-handoff-mutex-not-held": ([
+        (APP, "    platform::HoldUpdateInstalling();\n", ""),
+    ], [AUTO + ".test_an_update_waiting_when_torfox_closes_installs_without_a_relaunch"]),
+    "update-handoff-does-not-wait-for-the-setup": ([
+        ("src/browser/platform/platform_win.cc",
+         "    ::WaitForMultipleObjects(2, wait, FALSE, kSetupStartWaitMs);",
+         "    (void)wait;"),
+    ], [AUTO + ".test_an_update_waiting_when_torfox_closes_installs_without_a_relaunch"]),
+    # What's new would claim the signing-key check for any version change
+    # (finding 3), and a failed update would go unmentioned.
+    "whats-new-always-says-checked": ([
+        (APP, "      browser_app->set_whats_new_from(*previous,\n"
+              "                                      handoff == update::HandoffOutcome::kInstalled);",
+         "      browser_app->set_whats_new_from(*previous, true);"),
+    ], ["e2e:test_whats_new.WhatsNewTest.test_it_opens_once_after_an_update"]),
+    "update-not-installed-not-reported": ([
+        ("src/core/update/whats_new.cc",
+         "                    : order > 0 ? HandoffOutcome::kNotInstalled : HandoffOutcome::kNone;",
+         "                    : HandoffOutcome::kNone;"),
+    ], ["unit:WhatsNew.HandoffRecordTellsWhetherTheUpdateInstalled",
+        "e2e:test_whats_new.WhatsNewTest.test_an_update_that_did_not_install_is_reported_once"]),
+    "whats-new-after-any-version-change": ([
+        ("src/core/update/whats_new.cc",
+         "  return previous && now && CompareVersions(*previous, *now) < 0;",
+         "  return previous && now && CompareVersions(*previous, *now) != 0;"),
+    ], ["unit:WhatsNew.ShownOnlyAfterAnUpdate",
+        "e2e:test_whats_new.WhatsNewTest.test_it_does_not_open_for_a_new_profile_a_downgrade_or_a_damaged_record"]),
+    # Settings > Memory never names private or Tor tabs.
+    "memory-names-private-tabs": ([
+        ("src/core/memory/report.cc",
+         '      tabs.push_back({{"title", normal && utf8::IsValid(r->title) ? ShortTitle(r->title) : ""},',
+         '      tabs.push_back({{"title", utf8::IsValid(r->title) ? ShortTitle(r->title) : ""},'),
+    ], ["unit:MemoryReport.PrivateAndTorTabsAreNotNamed",
+        "e2e:test_memory.MemoryTest.test_private_tabs_are_not_named",
+        TOR + ".TorProcessTest.test_settings_memory_counts_tor_and_never_names_tor_tabs"]),
+    # What a renderer says only attributes TorFox's own helper processes.
+    "memory-trusts-renderer-pids": ([
+        ("src/core/memory/report.cc",
+         "    switch (p.kind) {\n      case Process::Kind::kBrowser:\n        browser += p.bytes;\n        continue;",
+         "    if (auto it = tabs_in.find(p.pid); it != tabs_in.end()) {\n      rows[it->second].Add(p);\n"
+         "      continue;\n    }\n"
+         "    switch (p.kind) {\n      case Process::Kind::kBrowser:\n        browser += p.bytes;\n        continue;"),
+    ], ["unit:MemoryReport.WhatARendererSaysOnlyAttributesTorFoxsOwnHelpers"]),
+    # Only Settings may ask for the memory report.
+    "memory-query-from-the-toolbar": ([
+        ("src/core/bridge/validator.cc", "const std::array<CommandSpec, 34> kShellCommands = {",
+         "const std::array<CommandSpec, 35> kShellCommands = {"),
+        ("src/core/bridge/validator.cc",
+         '    Cmd("update.install", kNoArgs),\n};\n\nconst std::array<CommandSpec, 3> kSuggestCommands',
+         '    Cmd("update.install", kNoArgs),\n    Cmd("memory.query", kNoArgs),\n};\n\n'
+         "const std::array<CommandSpec, 3> kSuggestCommands"),
+    ], ["e2e:test_memory.MemoryTest.test_only_settings_can_ask"]),
+    # The Tor context's placeholder must be TorFox's own listener: a port
+    # that is only bound can be listened on by another program (Windows).
+    "tor-placeholder-only-bound": ([
+        ("src/browser/platform/platform_win.cc",
+         "        getsockname(s, reinterpret_cast<sockaddr*>(&addr), &len) != 0 ||\n        listen(s, SOMAXCONN) != 0) {",
+         "        getsockname(s, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {"),
+    ], [TOR + ".ProxyLayerTest.test_the_placeholder_port_is_torfoxs_own"]),
+    "tor-placeholder-port-9": ([
+        (CTX, "  return tor_port_ > 0 ? tor_port_ : platform::ReservedLoopbackPort();",
+         "  return tor_port_ > 0 ? tor_port_ : 9;"),
+    ], [TOR + ".ProxyLayerTest.test_the_placeholder_port_is_torfoxs_own",
+        TOR + ".ProxyLayerAfterDeathTest.test_a_dead_tors_port_is_never_used_again"]),
+    # Settings > Privacy & Security > JavaScript optimizer: off in Tor windows.
+    "js-optimizer-on-in-tor-windows": ([
+        (CTX, '  return kind == Kind::kTor ? js_optimizer_ != "on" : js_optimizer_ == "off";',
+         '  return js_optimizer_ == "off";'),
+    ], ["e2e:test_js_optimizer.TorJsOptimizerTest.test_tor_windows_run_without_the_optimizer"]),
+    "js-optimizer-setting-ignored-by-open-windows": ([
+        (APP, "      ok = contexts_->ApplyJsOptimizer(window->web_context(), &error);\n", ""),
+    ], ["e2e:test_js_optimizer.JsOptimizerTest.test_a_change_applies_to_pages_opened_after_it"]),
 }
 
 

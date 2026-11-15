@@ -8,7 +8,10 @@
 #include <system_error>
 #include <vector>
 
+#include "include/base/cef_callback.h"
 #include "include/cef_request_context.h"
+#include "include/cef_task.h"
+#include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "src/browser/app/app_common.h"
 #include "src/browser/app/context_manager.h"
@@ -34,6 +37,7 @@
 #include "src/browser/shell/menus.h"
 #include "src/core/cmdline/policy.h"
 #include "src/core/settings/store.h"
+#include "src/core/update/whats_new.h"
 #include "src/core/url/search.h"
 #include "src/core/util/file_io.h"
 
@@ -42,6 +46,10 @@ namespace torfox {
 namespace {
 
 Services g_services;
+
+// In the profile folder: the version of the update TorFox last handed to its
+// setup (update::CheckHandoff).
+constexpr char kUpdateHandoffFile[] = "update-handoff";
 
 cmdline::SwitchMap SwitchesOf(CefRefPtr<CefCommandLine> cl) {
   CefCommandLine::SwitchMap raw;
@@ -229,6 +237,9 @@ void BrowserApp::OnContextInitialized() {
   privacy_ = std::make_unique<PrivacyService>(settings_.get(), options_.https_test_ports);
   g_services.privacy = privacy_.get();
   g_services.startup_notice = startup_notice_;
+  g_services.whats_new_from = whats_new_from_;
+  g_services.whats_new_verified = whats_new_verified_;
+  g_services.show_whats_new = !whats_new_from_.empty();
   g_services.window_opened = [this](BrowserWindow* w) { windows_.insert(w); };
   g_services.window_destroyed = [this](BrowserWindow* w) {
     windows_.erase(w);
@@ -273,9 +284,13 @@ void BrowserApp::OnContextInitialized() {
   contexts_->SetDownloadDirectory(downloads_->StagingDirectory());
   contexts_->SetBlockThirdPartyCookies(privacy_->block_third_party_cookies(), &error);
   contexts_->SetUseSystemProxy(settings_->store().GetBool("privacy.useSystemProxy"), &error);
+  contexts_->SetJsOptimizer(settings_->store().GetString("privacy.jsOptimizer"), &error);
   proxy_observer_ = settings_->AddObserver([this](const std::string& key) {
     if (key == "privacy.useSystemProxy") {
       ApplyProxyMode(settings_->store().GetBool(key));
+    }
+    if (key == "privacy.jsOptimizer") {
+      ApplyJsOptimizer(settings_->store().GetString(key));
     }
   });
   privacy_->SetCookiePolicyListener([this](bool block) { ApplyCookiePolicy(block); });
@@ -379,9 +394,89 @@ void BrowserApp::StartUpdates() {
       }
     }
   };
+  // The toolbar's "Relaunch to update" follows the updater.
+  updates_observer_ = updates_->AddObserver([this] {
+    for (BrowserWindow* w : windows_) {
+      w->UpdateStatusChanged();
+    }
+  });
   g_services.updates = updates_.get();
   g_services.close_all_windows = [this] { CloseAllWindows(); };
+  g_services.collect_renderers = [this] {
+    std::vector<memory::Renderer> out;
+    for (BrowserWindow* w : windows_) {
+      w->CollectRenderers(&out);
+    }
+    return out;
+  };
+  g_services.relaunch_to_update = [this](BrowserWindow* requester, int tab_id,
+                                         std::function<void(bool, const std::string&)> done) {
+    RelaunchToUpdate(requester, tab_id, std::move(done));
+  };
   updates_->Start();
+}
+
+void BrowserApp::RelaunchToUpdate(BrowserWindow* requester, int tab_id,
+                                  std::function<void(bool, const std::string&)> done) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!updates_ || updates_->status().state != UpdateService::State::kReady) {
+    done(false, "No update is ready to install.");
+    return;
+  }
+  CefRefPtr<BrowserApp> self = this;
+  auto relaunch = [self](std::function<void(bool, const std::string&)> reply) {
+    std::string error;
+    if (!self->updates_ || !self->updates_->PrepareInstall(/*relaunch=*/true, &error)) {
+      reply(false, error.empty() ? "TorFox is closing." : error);
+      return;
+    }
+    if (self->session_) {
+      self->session_->PrepareRelaunch();
+    }
+    reply(true, std::string());
+    // TorFox closes; the update starts once it has shut down.
+    CefPostTask(TID_UI, base::BindOnce([](CefRefPtr<BrowserApp> app) { app->CloseAllWindows(); },
+                                       self));
+  };
+  // Private and Tor windows do not come back after the relaunch: ask first.
+  int others = 0;
+  for (BrowserWindow* w : windows_) {
+    if (w->is_private() && !w->closing()) {
+      ++others;
+    }
+  }
+  if (others == 0 || !requester) {
+    relaunch(std::move(done));
+    return;
+  }
+  // What actually happens: PrepareRelaunch keeps nothing while history is
+  // cleared on exit, and on macOS TorFox only opens the disk image.
+  const bool restarts = platform::InstallsUpdatesOnExit();
+  const bool keeps_tabs =
+      !(settings_ && settings_->store().GetBool("privacy.clearOnExit.history"));
+  const std::string version = updates_->status().version;
+  platform::ConfirmPrompt prompt;
+  prompt.title = restarts ? "Relaunch to update?" : "Close TorFox to update?";
+  prompt.heading = others == 1 ? "Your private or Tor window will close"
+                               : "Your " + std::to_string(others) +
+                                     " private and Tor windows will close";
+  prompt.details =
+      (restarts ? "TorFox restarts to install version " + version + ". "
+                : "TorFox closes and opens the disk image of version " + version +
+                      "; copy TorFox to Applications, then open it. ") +
+      (keeps_tabs ? "Your normal windows open again; private and Tor tabs do not."
+                  : "No tabs open again: TorFox clears your history when it closes.");
+  prompt.accept = restarts ? "Relaunch" : "Close TorFox";
+  prompt.cancel = "Not now";
+  requester->ConfirmForTab(
+      tab_id, "update_relaunch", prompt,
+      [relaunch, done = std::move(done)](bool ok) mutable {
+        if (!ok) {
+          done(false, "cancelled");
+          return;
+        }
+        relaunch(std::move(done));
+      });
 }
 
 void BrowserApp::CloseAllWindows() {
@@ -515,6 +610,25 @@ void BrowserApp::ApplyProxyMode(bool use_system) {
   }
 }
 
+void BrowserApp::ApplyJsOptimizer(const std::string& mode) {
+  CEF_REQUIRE_UI_THREAD();
+  if (fatal_ || !contexts_) {
+    return;
+  }
+  std::string error;
+  bool ok = contexts_->SetJsOptimizer(mode, &error);
+  for (BrowserWindow* window : windows_) {
+    // Private windows' own contexts (the Tor context is done above).
+    if (ok && window->is_private() && window->web_context() &&
+        !contexts_->IsTor(window->web_context())) {
+      ok = contexts_->ApplyJsOptimizer(window->web_context(), &error);
+    }
+  }
+  if (!ok) {
+    Fatal(error);
+  }
+}
+
 void BrowserApp::Fatal(const std::string& message) {
   if (fatal_) {
     return;
@@ -548,10 +662,27 @@ void BrowserApp::Shutdown() {
   }
   // The updater's requests and context go before the contexts do.
   if (updates_) {
+    if (updates_observer_) {
+      updates_->RemoveObserver(updates_observer_);
+      updates_observer_ = 0;
+    }
+    // Closed with an update waiting: it installs now, like Chrome's, unless
+    // TorFox stopped because a check failed or Windows is ending the session
+    // (the installer could be cut off). It is downloaded again later.
+    if (platform::InstallsUpdatesOnExit() &&
+        updates_->status().state == UpdateService::State::kReady) {
+      const bool ending = platform::SessionEnding() || (kTestHooks && options_.test_session_ending);
+      if (fatal_ || ending) {
+        test_log::Event("update_install_skipped", {{"why", fatal_ ? "fatal" : "session_ending"}});
+      } else {
+        updates_->PrepareInstallOnExit();
+      }
+    }
     if (std::optional<UpdateService::Handoff> h = updates_->TakeHandoff()) {
-      update_handoff_ = UpdateHandoff{h->file, h->sha256, h->size};
+      update_handoff_ = UpdateHandoff{h->file, h->sha256, h->size, h->relaunch, h->version};
       test_log::Event("update_handoff", {{"file", h->file.filename().string()},
-                                         {"sha256", h->sha256}});
+                                         {"sha256", h->sha256},
+                                         {"relaunch", h->relaunch}});
     }
     updates_->Shutdown();
   }
@@ -670,6 +801,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
       if (cmdline::IsAbsoluteHttpUrl(start)) {
         options.start_url = start;
       }
+      options.test_session_ending = raw->HasSwitch("torfox-test-session-ending");
     }
     if (options.start_url.empty()) {
       for (const std::string& arg : ArgsOf(raw)) {
@@ -679,6 +811,23 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
         }
       }
     }
+    // TorFox was closed with an update waiting and its setup is installing
+    // it now: starting would hold files the setup has to replace. The setup
+    // starts TorFox when it is done instead.
+    if (platform::UpdateBeingInstalled()) {
+      const bool asked = platform::RequestStartAfterUpdate();
+      // The setup lets go of the mutex before it reads the request
+      // (TorFox.iss): if the mutex is still held now, the setup will see the
+      // request. If it was let go of in between, the setup may have missed
+      // it, so TorFox starts after all. (Had the setup seen it too, its
+      // TorFox only opens a window in this one.)
+      if (platform::UpdateBeingInstalled()) {
+        test_log::Event("update_being_installed", {{"start_requested", asked}});
+        test_log::Close();
+        return 0;
+      }
+    }
+    platform::ClearStartAfterUpdate();
     browser_app = new BrowserApp(options);
     app = browser_app;
   } else if (type == "renderer") {
@@ -718,6 +867,44 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   }
   test_log::Event("startup", {{"sandbox_info", sandbox_info != nullptr},
                               {"user_data", platform::PathToUtf8(options.user_data_dir)}});
+  // What's new: the version that last ran with this profile. Only an older
+  // one means TorFox has been updated.
+  {
+    // The version TorFox last handed to an update's setup, if any: read once.
+    const std::filesystem::path handoff_record = options.user_data_dir / kUpdateHandoffFile;
+    const ReadResult h = ReadFileLimited(handoff_record, update::kMaxLastVersionBytes);
+    const update::HandoffOutcome handoff = update::CheckHandoff(
+        h.status == ReadStatus::kOk ? h.data : std::string(), kTorFoxVersion);
+    if (h.status != ReadStatus::kMissing) {
+      std::filesystem::remove(handoff_record, ec);
+      ec.clear();
+    }
+    if (handoff == update::HandoffOutcome::kNotInstalled) {
+      const std::string version = update::RecordedVersion(h.data).value_or("");
+      browser_app->add_startup_notice("TorFox could not install the update to version " + version +
+                                      ". This is still version " + kTorFoxVersion +
+                                      ". You can try again from Settings > Updates.");
+    }
+    const std::filesystem::path record = options.user_data_dir / "last-version";
+    const ReadResult r = ReadFileLimited(record, update::kMaxLastVersionBytes);
+    const std::string text = r.status == ReadStatus::kOk ? r.data : std::string();
+    const std::optional<std::string> previous = update::RecordedVersion(text);
+    const bool updated = update::ShouldShowWhatsNew(text, kTorFoxVersion);
+    test_log::Event("update_handoff_record",
+                    {{"outcome", handoff == update::HandoffOutcome::kInstalled      ? "installed"
+                                 : handoff == update::HandoffOutcome::kNotInstalled ? "not_installed"
+                                                                                    : "none"}});
+    if (updated) {
+      browser_app->set_whats_new_from(*previous,
+                                      handoff == update::HandoffOutcome::kInstalled);
+    }
+    if (previous != std::optional<std::string>(kTorFoxVersion)) {
+      const bool ok = WriteFileAtomically(record, std::string(kTorFoxVersion) + "\n");
+      test_log::Event("last_version", {{"previous", previous.value_or("")},
+                                       {"updated", updated},
+                                       {"saved", ok}});
+    }
+  }
   // Chromium's own record of downloads (docs/STAGE3_FINDINGS.md), erased
   // while Chromium is not running: now, and again after CefShutdown. The
   // normal profile's folder is the one ContextManager gives it.
@@ -736,7 +923,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
     const bool ok = chromium_profile::WriteProxyMode(normal_profile, mode);
     test_log::Event("proxy_mode_written", {{"mode", mode}, {"ok", ok}});
     if (!ok) {
-      browser_app->set_startup_notice(
+      browser_app->add_startup_notice(
           "TorFox could not save its network settings for this profile. If Windows looks for a "
           "proxy automatically, TorFox may have asked the local network for one as it started.");
     }
@@ -757,7 +944,7 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
                                      {"removed", r.removed},
                                      {"failed", r.failed}});
     if (r.failed > 0) {
-      browser_app->set_startup_notice(
+      browser_app->add_startup_notice(
           "TorFox could not clear all of the browsing data you asked it to clear when it "
           "closes. Some of it is still on this computer; TorFox will try again next time.");
     }
@@ -792,6 +979,11 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   browser_app->Shutdown();
   const clear_data::Categories clear_at_exit = browser_app->exit_clear();
   const std::optional<BrowserApp::UpdateHandoff> update = browser_app->update_handoff();
+  if (update) {
+    // A TorFox opened from now on waits for the setup, as one opened while
+    // the setup installs does: this one is about to hand over.
+    platform::HoldUpdateInstalling();
+  }
   browser_app = nullptr;
   app = nullptr;
   CefShutdown();
@@ -799,15 +991,32 @@ int TorFoxMain(const CefMainArgs& args, void* sandbox_info) {
   chromium_profile::ScrubSiteRecords(normal_profile, clear_at_exit.history);
   // A failure here cannot be shown; the next start clears again and says so.
   clear_data::Clear(normal_profile, clear_at_exit);
-  // Settings > Updates > Restart to update: last, once Chromium has let go
-  // of everything. The file is checked once more as it is started.
+  // "Relaunch to update", or TorFox closed with an update waiting: last,
+  // once Chromium has let go of everything. The file is checked once more as
+  // it is started.
   if (update) {
+    // What the next start compares itself with (update::CheckHandoff). On
+    // macOS the user copies the app from the disk image, so TorFox cannot
+    // tell what was installed: no record.
+    const std::filesystem::path handoff_record = options.user_data_dir / kUpdateHandoffFile;
+    if (platform::InstallsUpdatesOnExit()) {
+      WriteFileAtomically(handoff_record, update->version + "\n");
+    }
     std::string error;
-    if (!platform::LaunchUpdate(update->file, update->sha256, update->size, &error) &&
-        !kTestHooks) {
-      platform::ShowFatalError("TorFox", "TorFox could not install the update: " + error +
-                                             ".\n\nTorFox has not changed. You can try again "
-                                             "from Settings > Updates.");
+    const bool launched = platform::LaunchUpdate(update->file, update->sha256, update->size,
+                                                 update->relaunch, &error);
+    if (!launched) {
+      platform::ReleaseUpdateInstalling();
+      std::filesystem::remove(handoff_record, ec);
+    }
+    if (!launched && !kTestHooks) {
+      platform::ShowFatalError("TorFox",
+                               "TorFox could not install the update: " + error +
+                                   (update->relaunch
+                                        ? ".\n\nTorFox has not changed. You can try again from "
+                                          "Settings > Updates."
+                                        : ".\n\nTorFox has not changed. It will download the "
+                                          "update again later."));
     }
   }
   return 0;

@@ -4,14 +4,20 @@
 
 #include "src/browser/platform/platform.h"
 
+// winsock2.h before windows.h, which would otherwise bring in winsock 1.
+#include <winsock2.h>
 #include <windows.h>
 
 #include <commctrl.h>
 #include <dwmapi.h>
+#include <psapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <tlhelp32.h>
 
 #include <atomic>
+#include <map>
+#include <set>
 #include <thread>
 #include <utility>
 
@@ -452,8 +458,23 @@ const char* UpdatePlatform() {
   return "windows-x64";
 }
 
+namespace {
+
+// Shared with packaging/windows/TorFox.iss.
+constexpr wchar_t kUpdateInstallingMutex[] = L"TorFoxUpdateInstalling";
+// Set by the setup once it holds kUpdateInstallingMutex (InitializeSetup).
+constexpr wchar_t kUpdateStartedEvent[] = L"TorFoxUpdateStarted";
+constexpr wchar_t kTorFoxKey[] = L"Software\\TorFox";
+constexpr wchar_t kStartAfterUpdateValue[] = L"RelaunchAfterUpdate";
+// Well under the minute the setup waits for TorFox to exit.
+constexpr DWORD kSetupStartWaitMs = 20000;
+
+HANDLE g_update_installing = nullptr;
+
+}  // namespace
+
 bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, uint64_t size,
-                  std::string* error) {
+                  bool relaunch, std::string* error) {
   // Read access, shared for reading only: nobody can write, rename or delete
   // the file while TorFox holds this handle, so what runs is what was hashed.
   HANDLE h = ::CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
@@ -498,19 +519,38 @@ bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, 
     return false;
   }
   // The setup installs for this user only, so it runs without a UAC prompt,
-  // and waits for TorFox to exit (MarkRunning).
+  // and waits for TorFox to exit (MarkRunning). After "Relaunch to update" it
+  // shows its progress and starts TorFox again; when TorFox was simply
+  // closed with an update waiting, it shows nothing and does not.
   SHELLEXECUTEINFOW info = {};
   info.cbSize = sizeof info;
   info.fMask = SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
   info.lpVerb = L"open";
   info.lpFile = real.c_str();
-  info.lpParameters = L"/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE";
+  info.lpParameters =
+      relaunch ? L"/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE"
+               : L"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE /TORFOXNORELAUNCH";
   info.nShow = SW_SHOWNORMAL;
+  // TorFox holds the setup's mutex (HoldUpdateInstalling) until the setup
+  // says it holds it too, so that no TorFox can start in between. Created
+  // before the setup starts, unset.
+  HANDLE setup_started = ::CreateEventW(nullptr, TRUE, FALSE, kUpdateStartedEvent);
+  if (setup_started) {
+    ::ResetEvent(setup_started);
+  }
   const bool started = ::ShellExecuteExW(&info) != FALSE;
+  ::CloseHandle(h);
+  if (started && setup_started && info.hProcess) {
+    // Until the setup is ready, or it has exited (it failed), or long enough.
+    HANDLE wait[2] = {setup_started, info.hProcess};
+    ::WaitForMultipleObjects(2, wait, FALSE, kSetupStartWaitMs);
+  }
   if (info.hProcess) {
     ::CloseHandle(info.hProcess);
   }
-  ::CloseHandle(h);
+  if (setup_started) {
+    ::CloseHandle(setup_started);
+  }
   if (!started) {
     *error = "the installer could not be started";
     return false;
@@ -518,8 +558,232 @@ bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, 
   return true;
 }
 
+bool InstallsUpdatesOnExit() {
+  return true;
+}
+
+bool SessionEnding() {
+  return ::GetSystemMetrics(SM_SHUTTINGDOWN) != 0;
+}
+
+bool UpdateBeingInstalled() {
+  HANDLE h = ::OpenMutexW(SYNCHRONIZE, FALSE, kUpdateInstallingMutex);
+  if (h) {
+    ::CloseHandle(h);
+    return true;
+  }
+  // It exists, but this process may not open it: still being installed.
+  return ::GetLastError() == ERROR_ACCESS_DENIED;
+}
+
+bool RequestStartAfterUpdate() {
+  const DWORD one = 1;
+  return ::RegSetKeyValueW(HKEY_CURRENT_USER, kTorFoxKey, kStartAfterUpdateValue, REG_DWORD,
+                           &one, sizeof one) == ERROR_SUCCESS;
+}
+
+void ClearStartAfterUpdate() {
+  ::RegDeleteKeyValueW(HKEY_CURRENT_USER, kTorFoxKey, kStartAfterUpdateValue);
+}
+
+void HoldUpdateInstalling() {
+  if (!g_update_installing) {
+    g_update_installing = ::CreateMutexW(nullptr, FALSE, kUpdateInstallingMutex);
+  }
+}
+
+void ReleaseUpdateInstalling() {
+  if (g_update_installing) {
+    ::CloseHandle(g_update_installing);
+    g_update_installing = nullptr;
+  }
+}
+
 long CurrentProcessId() {
   return static_cast<long>(::GetCurrentProcessId());
+}
+
+namespace {
+
+uint64_t CreationTime(HANDLE process) {
+  FILETIME created, exited, kernel, user;
+  if (!::GetProcessTimes(process, &created, &exited, &kernel, &user)) {
+    return 0;
+  }
+  return (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+}
+
+std::wstring ImagePath(HANDLE process) {
+  std::wstring buf(32768, L'\0');
+  DWORD n = static_cast<DWORD>(buf.size());
+  if (!::QueryFullProcessImageNameW(process, 0, buf.data(), &n)) {
+    return {};
+  }
+  buf.resize(n);
+  return buf;
+}
+
+// |path| is inside |folder| (compared as Windows compares file names).
+bool InFolder(const std::wstring& path, const std::wstring& folder) {
+  if (folder.empty() || path.size() <= folder.size() + 1 || path[folder.size()] != L'\\') {
+    return false;
+  }
+  return ::CompareStringOrdinal(path.c_str(), static_cast<int>(folder.size()), folder.c_str(),
+                                static_cast<int>(folder.size()), TRUE) == CSTR_EQUAL;
+}
+
+// PROCESS_MEMORY_COUNTERS_EX2 (Windows 10 1809 and later), which the SDK
+// declares only for NTDDI_WIN10_CU and later targets.
+struct MemoryCountersEx2 {
+  DWORD cb;
+  DWORD PageFaultCount;
+  SIZE_T PeakWorkingSetSize;
+  SIZE_T WorkingSetSize;
+  SIZE_T QuotaPeakPagedPoolUsage;
+  SIZE_T QuotaPagedPoolUsage;
+  SIZE_T QuotaPeakNonPagedPoolUsage;
+  SIZE_T QuotaNonPagedPoolUsage;
+  SIZE_T PagefileUsage;
+  SIZE_T PeakPagefileUsage;
+  SIZE_T PrivateUsage;
+  SIZE_T PrivateWorkingSetSize;
+  ULONG64 SharedCommitUsage;
+};
+
+// The private working set: what Task Manager's Memory column shows. Older
+// Windows 10 releases only know the private bytes committed.
+uint64_t PrivateBytes(HANDLE process) {
+  MemoryCountersEx2 counters = {};
+  counters.cb = sizeof counters;
+  if (::GetProcessMemoryInfo(process, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                             sizeof counters)) {
+    return counters.PrivateWorkingSetSize;
+  }
+  PROCESS_MEMORY_COUNTERS_EX older = {};
+  older.cb = sizeof older;
+  if (::GetProcessMemoryInfo(process, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&older),
+                             sizeof older)) {
+    return older.PrivateUsage;
+  }
+  return 0;
+}
+
+}  // namespace
+
+int ReservedLoopbackPort() {
+  static const int port = [] {
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+      return 0;
+    }
+    // Kept open until TorFox exits; Windows closes it then.
+    const SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0,
+                                WSA_FLAG_NO_HANDLE_INHERIT);
+    if (s == INVALID_SOCKET) {
+      return 0;
+    }
+    BOOL exclusive = TRUE;
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;  // Any free port.
+    int len = sizeof(addr);
+    if (setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive),
+                   sizeof(exclusive)) != 0 ||
+        bind(s, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        getsockname(s, reinterpret_cast<sockaddr*>(&addr), &len) != 0 ||
+        listen(s, SOMAXCONN) != 0) {
+      closesocket(s);
+      return 0;
+    }
+    // Each connection is reset as soon as it arrives (SO_LINGER 0), before
+    // anything is read from it.
+    std::thread([s] {
+      for (;;) {
+        const SOCKET c = accept(s, nullptr, nullptr);
+        if (c == INVALID_SOCKET) {
+          const int e = WSAGetLastError();
+          if (e == WSAENOTSOCK || e == WSAEINVAL || e == WSANOTINITIALISED) {
+            return;
+          }
+          Sleep(50);
+          continue;
+        }
+        linger reset = {1, 0};
+        setsockopt(c, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char*>(&reset), sizeof(reset));
+        closesocket(c);
+      }
+    }).detach();
+    return static_cast<int>(ntohs(addr.sin_port));
+  }();
+  return port;
+}
+
+std::vector<memory::Process> TorFoxProcesses(const std::filesystem::path& tor_dir) {
+  std::vector<memory::Process> out;
+  const std::wstring program = ExecutableDir().native();
+  const std::wstring tor = tor_dir.native();
+  HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (program.empty() || snapshot == INVALID_HANDLE_VALUE) {
+    if (snapshot != INVALID_HANDLE_VALUE) {
+      ::CloseHandle(snapshot);
+    }
+    return out;
+  }
+  std::multimap<DWORD, DWORD> children;
+  PROCESSENTRY32W entry = {};
+  entry.dwSize = sizeof entry;
+  for (BOOL ok = ::Process32FirstW(snapshot, &entry); ok; ok = ::Process32NextW(snapshot, &entry)) {
+    if (entry.th32ProcessID != 0 && entry.th32ProcessID != entry.th32ParentProcessID) {
+      children.emplace(entry.th32ParentProcessID, entry.th32ProcessID);
+    }
+  }
+  ::CloseHandle(snapshot);
+
+  const DWORD self = ::GetCurrentProcessId();
+  out.push_back({static_cast<long>(self), memory::Process::Kind::kBrowser,
+                 PrivateBytes(::GetCurrentProcess())});
+  struct Pending {
+    DWORD pid;
+    uint64_t parent_created;
+  };
+  std::vector<Pending> todo;
+  const uint64_t self_created = CreationTime(::GetCurrentProcess());
+  for (auto [it, end] = children.equal_range(self); it != end; ++it) {
+    todo.push_back({it->second, self_created});
+  }
+  std::set<DWORD> seen = {self};
+  while (!todo.empty() && out.size() < 1024) {
+    const Pending p = todo.back();
+    todo.pop_back();
+    if (!seen.insert(p.pid).second) {
+      continue;
+    }
+    HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p.pid);
+    if (!h) {
+      continue;
+    }
+    // A process whose parent has exited still names its parent's ID, which
+    // Windows may since have given to another process: only a process
+    // started after its parent can be its child.
+    const uint64_t created = CreationTime(h);
+    const std::wstring image = ImagePath(h);
+    memory::Process::Kind kind = memory::Process::Kind::kHelper;
+    bool ours = created != 0 && created >= p.parent_created;
+    if (ours && InFolder(image, tor)) {
+      kind = memory::Process::Kind::kTor;
+    } else if (!ours || !InFolder(image, program)) {
+      ours = false;  // Not TorFox's: for example an app opened for a link.
+    }
+    if (ours) {
+      out.push_back({static_cast<long>(p.pid), kind, PrivateBytes(h)});
+      for (auto [it, end] = children.equal_range(p.pid); it != end; ++it) {
+        todo.push_back({it->second, created});
+      }
+    }
+    ::CloseHandle(h);
+  }
+  return out;
 }
 
 TorPaths BundledTorPaths() {

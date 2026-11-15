@@ -54,6 +54,15 @@ export const SECTIONS: Record<string, SectionLabel> = {
       "and it keeps sites apart only by giving each site address its own Tor circuits.",
   },
   appearance: { title: "Appearance", icon: icons.appearance },
+  memory: {
+    title: "Memory",
+    icon: icons.memory,
+    note:
+      "How much memory TorFox's processes use right now: each one's private memory, as Task " +
+      "Manager shows it on Windows and Activity Monitor on macOS. Tabs that share a process " +
+      "are listed together. Private and Tor tabs are listed without their names. This page " +
+      "updates every two seconds while it is open.",
+  },
   updates: {
     title: "Updates",
     icon: icons.update,
@@ -61,9 +70,11 @@ export const SECTIONS: Record<string, SectionLabel> = {
       "TorFox looks for new releases on GitHub, in TorFox's official repository. It uses an " +
       "update only if the release's signature verifies with the key built into this copy of " +
       "TorFox, the release is newer than this version, and the downloaded file has exactly the " +
-      "size and SHA-256 the signed release lists. On Windows the installer starts when TorFox " +
-      "closes, installs the update and starts TorFox again. On macOS TorFox opens the checked disk image " +
-      "and you copy TorFox to Applications yourself.",
+      "size and SHA-256 the signed release lists. On Windows, Relaunch to update closes " +
+      "TorFox, installs the update and starts TorFox again with your normal windows' tabs " +
+      "(none if TorFox clears your history when it closes); private and Tor tabs do not come " +
+      "back. On macOS TorFox opens the checked disk image and " +
+      "you copy TorFox to Applications yourself. After an update, TorFox shows what is new.",
   },
   about: { title: "About TorFox", icon: icons.info },
 };
@@ -137,6 +148,15 @@ export const SETTINGS: Record<string, SettingLabel> = {
   "privacy.blockPopups": {
     title: "Block pop-ups",
     description: "Block windows that sites open without you clicking.",
+    group: "Browsing protection",
+  },
+  "privacy.jsOptimizer": {
+    title: "JavaScript optimizer",
+    description:
+      "Most attacks on browsers go through JavaScript's optimizing compilers. Without them, " +
+      "pages that run a lot of JavaScript are slower, but such attacks are much harder. " +
+      "A change applies to pages opened from then on.",
+    values: { "off-in-tor": "Off in Tor windows", on: "On", off: "Off everywhere" },
     group: "Browsing protection",
   },
   "privacy.useSystemProxy": {
@@ -213,12 +233,19 @@ export const SETTINGS: Record<string, SettingLabel> = {
   },
   "updates.autoCheck": {
     title: "Check for updates automatically",
-    description: "Look for a new release at most once a day, a little after TorFox starts. " +
-      "Nothing is downloaded or installed without you.",
+    description: "Look for a new release at most once a day, a little after TorFox starts.",
+  },
+  "updates.autoInstall": {
+    title: "Download updates automatically",
+    description: "Download each verified update as soon as TorFox finds it. A Relaunch to " +
+      "update button then appears in the toolbar. On Windows, an update you have not " +
+      "installed yet installs when you close TorFox. When this is off, nothing is downloaded " +
+      "or installed until you ask.",
   },
   "updates.notify": {
     title: "Tell me when an update is available",
-    description: "After an automatic check finds one, show a notice in a TorFox window.",
+    description: "When automatic downloads are off and an automatic check finds an update, " +
+      "show a notice in a TorFox window.",
   },
 };
 

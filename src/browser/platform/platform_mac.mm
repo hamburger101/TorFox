@@ -6,12 +6,21 @@
 
 #import <Cocoa/Cocoa.h>
 #include <crt_externs.h>
+#include <arpa/inet.h>
+#include <libproc.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/resource.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cerrno>
+#include <set>
+#include <thread>
 #include <utility>
 
 #include "src/core/privacy/external_protocols.h"
@@ -311,8 +320,32 @@ const char* UpdatePlatform() {
 #endif
 }
 
+bool InstallsUpdatesOnExit() {
+  return false;
+}
+
+bool SessionEnding() {
+  return false;
+}
+
+bool UpdateBeingInstalled() {
+  return false;
+}
+
+bool RequestStartAfterUpdate() {
+  return false;
+}
+
+void ClearStartAfterUpdate() {}
+
+void HoldUpdateInstalling() {}
+
+void ReleaseUpdateInstalling() {}
+
+// |relaunch| does not apply: the user copies the new app and starts it.
 bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, uint64_t size,
-                  std::string* error) {
+                  bool relaunch, std::string* error) {
+  (void)relaunch;
   // macOS has no mandatory locks: the disk image is checked again just
   // before Finder opens it, and macOS checks the image itself when it mounts.
   const std::optional<update::FileDigest> d = update::HashFile(file, size);
@@ -332,6 +365,125 @@ bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, 
 
 long CurrentProcessId() {
   return static_cast<long>(::getpid());
+}
+
+namespace {
+
+// The physical footprint: what Activity Monitor's Memory column shows.
+uint64_t Footprint(pid_t pid) {
+  rusage_info_v2 info = {};
+  if (proc_pid_rusage(pid, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t*>(&info)) != 0) {
+    return 0;
+  }
+  return info.ri_phys_footprint;
+}
+
+std::string ProcessPath(pid_t pid) {
+  char buf[PROC_PIDPATHINFO_MAXSIZE];
+  const int n = proc_pidpath(pid, buf, sizeof buf);
+  return n > 0 ? std::string(buf, static_cast<std::size_t>(n)) : std::string();
+}
+
+bool InFolder(const std::string& path, const std::string& folder) {
+  return !folder.empty() && path.size() > folder.size() + 1 &&
+         path.compare(0, folder.size(), folder) == 0 && path[folder.size()] == '/';
+}
+
+std::vector<pid_t> ChildrenOf(pid_t pid) {
+  std::vector<pid_t> buf(1024);
+  const int bytes = proc_listpids(PROC_PPID_ONLY, static_cast<uint32_t>(pid), buf.data(),
+                                  static_cast<int>(buf.size() * sizeof(pid_t)));
+  if (bytes <= 0) {
+    return {};
+  }
+  buf.resize(std::min(buf.size(), static_cast<std::size_t>(bytes) / sizeof(pid_t)));
+  buf.erase(std::remove(buf.begin(), buf.end(), 0), buf.end());
+  return buf;
+}
+
+}  // namespace
+
+// Untested: macOS is built and tested only on CI (docs/FEATURE_STATUS.md).
+// An orphaned process is adopted by launchd, so a parent ID always names the
+// live parent.
+int ReservedLoopbackPort() {
+  static const int port = [] {
+    // Kept open until TorFox exits. No SO_REUSEADDR or SO_REUSEPORT: no
+    // other socket can take 127.0.0.1 on this port, and an incoming
+    // connection matches this listener before any wildcard one.
+    const int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s < 0) {
+      return 0;
+    }
+    fcntl(s, F_SETFD, FD_CLOEXEC);
+    sockaddr_in addr = {};
+    addr.sin_len = sizeof(addr);
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    socklen_t len = sizeof(addr);
+    if (bind(s, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        getsockname(s, reinterpret_cast<sockaddr*>(&addr), &len) != 0 ||
+        listen(s, SOMAXCONN) != 0) {
+      close(s);
+      return 0;
+    }
+    // Each connection is reset as soon as it arrives, before anything is
+    // read from it.
+    std::thread([s] {
+      for (;;) {
+        const int c = accept(s, nullptr, nullptr);
+        if (c < 0) {
+          if (errno == EBADF || errno == EINVAL) {
+            return;
+          }
+          usleep(50 * 1000);
+          continue;
+        }
+        linger reset = {1, 0};
+        setsockopt(c, SOL_SOCKET, SO_LINGER, &reset, sizeof(reset));
+        close(c);
+      }
+    }).detach();
+    return static_cast<int>(ntohs(addr.sin_port));
+  }();
+  return port;
+}
+
+std::vector<memory::Process> TorFoxProcesses(const std::filesystem::path& tor_dir) {
+  std::vector<memory::Process> out;
+  std::string bundle;
+  @autoreleasepool {
+    const char* path = [[[NSBundle mainBundle] bundlePath] fileSystemRepresentation];
+    bundle = path ? path : "";
+  }
+  if (bundle.empty()) {
+    return out;
+  }
+  const std::string tor = tor_dir.string();
+  const pid_t self = ::getpid();
+  out.push_back({static_cast<long>(self), memory::Process::Kind::kBrowser, Footprint(self)});
+  std::vector<pid_t> todo = ChildrenOf(self);
+  std::set<pid_t> seen = {self};
+  while (!todo.empty() && out.size() < 1024) {
+    const pid_t pid = todo.back();
+    todo.pop_back();
+    if (!seen.insert(pid).second) {
+      continue;
+    }
+    const std::string path = ProcessPath(pid);
+    memory::Process::Kind kind = memory::Process::Kind::kHelper;
+    if (InFolder(path, tor)) {
+      kind = memory::Process::Kind::kTor;
+    } else if (!InFolder(path, bundle)) {
+      continue;  // Not TorFox's.
+    }
+    out.push_back({static_cast<long>(pid), kind, Footprint(pid)});
+    for (pid_t child : ChildrenOf(pid)) {
+      todo.push_back(child);
+    }
+  }
+  return out;
 }
 
 TorPaths BundledTorPaths() {

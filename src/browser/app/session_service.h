@@ -22,7 +22,13 @@ class SettingsService;
 // crash) reopens them. Otherwise that file does not exist: it is removed as
 // soon as either setting changes, and again at start and exit. A save that
 // would leave no window is skipped, so the file keeps the windows that were
-// open when the last one closed. UI thread only.
+// open when the last one closed.
+//
+// "Relaunch to update" brings the normal windows' tabs back whatever On
+// startup says, as long as history is not cleared when TorFox closes: the
+// file is then written for that one start, with a marker
+// (<user data>/session-relaunch), and removed once it has been read.
+// UI thread only.
 class SessionService {
  public:
   // Returns the normal windows' tabs now.
@@ -39,7 +45,11 @@ class SessionService {
   browsing::Session TakeStartupSession();
   // A normal window or its tabs changed.
   void Changed();
-  // At exit: keeps the file if sessions are kept, removes it otherwise.
+  // TorFox is about to close for an update and start again: saves the tabs
+  // now, for the next start only if sessions are not kept.
+  void PrepareRelaunch();
+  // At exit: keeps the file if sessions are kept (or a relaunch needs it),
+  // removes it otherwise.
   void Shutdown();
 
  private:
@@ -50,8 +60,11 @@ class SessionService {
   const std::filesystem::path file_;
   Collect collect_;
   int observer_ = 0;
+  std::filesystem::path RelaunchMarker() const;
+
   bool pending_ = false;
   bool shut_down_ = false;
+  bool relaunch_ = false;
   std::shared_ptr<int> alive_ = std::make_shared<int>(0);
 };
 

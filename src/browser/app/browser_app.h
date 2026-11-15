@@ -6,6 +6,7 @@
 #define TORFOX_BROWSER_APP_BROWSER_APP_H_
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -50,6 +51,9 @@ struct StartupOptions {
   std::filesystem::path tor_test_exe;
   std::vector<std::string> tor_test_args;
   std::optional<UpdateTestConfig> update_test;
+  // Test builds only: behave as if the session were ending (no update is
+  // installed when TorFox closes).
+  bool test_session_ending = false;
 };
 
 // CefApp for the browser process: command-line policy, startup checks,
@@ -81,16 +85,31 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
     std::filesystem::path file;
     std::string sha256;
     uint64_t size = 0;
+    bool relaunch = true;  // UpdateService::Handoff::relaunch
+    std::string version;
   };
   std::optional<UpdateHandoff> update_handoff() const { return update_handoff_; }
-  // Shown once in the first window.
-  void set_startup_notice(std::string text) { startup_notice_ = std::move(text); }
+  // Shown once in the first window; a second notice is added to the first.
+  void add_startup_notice(const std::string& text) {
+    if (!startup_notice_.empty()) {
+      startup_notice_ += "\n\n";
+    }
+    startup_notice_ += text;
+  }
+  // TorFox was updated from |version|: the first window opens What's new.
+  // |verified|: this version is the update TorFox itself checked and handed
+  // to its setup (update::HandoffOutcome::kInstalled).
+  void set_whats_new_from(std::string version, bool verified) {
+    whats_new_from_ = std::move(version);
+    whats_new_verified_ = verified;
+  }
 
  private:
   void Fatal(const std::string& message);
   bool ApplyGlobalPrefs(std::string* error);
   void ApplyCookiePolicy(bool block);
   void ApplyProxyMode(bool use_system);
+  void ApplyJsOptimizer(const std::string& mode);
   // Tor (Settings > Tor).
   void StartTor();
   void RestartTorIfRunning();
@@ -98,6 +117,8 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   // Settings > Updates.
   void StartUpdates();
   void CloseAllWindows();
+  void RelaunchToUpdate(BrowserWindow* requester, int tab_id,
+                        std::function<void(bool, const std::string&)> done);
 
   StartupOptions options_;
   std::unique_ptr<SettingsService> settings_;
@@ -116,6 +137,9 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   bool fatal_ = false;
   clear_data::Categories exit_clear_;
   std::string startup_notice_;
+  std::string whats_new_from_;
+  bool whats_new_verified_ = false;
+  int updates_observer_ = 0;
   int proxy_observer_ = 0;
 
   IMPLEMENT_REFCOUNTING(BrowserApp);

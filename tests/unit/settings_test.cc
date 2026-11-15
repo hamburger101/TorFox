@@ -50,6 +50,7 @@ TEST(SettingsSchema, SaferDefaults) {
   EXPECT_EQ(def("privacy.blockTrackers"), Json(true));
   EXPECT_EQ(def("privacy.blockThirdPartyCookies"), Json(true));
   EXPECT_EQ(def("privacy.blockPopups"), Json(true));
+  EXPECT_EQ(def("privacy.jsOptimizer"), Json("off-in-tor"));
   EXPECT_EQ(def("general.startupPage"), Json("newtab"));
   for (auto p : {"camera", "microphone", "clipboard"}) {
     EXPECT_EQ(def(std::string("permissions.") + p), Json("deny")) << p;
@@ -57,6 +58,8 @@ TEST(SettingsSchema, SaferDefaults) {
   EXPECT_EQ(def("appearance.theme"), Json("dark"));
   EXPECT_EQ(def("tor.bridges.mode"), Json("none"));
   EXPECT_EQ(def("updates.autoCheck"), Json(true));
+  // Verified updates install promptly, as in Chrome: fixes reach users.
+  EXPECT_EQ(def("updates.autoInstall"), Json(true));
 }
 
 TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
@@ -66,11 +69,12 @@ TEST(SettingsSchema, OnlyImplementedSettingsAreActive) {
       "general.startupPage", "search.engine", "appearance.theme", "appearance.showBookmarksBar", "downloads.askBeforeDownload",
       "downloads.disableDownloads", "privacy.httpsFirst", "privacy.blockTrackers",
       "privacy.blockThirdPartyCookies", "privacy.blockPopups", "privacy.useSystemProxy",
+      "privacy.jsOptimizer",
       "privacy.clearOnExit.history",
       "privacy.clearOnExit.cookies", "privacy.clearOnExit.cache", "permissions.camera",
       "permissions.microphone", "permissions.clipboard", "tor.startMode", "tor.bridges.mode",
       "tor.bridges.builtinType", "tor.bridges.custom", "updates.enabled", "updates.autoCheck",
-      "updates.notify"};
+      "updates.notify", "updates.autoInstall"};
   for (const Def& d : AllSettings()) {
     EXPECT_EQ(d.status, active.count(d.key) ? Status::kActive : Status::kPlanned) << d.key;
   }

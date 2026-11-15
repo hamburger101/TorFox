@@ -55,6 +55,8 @@ type ShellEvent =
       findOpen: boolean;
       bookmarksBar: boolean;
       downloads: { active: number; count: number };
+      /** Set while a downloaded, verified update waits for a relaunch. */
+      update: { version: string; restarts: boolean } | null;
     }
   | { type: "bookmarksBar"; visible: boolean; items: BarItem[] }
   | { type: "find"; count: number; active: number; final: boolean }
@@ -153,6 +155,7 @@ export class TorFoxShell extends LitElement {
     barItems: { state: true },
     drag: { state: true },
     downloads: { state: true },
+    readyUpdate: { state: true },
   };
 
   declare tabs: TabState[];
@@ -172,6 +175,7 @@ export class TorFoxShell extends LitElement {
   declare barItems: BarItem[];
   declare drag: Drag | null;
   declare downloads: { active: number; count: number };
+  declare readyUpdate: { version: string; restarts: boolean } | null;
   private noticeTimer = 0;
   // The suggestion list: what TorFox last showed, and the highlighted row.
   private suggestions: Suggestion[] = [];
@@ -203,6 +207,7 @@ export class TorFoxShell extends LitElement {
     this.barItems = [];
     this.drag = null;
     this.downloads = { active: 0, count: 0 };
+    this.readyUpdate = null;
   }
 
   override connectedCallback(): void {
@@ -230,7 +235,8 @@ export class TorFoxShell extends LitElement {
         void this.star();
         return;
       case "notice":
-        this.showNotice(e.text, "info");
+        // Shown once at startup, and may be long: longer than other notices.
+        this.showNotice(e.text, "info", 10000);
         return;
       case "suggestOpened":
         // A row of the list was clicked: TorFox opened it in this tab.
@@ -262,6 +268,7 @@ export class TorFoxShell extends LitElement {
         this.tor = e.tor ?? null;
         this.barVisible = e.bookmarksBar;
         this.downloads = e.downloads ?? { active: 0, count: 0 };
+        this.readyUpdate = e.update ?? null;
         if (!e.findOpen && this.findOpen) {
           this.findText = "";
           this.findCount = -1;
@@ -306,11 +313,23 @@ export class TorFoxShell extends LitElement {
     });
   }
 
-  private showNotice(message: string, kind: "error" | "info" = "error"): void {
+  private showNotice(message: string, kind: "error" | "info" = "error", ms?: number): void {
     this.notice = message;
     this.noticeKind = kind;
     window.clearTimeout(this.noticeTimer);
-    this.noticeTimer = window.setTimeout(() => (this.notice = ""), kind === "info" ? 3000 : 6000);
+    this.noticeTimer = window.setTimeout(() => (this.notice = ""), ms ?? (kind === "info" ? 3000 : 6000));
+  }
+
+  /** "Relaunch to update". TorFox asks first if private or Tor windows are open. */
+  private async relaunch(): Promise<void> {
+    try {
+      await call("update.install");
+    } catch (err) {
+      const message = err instanceof BridgeError ? err.message : String(err);
+      if (message !== "cancelled") {
+        this.showNotice(message);
+      }
+    }
   }
 
   private async run(cmd: string, args?: Record<string, unknown>): Promise<void> {
@@ -716,6 +735,14 @@ export class TorFoxShell extends LitElement {
               @click=${() => this.run("app.openDownloads")}>${icons.download}${this.downloads.active > 0
                 ? html`<span class="badge">${this.downloads.active}</span>` : nothing}</button>`
           : nothing}
+        ${this.readyUpdate
+          ? html`<button class="relaunch" id="relaunch"
+              title=${this.readyUpdate.restarts
+                ? `TorFox ${this.readyUpdate.version} is downloaded and verified. Relaunch TorFox to install it.`
+                : `TorFox ${this.readyUpdate.version} is downloaded and verified. TorFox closes and opens it; copy TorFox to Applications.`}
+              @click=${() => void this.relaunch()}>${icons.update}<span>${this.readyUpdate.restarts
+                ? "Relaunch to update" : "Update TorFox"}</span></button>`
+          : nothing}
         <button class="icon" id="menu" title="Menu" aria-label="Menu"
           @click=${(e: MouseEvent) => this.run("app.menu", anchor(e.currentTarget as Element, "right"))}>${icons.menu}</button>
       </div>
@@ -726,6 +753,30 @@ export class TorFoxShell extends LitElement {
 
   // Row heights must match BrowserWindow (src/browser/shell/browser_window.cc).
   static override styles = [base, css`
+    .relaunch {
+      align-self: center;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      margin: 0 2px;
+      padding: 0 12px 0 9px;
+      border: none;
+      border-radius: 14px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12.5px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .relaunch:hover {
+      background: var(--accent);
+      color: var(--on-accent);
+    }
+    .relaunch svg {
+      width: 15px;
+      height: 15px;
+    }
     .downloads {
       position: relative;
     }
