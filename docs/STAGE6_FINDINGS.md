@@ -4,7 +4,7 @@ Stage 6 makes every section of Settings do what it says, or say plainly what it 
 
 - **Unit tests:** 159 tests: 158 pass, 1 skipped (`ClearData.NeverFollowsLinks`, which needs permission to create symbolic links; unchanged since Stage 4).
 - **End-to-end tests:** 213 tests (test build, no network): all pass, 3 skipped (the tests that use the real Tor network, run separately). The first full run had one error, a bug in the new WebRTC test itself (a keyword clash in `events()`); after the fix that test passes.
-- **Mutation check:** RESULTS_MUT
+- **Mutation check:** all 90 mutations (Stages 1–6) detected, including the 6 new ones and the Stage 5 survivor.
 
 ## 1. What was built
 - **General > On startup.** *Open a new tab* (the default) or *Restore previous tabs*. Restoring reopens the
@@ -67,7 +67,13 @@ work. Nothing tested them. They are now accurate, and Stage 9's review covers ev
 | `test_only_implemented_settings_are_active`, `test_settings_service_refusals` | Which settings are active; refused values, removed keys and planned settings |
 
 ## 5. Mutation check
-RESULTS_MUT_DETAIL
+Stage 6 adds 6 mutations: the search engine choice ignored; restored sessions keeping private windows,
+being kept while history is cleared on exit, or keeping onion addresses; the session file trusted without
+checks; and first tabs created while the window is being shown (§3.1).
+
+The full run on the Stage 6 commit applied all 90 mutations of Stages 1–6 one at a time. **All 90 were
+detected.** That includes `tor-webrtc-not-restricted`, which survived in Stage 5 and is now detected by the
+policy check (§3.2).
 
 ## 6. Gaps
 - Address-bar suggestions (§2).

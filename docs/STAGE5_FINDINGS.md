@@ -13,10 +13,10 @@ macOS code has never been compiled.
 ## Results at a glance
 | Suite | Result |
 |---|---|
-| Unit tests (`torfox_unit_tests`) | RESULTS_UNIT |
-| End-to-end tests (test build, no network) | RESULTS_E2E |
-| Tor tests with the bundled tor (network, `TORFOX_LIVE_TESTS=1`) | RESULTS_LIVE |
-| Mutation check (Stage 5 mutations) | RESULTS_MUT |
+| Unit tests (`torfox_unit_tests`) | 152 tests: 151 pass, 1 skipped (`ClearData.NeverFollowsLinks`, which needs permission to create symbolic links) |
+| End-to-end tests (test build, no network) | 205 tests. The first full run had 1 failure: `test_window_close_with_several_tabs` counted 7 closed browsers, not 6. The extra one is the new-tab page a window's first tab starts as, now replaced when the start address loads after the window is shown (§3.2). The test now checks that every browser TorFox created was closed. 3 skipped (the network tests, below). The next full run (Stage 6, 213 tests) passed |
+| Tor tests with the bundled tor (network, `TORFOX_LIVE_TESTS=1`) | 3 tests, all pass |
+| Mutation check (Stage 5 mutations) | 17 mutations. First run: 15 detected, 1 survived (`tor-webrtc-not-restricted`), 1 not reached. The survivor was fixed in Stage 6. Full run of all 90 mutations on the Stage 6 commit: all detected (§5) |
 
 ## 1. What was built
 
@@ -203,7 +203,21 @@ Some tests put an https site with a trusted test certificate on the Tor side, fo
   onion service loads.
 
 ## 5. Mutation check
-RESULTS_MUT_DETAIL
+Stage 5 adds 17 mutations to `tests/e2e/run_mutations.py`, one for each Tor protection: each tab, context
+and proxy layer of fail-closed; local addresses; WebRTC; camera, clipboard and other apps; links and
+searches staying in Tor; the onion checksum; new identity; the job object; custom bridge lines;
+per-destination circuits; and third-party cookies in Tor windows.
+
+**First run (Stage 5 commit):** 15 detected and 1 survived. The run then stopped, before the last Stage 5
+mutation, because the mutation checkout's release build failed for a reason unrelated to the mutation being
+tested. The runner stops rather than count a failed build as a detection.
+- `tor-webrtc-not-restricted` **survived**. It gives Tor windows the normal windows' WebRTC policy, and
+  `test_webrtc_in_tor_windows_reveals_no_address` still passed. The test's STUN server could not be reached
+  either way, so it could not tell the two policies apart. Stage 6 fixed the test
+  ([`STAGE6_FINDINGS.md`](STAGE6_FINDINGS.md) §3.2).
+
+**Full run (Stage 6 commit, all 90 mutations of Stages 1–6):** all 90 detected, including all 17 Stage 5
+mutations.
 
 ## 6. Not verified, and known gaps
 - **Not Tor Browser.**
