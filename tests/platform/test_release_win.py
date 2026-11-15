@@ -196,7 +196,21 @@ class ReleaseBuildTest(unittest.TestCase):
                      if p.is_file() and (p.name.lower() in names or p.suffix.lower() == ".jsonl")]
             self.assertEqual(found, [])
         after = {p.relative_to(install) for p in install.rglob("*")}
-        self.assertEqual(sorted(map(str, after - before)), [], "files appeared next to TorFox.exe")
+        new = sorted(map(str, after - before))
+        # A known exception (docs/STAGE11_FINDINGS.md §9): TorFox.exe is CEF's
+        # bootstrap, which reads --enable-logging itself, before any TorFox
+        # code runs, and writes its own start-up lines to debug.log next to
+        # it. They name no page: every line must be the bootstrap's.
+        bootstrap_log = install / "debug.log"
+        if bootstrap_log.exists():
+            text = bootstrap_log.read_text(encoding="utf-8", errors="replace")
+            self.assertNotIn("no-log-marker-7f3a", text)
+            self.assertNotIn(self.fixture.origin.split("//", 1)[1], text)
+            for line in text.splitlines():
+                if line.strip():
+                    self.assertIn("libcef_dll\\bootstrap\\", line, "a log line not from CEF's bootstrap")
+            new = [n for n in new if n != "debug.log"]
+        self.assertEqual(new, [], "files appeared next to TorFox.exe")
 
     def test_release_builds_ignore_the_test_update_source(self) -> None:
         # Test builds can be pointed at a fake GitHub with their own key
