@@ -79,6 +79,8 @@ struct Validated {
 
 inline constexpr std::size_t kMaxMessageBytes = 64 * 1024;
 inline constexpr int kMaxMessageDepth = 6;
+// The address bar shows at most this many suggestions.
+inline constexpr int kMaxSuggestions = 6;
 
 // Message format: {"cmd": "<name>", "args": {...}}. "args" may be omitted
 // when the command takes no arguments. No other top-level members.

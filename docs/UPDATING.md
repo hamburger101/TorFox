@@ -67,7 +67,8 @@ The user then copies TorFox to Applications, replacing the old copy. TorFox does
 ## Limits
 - The builds are not code-signed (no Authenticode certificate, no Apple Developer ID), so neither Windows
   nor macOS can confirm the publisher. The update's integrity rests on TorFox's own minisign signature
-  and on the secrecy of the signing key, which exists only as a GitHub Actions secret.
+  and on the secrecy of the signing key, which exists only as a GitHub Actions environment secret that
+  one job of the release workflow can read (see [`RELEASING.md`](RELEASING.md)).
 - Anyone who can see network traffic can see that TorFox contacts GitHub, and roughly when.
 - A release signed with the official key is trusted. If that key is stolen, an attacker could sign an
   update; a stolen key must be replaced with a new TorFox release that carries the new public key.

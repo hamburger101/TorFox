@@ -18,13 +18,25 @@ that key exists, builds never look for updates, and the release workflow refuses
 3. Put the public key (the second line of `torfox-release.pub`, starting with `RW`) in
    `config/release.json` as `update_public_key`, and commit it. Builds made from then on check updates
    against it.
-4. In the repository on GitHub: **Settings → Secrets and variables → Actions → New repository secret**,
-   named `MINISIGN_SECRET_KEY`, with the whole content of `torfox-release.key`.
+4. In the repository on GitHub, **Settings → Environments → New environment**, named `release`:
+   - **Required reviewers**: yourself (and any other maintainer). Nothing is signed until one of them
+     approves the run.
+   - **Deployment branches and tags**: *Selected branches and tags*, with one tag rule `v*`.
+   - **Environment secrets → Add secret**: `MINISIGN_SECRET_KEY`, with the whole content of
+     `torfox-release.key`. Do **not** make it a repository secret: every workflow could read that one.
 5. Delete `torfox-release.key` from the computer, or keep it offline. Anyone who has it can sign updates
    that every TorFox installs. Never commit it.
+6. **Settings → Rules → Rulesets**:
+   - a tag ruleset for `v*` that restricts creation, update and deletion to maintainers;
+   - a branch ruleset for `main` that requires a pull request with a review, so a change to
+     `.github/workflows/`, `config/release.json` or `scripts/` cannot land unreviewed.
 
-Optional hardening: protect `v*` tags (only maintainers can push them), and require a review on pull
-requests that change `.github/workflows/`, `config/release.json` or `scripts/`.
+Only the workflow's **sign** job runs in the `release` environment, so it is the only job that can read
+the key. It receives the manifest and nothing else (not the builds, not the build tools), and returns
+only the signature. The workflow also refuses a tag whose commit is not on `main`, and every action it
+uses is pinned by commit (`tests/tools/test_release.py` checks all three). What these rules cannot stop:
+someone who can push to `main` without review, or who can approve the `release` environment, can still
+get a release signed. Keep that set of people small.
 
 If the key is ever exposed, make a new one, ship a release signed with the **old** key that carries the
 **new** public key, then replace the secret. Builds that never install that release keep trusting the old
@@ -41,17 +53,21 @@ key.
    git push origin vX.Y.Z
    ```
 4. The workflow:
-   - **preflight**: stops unless the tag is `v` + the project version, `config/release.json` names the
-     repository and has the public key, the release notes exist and `MINISIGN_SECRET_KEY` is set;
+   - **preflight**: stops unless the tagged commit is on `main`, the tag is `v` + the project version,
+     `config/release.json` names the repository and has the public key, and the release notes exist;
    - **windows**: builds the release, runs the unit and release-build tests, builds
      `TorFox-X.Y.Z-win-x64-setup.exe` (`scripts/package_windows.py`);
    - **macos** (arm64 and x64): builds, runs the unit tests, makes `TorFox-X.Y.Z-mac-<arch>.dmg`
      (`packaging/macos/make_dmg.sh`), then mounts it, copies the app out and runs it;
-   - **publish**: writes `manifest.json` (`scripts/release.py manifest`), signs it with the official
-     minisign and the trusted comment `torfox-release version:X.Y.Z timestamp:<now>`, checks the
-     signature with the official tool and again as TorFox will (`scripts/release.py check`), then creates
-     the GitHub release as a draft, uploads the three files and the manifest and its signature, and
-     publishes it. TorFox ignores drafts, so it never sees a release that is not complete.
+   - **manifest**: writes `manifest.json` (`scripts/release.py manifest`) and the trusted comment
+     `torfox-release version:X.Y.Z timestamp:<now>`;
+   - **sign** (environment `release`, waits for a reviewer's approval): signs the manifest with the
+     official minisign and checks the signature with it; it fails if the environment has no
+     `MINISIGN_SECRET_KEY`;
+   - **publish** (no secret): checks the signed release again as TorFox will
+     (`scripts/release.py check`), then creates the GitHub release as a draft, uploads the three files and
+     the manifest and its signature, and publishes it. TorFox ignores drafts, so it never sees a release
+     that is not complete.
 
 The repository must be **public** for TorFox to see releases without signing in to GitHub.
 

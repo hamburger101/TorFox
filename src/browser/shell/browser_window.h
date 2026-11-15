@@ -5,6 +5,7 @@
 #ifndef TORFOX_BROWSER_SHELL_BROWSER_WINDOW_H_
 #define TORFOX_BROWSER_SHELL_BROWSER_WINDOW_H_
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
@@ -19,6 +20,7 @@
 #include "include/wrapper/cef_message_router.h"
 #include "src/browser/app/browser_registry.h"
 #include "src/browser/platform/platform.h"
+#include "src/core/browsing/places.h"
 #include "src/core/browsing/session.h"
 #include "src/core/browsing/shortcuts.h"
 #include "src/core/browsing/tabs.h"
@@ -65,6 +67,9 @@ class BrowserWindow : public CefWindowDelegate {
   // True for Tor windows too: they are private windows.
   bool is_private() const { return private_; }
   bool is_tor() const { return tor_; }
+  // Tor windows: set once New Identity has retired this window's context
+  // (ContextManager::TorRetired); null for other windows.
+  std::shared_ptr<const std::atomic<bool>> tor_retired() const { return tor_retired_; }
   void Close();
   // Unique for the session; never reused.
   int id() const { return id_; }
@@ -115,7 +120,25 @@ class BrowserWindow : public CefWindowDelegate {
   void AddStateSubscriber(int browser_id,
                           int64_t query_id,
                           CefRefPtr<CefMessageRouterBrowserSide::Callback> callback);
+  // Ends a persistent query of the shell (state.subscribe) or of the
+  // suggestion list (suggest.subscribe).
   void RemoveStateSubscriber(int browser_id, int64_t query_id);
+
+  // Address-bar suggestions, from the shell: bookmarks and history entries
+  // matching |text| (bookmarks only in Tor windows; nothing from the
+  // network), shown in a list over the page whose top-left corner is at
+  // (x, y) in the shell's coordinates, |width| wide. No match hides the
+  // list. Returns {"items": [{url, title, source}], "highlight": -1}.
+  Json SuggestQuery(const std::string& text, int x, int y, int width);
+  void SuggestHighlight(int index);
+  void SuggestHide();
+  // From the suggestion list: row |index| was clicked. Opens it in the
+  // active tab, like a bookmark.
+  Result SuggestOpen(int index);
+  void AddSuggestSubscriber(int browser_id,
+                            int64_t query_id,
+                            CefRefPtr<CefMessageRouterBrowserSide::Callback> callback);
+
   void NewTab();
   Result CloseTab(int tab_id);
   Result SelectTab(int tab_id);
@@ -171,6 +194,7 @@ class BrowserWindow : public CefWindowDelegate {
   struct Closing {
     CefRefPtr<CefBrowserView> view;
     CefRefPtr<CefPanel> parent;
+    CefRefPtr<CefOverlayController> overlay;  // The suggestion list's, instead of a parent.
   };
 
   CefRefPtr<CefBrowserView> CreateView(BrowserRole role,
@@ -184,7 +208,9 @@ class BrowserWindow : public CefWindowDelegate {
   // The saved session's tabs or the start address, after the window shows.
   void OpenFirstTabs();
   void StartClose(CefRefPtr<TabClient> client, CefRefPtr<CefBrowserView> view,
-                  CefRefPtr<CefPanel> parent);
+                  CefRefPtr<CefPanel> parent, CefRefPtr<CefOverlayController> overlay = nullptr);
+  Json SuggestionsJson() const;
+  void PushSuggestions();
   Tab* FindTab(int tab_id);
   Tab* ActiveTab();
   int IndexOf(int tab_id) const;
@@ -223,6 +249,7 @@ class BrowserWindow : public CefWindowDelegate {
   const int id_;
   // Web tabs' context: Normal, or this window's own private context.
   CefRefPtr<CefRequestContext> web_context_;
+  const std::shared_ptr<const std::atomic<bool>> tor_retired_;
   CefRefPtr<CefWindow> window_;
   CefRefPtr<CefBrowserView> shell_view_;
   CefRefPtr<TabClient> shell_client_;
@@ -260,6 +287,16 @@ class BrowserWindow : public CefWindowDelegate {
     CefRefPtr<CefMessageRouterBrowserSide::Callback> callback;
   };
   std::vector<Subscriber> state_subscribers_;
+
+  // The suggestion list (torfox://suggest/), made the first time there is
+  // something to show, in an overlay that never takes the focus.
+  CefRefPtr<CefBrowserView> suggest_view_;
+  CefRefPtr<TabClient> suggest_client_;
+  CefRefPtr<CefOverlayController> suggest_overlay_;
+  std::vector<browsing::Suggestion> suggestions_;
+  int suggest_highlight_ = -1;
+  bool suggest_shown_ = false;
+  std::vector<Subscriber> suggest_subscribers_;
 
   IMPLEMENT_REFCOUNTING(BrowserWindow);
 };

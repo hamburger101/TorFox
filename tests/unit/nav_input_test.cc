@@ -128,6 +128,9 @@ TEST(NavInput, InternalPages) {
   EXPECT_EQ(C("torfox://newtab/").kind, NavKind::kInternal);
   // The shell page is the window chrome, never tab content.
   EXPECT_EQ(C("torfox://shell/").kind, NavKind::kRejected);
+  // Nor is the address bar's suggestion list.
+  EXPECT_EQ(C("torfox://suggest/").kind, NavKind::kRejected);
+  EXPECT_EQ(C("TORFOX://SUGGEST/").kind, NavKind::kRejected);
   EXPECT_EQ(C("torfox://unknown/").kind, NavKind::kRejected);
 }
 

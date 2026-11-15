@@ -22,6 +22,7 @@ enum class BrowserRole {
   kShell,        // The window's tab strip/toolbar (torfox://shell/).
   kInternalTab,  // A tab showing an internal page (torfox://newtab/, ...).
   kWebTab,       // A tab showing web content (Normal context).
+  kSuggest,      // The address bar's suggestion list (torfox://suggest/), over the page.
 };
 
 std::string_view RoleName(BrowserRole role);

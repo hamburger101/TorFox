@@ -78,6 +78,7 @@ TabClient::TabClient(BrowserRole role,
       download_context_(window && window->is_private() ? window->id() : 0),
       tor_(window && window->is_tor()),
       tor_service_(tor_ ? GetServices().tor : nullptr),
+      tor_retired_(tor_ ? window->tor_retired() : nullptr),
       window_(window),
       router_(IsInternalRole(role) ? router : nullptr),
       initial_url_(std::move(initial_url)) {}
@@ -93,7 +94,15 @@ guards::Role TabClient::GuardRoleOf() const {
 }
 
 bool TabClient::TorHoldsBack() const {
-  if (!tor_ || role_ != BrowserRole::kWebTab || fault_injection::SkipTorGuard()) {
+  if (!tor_ || role_ != BrowserRole::kWebTab) {
+    return false;
+  }
+  // New Identity: this window's context sends nothing more, connected or
+  // not (ContextManager::DropTor).
+  if (!tor_retired_ || tor_retired_->load()) {
+    return true;
+  }
+  if (fault_injection::SkipTorGuard()) {
     return false;
   }
   return !(tor_service_ && tor_service_->connected());
@@ -336,13 +345,13 @@ void TabClient::OpenInNewTab(const std::string& url, bool foreground) {
 void TabClient::OnAddressChange(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 const CefString& url) {
-  if (frame->IsMain() && window_ && role_ != BrowserRole::kShell) {
+  if (frame->IsMain() && window_ && IsTab()) {
     window_->OnAddressChange(tab_id_, url.ToString());
   }
 }
 
 void TabClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) {
-  if (window_ && role_ != BrowserRole::kShell) {
+  if (window_ && IsTab()) {
     window_->OnTitleChange(tab_id_, title.ToString());
   }
 }
@@ -597,7 +606,7 @@ void TabClient::OnFindResult(CefRefPtr<CefBrowser> browser,
                              const CefRect& selectionRect,
                              int activeMatchOrdinal,
                              bool finalUpdate) {
-  if (window_ && role_ != BrowserRole::kShell) {
+  if (window_ && IsTab()) {
     window_->OnFindResult(tab_id_, count, activeMatchOrdinal, finalUpdate);
   }
 }
@@ -733,7 +742,7 @@ void TabClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
                                      bool isLoading,
                                      bool canGoBack,
                                      bool canGoForward) {
-  if (window_ && role_ != BrowserRole::kShell) {
+  if (window_ && IsTab()) {
     window_->OnLoadingState(tab_id_, isLoading, canGoBack, canGoForward);
   }
 }

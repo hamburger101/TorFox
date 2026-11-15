@@ -438,7 +438,14 @@ void BrowserApp::NewTorIdentity(BrowserWindow* requester) {
       old.emplace_back(w);
     }
   }
-  contexts_->DropTor();
+  // The old context is retired first: from here on it sends nothing (its
+  // windows' guards and gate refuse every request and its proxy is a dead
+  // port), so nothing from the old identity can use a circuit built after
+  // NEWNYM, even while its windows are still closing.
+  std::string error;
+  if (!contexts_->DropTor(&error)) {
+    LOG(ERROR) << "New identity: the old Tor context's proxy was not changed: " << error;
+  }
   tor_->NewIdentity([](bool ok) { test_log::Event("tor_newnym", {{"ok", ok}}); });
   // The new window opens first, so closing the old ones never leaves TorFox
   // without a window (which would quit).

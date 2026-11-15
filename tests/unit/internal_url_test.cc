@@ -40,6 +40,12 @@ TEST(InternalUrl, RejectsNonCanonicalOrHostileUrls) {
 
 TEST(InternalUrl, KnownPages) {
   EXPECT_TRUE(IsInternalPage("shell"));
+  // Tabs show every page but the window's own and the suggestion list.
+  EXPECT_FALSE(IsTabPage("shell"));
+  EXPECT_FALSE(IsTabPage("suggest"));
+  EXPECT_FALSE(IsTabPage("nope"));
+  EXPECT_TRUE(IsTabPage("settings"));
+  EXPECT_TRUE(IsTabPage("downloads"));
   EXPECT_TRUE(IsInternalPage("newtab"));
   EXPECT_TRUE(IsInternalPage("settings"));
   EXPECT_FALSE(IsInternalPage("Settings"));

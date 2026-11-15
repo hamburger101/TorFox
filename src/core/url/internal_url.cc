@@ -10,8 +10,8 @@ namespace torfox {
 
 namespace {
 
-constexpr std::array<std::string_view, 6> kPages = {"shell",     "newtab",  "settings",
-                                                    "bookmarks", "history", "downloads"};
+constexpr std::array<std::string_view, 7> kPages = {"shell",     "newtab",  "settings",  "bookmarks",
+                                                    "history",   "downloads", "suggest"};
 
 char ToLowerAscii(char c) {
   return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
@@ -30,6 +30,10 @@ bool IsInternalPage(std::string_view host) {
     }
   }
   return false;
+}
+
+bool IsTabPage(std::string_view host) {
+  return IsInternalPage(host) && host != "shell" && host != "suggest";
 }
 
 std::optional<InternalUrl> ParseInternalUrl(std::string_view url) {

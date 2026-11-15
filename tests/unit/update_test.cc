@@ -318,8 +318,14 @@ TEST(Release, OnlyNewerReleasesAreOffered) {
   // The same release seen again (not installed yet) is still offered; an
   // older signed manifest replayed after a newer one was seen is not.
   EXPECT_TRUE(Decide(r, *ParseVersion("2.0.0"), 1800000000, "windows-x64").update);
+  EXPECT_FALSE(Decide(r, *ParseVersion("2.0.0"), 1800000000, "windows-x64").replayed);
   EXPECT_FALSE(Decide(r, *ParseVersion("2.0.0"), 1800000001, "windows-x64").update);
   EXPECT_FALSE(Decide(r, *ParseVersion("2.0.0"), 1900000000, "windows-x64").update);
+  EXPECT_TRUE(Decide(r, *ParseVersion("2.0.0"), 1800000001, "windows-x64").replayed);
+  // A replay is reported as one even when its version is not newer.
+  EXPECT_TRUE(Decide(r, *ParseVersion("2.0.1"), 1900000000, "windows-x64").replayed);
+  EXPECT_TRUE(Decide(r, *ParseVersion("3.0.0"), 1900000000, "windows-x64").replayed);
+  EXPECT_FALSE(Decide(r, *ParseVersion("3.0.0"), 1800000000, "windows-x64").replayed);
   // No file for this computer.
   EXPECT_FALSE(Decide(r, *ParseVersion("2.0.0"), 0, "macos-x64").update);
 }

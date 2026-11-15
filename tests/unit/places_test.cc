@@ -248,6 +248,21 @@ TEST(PlacesSuggest, PrefixMatchesFirstAndNoDuplicates) {
   EXPECT_TRUE(p->Suggest("zzz", 10).empty());
 }
 
+TEST(PlacesSuggest, BookmarksOnlyLeavesHistoryOut) {
+  ScopedTempDir dir;
+  auto p = OpenAt(dir.path() / "places.db");
+  ASSERT_TRUE(p);
+  p->AddVisit("https://www.example.com/", "Example", 1);
+  p->AddVisit("https://other.org/about-example", "About", 2);
+  p->AddBookmark(kBookmarksBarId, "Example docs", "https://docs.example.com/", -1, 3);
+  auto s = p->Suggest("exa", 10, /*history=*/false);
+  ASSERT_EQ(s.size(), 1u);
+  EXPECT_EQ(s[0].url, "https://docs.example.com/");
+  EXPECT_EQ(s[0].source, Suggestion::Source::kBookmark);
+  EXPECT_TRUE(p->Suggest("about", 10, false).empty());
+  EXPECT_EQ(p->Suggest("about", 10).size(), 1u);
+}
+
 TEST(PlacesFile, DataPersistsAcrossReopen) {
   ScopedTempDir dir;
   const auto path = dir.path() / "places.db";

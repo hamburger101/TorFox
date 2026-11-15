@@ -17,12 +17,18 @@ namespace torfox::guards {
 // What kind of browser a request comes from.
 enum class Role {
   kShell,        // The window's tab strip and toolbar (torfox://shell/ only).
+  kSuggest,      // The address bar's suggestion list (torfox://suggest/ only).
   kInternalTab,  // A tab showing a TorFox page (newtab, settings).
   kWebTab,       // A tab showing web content.
   kTorTab,       // A tab showing web content in a Tor window (through tor only).
 };
 
 bool IsInternal(Role role);
+
+// Whether an internal browser of |role| may show the TorFox page |page|:
+// the shell shows only torfox://shell/, the suggestion list only
+// torfox://suggest/, and tabs every other page.
+bool PageAllowedForRole(std::string_view page, Role role);
 
 // Lower-case scheme of |url| ("" if none).
 std::string SchemeOf(std::string_view url);

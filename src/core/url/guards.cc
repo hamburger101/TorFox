@@ -46,7 +46,17 @@ bool ReachesPrivilegedScheme(std::string_view scheme, std::string_view url) {
 }  // namespace
 
 bool IsInternal(Role role) {
-  return role == Role::kShell || role == Role::kInternalTab;
+  return role == Role::kShell || role == Role::kSuggest || role == Role::kInternalTab;
+}
+
+bool PageAllowedForRole(std::string_view page, Role role) {
+  if (page == "shell") {
+    return role == Role::kShell;
+  }
+  if (page == "suggest") {
+    return role == Role::kSuggest;
+  }
+  return role == Role::kInternalTab;
 }
 
 std::string SchemeOf(std::string_view url) {
@@ -181,7 +191,7 @@ std::string NavigationBlockReason(Role role, std::string_view url) {
     if (!parsed || !IsInternalPage(parsed->host)) {
       return "internal browsers only show TorFox pages";
     }
-    if ((parsed->host == "shell") != (role == Role::kShell)) {
+    if (!PageAllowedForRole(parsed->host, role)) {
       return "page not allowed for this browser";
     }
     return std::string();
@@ -240,7 +250,7 @@ InternalRequest DecideInternalRequest(bool known, Role role, std::string_view me
   if (!parsed || !IsInternalPage(parsed->host)) {
     return {404, "unknown page", {}};
   }
-  if ((parsed->host == "shell") != (role == Role::kShell)) {
+  if (!PageAllowedForRole(parsed->host, role)) {
     return {403, "page not allowed for role", {}};
   }
   auto path = ResourcePathFor(*parsed);

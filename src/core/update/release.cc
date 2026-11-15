@@ -190,12 +190,14 @@ ManifestCheck CheckManifest(const PublicKey& key, std::string_view manifest,
 Offer Decide(const Release& release, const Version& installed, int64_t newest_seen,
              std::string_view platform) {
   Offer o;
-  if (CompareVersions(release.version, installed) <= 0) {
-    o.reason = "TorFox " + VersionString(installed) + " is up to date";
+  // First: a replayed old manifest must not pass for "up to date".
+  if (release.timestamp < newest_seen) {
+    o.replayed = true;
+    o.reason = "this release is older than one TorFox has already seen";
     return o;
   }
-  if (release.timestamp < newest_seen) {
-    o.reason = "this release is older than one TorFox has already seen";
+  if (CompareVersions(release.version, installed) <= 0) {
+    o.reason = "TorFox " + VersionString(installed) + " is up to date";
     return o;
   }
   auto it = release.assets.find(std::string(platform));

@@ -24,6 +24,8 @@ std::string_view RoleName(BrowserRole role) {
       return "internal_tab";
     case BrowserRole::kWebTab:
       return "web_tab";
+    case BrowserRole::kSuggest:
+      return "suggest";
   }
   return "unknown";
 }
@@ -40,6 +42,8 @@ guards::Role GuardRole(BrowserRole role) {
       return guards::Role::kInternalTab;
     case BrowserRole::kWebTab:
       return guards::Role::kWebTab;
+    case BrowserRole::kSuggest:
+      return guards::Role::kSuggest;
   }
   return guards::Role::kWebTab;  // Unreachable; the least privileged role.
 }

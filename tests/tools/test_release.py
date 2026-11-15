@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -166,14 +167,37 @@ class ReleaseToolTest(unittest.TestCase):
                 e["MINISIGN_SECRET_KEY"] = secret
             return subprocess.run([sys.executable, "-I", str(REPO / "scripts" / "release.py"),
                                    "preflight", "--tag", tag], capture_output=True, text=True, env=e)
-        r = preflight("v99.0.0", "x")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("does not match", r.stderr)
-        r = preflight(f"v{version}", "x")
-        self.assertNotEqual(r.returncode, 0)
-        if not json.loads((REPO / "config" / "release.json").read_text())["update_public_key"]:
-            # This repository has no release key yet: no release can be made.
-            self.assertIn("update_public_key", r.stderr)
+        # Preflight runs without the secret (only the sign job can read it),
+        # so a secret in the environment changes nothing.
+        for secret in (None, "x"):
+            r = preflight("v99.0.0", secret)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("does not match", r.stderr)
+            r = preflight(f"v{version}", secret)
+            if not json.loads((REPO / "config" / "release.json").read_text())["update_public_key"]:
+                # This repository has no release key yet: no release can be made.
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("update_public_key", r.stderr)
+
+    def test_only_the_sign_job_can_read_the_release_key(self) -> None:
+        text = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        jobs = re.split(r"(?m)^  (?=[a-z]+:\n)", text.split("\njobs:\n", 1)[1])
+        by_name = {j.split(":", 1)[0]: j for j in jobs if j.strip()}
+        self.assertIn("sign", by_name)
+        for name, body in by_name.items():
+            if name == "sign":
+                self.assertIn("environment: release", body)
+                self.assertIn("secrets.MINISIGN_SECRET_KEY", body)
+                # It gets the manifest, not the builds.
+                self.assertIn("name: manifest", body)
+                self.assertNotIn("merge-multiple", body)
+            else:
+                self.assertNotIn("secrets.", body, name)
+        self.assertNotIn("secrets.", text.split("\njobs:\n", 1)[0])
+        # Every action is pinned by commit.
+        for use in re.findall(r"uses:\s*(\S+)", text):
+            self.assertRegex(use, r"@[0-9a-f]{40}$", use)
+        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', by_name["preflight"])
 
 
 if __name__ == "__main__":

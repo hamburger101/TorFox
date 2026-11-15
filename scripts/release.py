@@ -9,8 +9,9 @@
   preflight --tag vX.Y.Z
       Fails unless the tag is v<the CMake project version>, config/release.json
       names the repository and holds the release public key, the release notes
-      file docs/release-notes/X.Y.Z.txt exists, and MINISIGN_SECRET_KEY is set.
-      Nothing is built or published when it fails.
+      file docs/release-notes/X.Y.Z.txt exists. Nothing is built or published
+      when it fails. (The signing secret is checked by the sign job, the only
+      job that can read it.)
   manifest --version X.Y.Z --notes <file> --out <manifest.json> --comment-out <file> <files...>
       Writes the update manifest (one file per platform: size and SHA-256) and
       the trusted comment the minisign signature must carry.
@@ -27,7 +28,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import sys
 import time
@@ -121,9 +121,9 @@ def preflight(tag: str) -> None:
         raise ReleaseError(f"{notes.relative_to(REPO)} is missing: write the release notes first")
     if len(notes.read_bytes()) > MAX_NOTES:
         raise ReleaseError(f"{notes.relative_to(REPO)} is longer than {MAX_NOTES} bytes")
-    if not os.environ.get("MINISIGN_SECRET_KEY"):
-        raise ReleaseError("the MINISIGN_SECRET_KEY secret is not set: the release cannot be signed")
-    print(f"Release {version}: tag, version, public key, notes and signing secret present")
+    # The signing secret is not checked here: only the workflow's sign job,
+    # in the "release" environment, can read it, and that job fails without it.
+    print(f"Release {version}: tag, version, public key and notes present")
 
 
 def make(version: str, notes_file: Path, out: Path, comment_out: Path, files: list[Path],

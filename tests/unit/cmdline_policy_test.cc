@@ -46,7 +46,7 @@ TEST(CmdlinePolicy, ReleaseDropsDangerousUserSwitches) {
     EXPECT_TRUE(Has(p.removed, s)) << s;
   }
   // The user's resolver rules are replaced by TorFox's.
-  EXPECT_EQ(p.switches.at("host-resolver-rules"), "MAP *.onion ~NOTFOUND");
+  EXPECT_EQ(p.switches.at("host-resolver-rules"), "MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND");
 }
 
 TEST(CmdlinePolicy, KeepsCefOwnSwitches) {
@@ -54,6 +54,28 @@ TEST(CmdlinePolicy, KeepsCefOwnSwitches) {
   Plan p = Apply(in);
   EXPECT_EQ(p.switches.at("lang"), "en-US");
   EXPECT_EQ(p.switches.at("some-cef-switch"), "1");
+}
+
+TEST(CmdlinePolicy, TheUsersSwitchNeverRemovesCefsOwn) {
+  // Release builds: CEF ignores the user's switches, so the processed command
+  // line holds CEF's values; a user switch of the same name must not erase them.
+  Input in;
+  in.user_switches = {{"lang", "de"}, {"log-severity", "verbose"}, {"no-sandbox", ""}};
+  in.current_switches = {{"lang", "en-US"}, {"log-severity", "disable"}};
+  Plan p = Apply(in);
+  EXPECT_EQ(p.switches.at("lang"), "en-US");
+  EXPECT_EQ(p.switches.at("log-severity"), "disable");
+  EXPECT_EQ(p.switches.count("no-sandbox"), 0u);
+  EXPECT_TRUE(Has(p.removed, "lang"));
+  // Even a value equal to CEF's cannot remove logging's off switch.
+  in.user_switches = {{"log-severity", "disable"}};
+  EXPECT_EQ(Apply(in).switches.at("log-severity"), "disable");
+}
+
+TEST(CmdlinePolicy, TestBuildsLeaveLoggingToCef) {
+  Input in;
+  in.test_hooks = true;
+  EXPECT_EQ(Apply(in).switches.count("log-severity"), 0u);
 }
 
 TEST(CmdlinePolicy, AddsForcedSwitches) {
@@ -66,7 +88,7 @@ TEST(CmdlinePolicy, AddsForcedSwitches) {
                         "disable-component-update"}) {
     EXPECT_EQ(p.switches.count(s), 1u) << s;
   }
-  EXPECT_EQ(p.switches.at("host-resolver-rules"), "MAP *.onion ~NOTFOUND");
+  EXPECT_EQ(p.switches.at("host-resolver-rules"), "MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND");
   EXPECT_EQ(p.switches.at("component-updater"), "url-source=http://127.0.0.1:9/,disable-pings");
   EXPECT_EQ(p.switches.at("enable-features"), "NetworkServiceSandbox");
   EXPECT_EQ(SplitFeatureList(p.switches.at("disable-features")), ForcedDisableFeatures());
@@ -121,7 +143,7 @@ TEST(CmdlinePolicy, TestHooksAllowOnlyTheirSwitches) {
   EXPECT_EQ(p.switches.count("proxy-server"), 0u);
   // Test rules come after the onion rule, so they can never override it.
   EXPECT_EQ(p.switches.at("host-resolver-rules"),
-            "MAP *.onion ~NOTFOUND,MAP fixture.test 127.0.0.1");
+            "MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND,MAP fixture.test 127.0.0.1");
 }
 
 TEST(CmdlinePolicy, KeepsOnlyHttpUrlArguments) {

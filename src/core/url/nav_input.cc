@@ -344,7 +344,7 @@ NavDecision ClassifyNavInput(std::string_view raw) {
       }
       if (scheme == kInternalScheme) {
         auto parsed = ParseInternalUrl(ToLower(input));
-        if (parsed && IsInternalPage(parsed->host) && parsed->host != "shell") {
+        if (parsed && IsTabPage(parsed->host)) {
           d.kind = NavKind::kInternal;
           d.url = InternalPageUrl(parsed->host);
           return d;

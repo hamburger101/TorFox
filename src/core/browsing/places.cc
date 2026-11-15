@@ -645,7 +645,7 @@ bool Places::RemoveBookmark(int64_t id) {
 
 // ----- Address bar -----------------------------------------------------------
 
-std::vector<Suggestion> Places::Suggest(std::string_view text, std::size_t limit) {
+std::vector<Suggestion> Places::Suggest(std::string_view text, std::size_t limit, bool history) {
   std::vector<Suggestion> out;
   if (text.empty() || limit == 0) {
     return out;
@@ -688,7 +688,7 @@ std::vector<Suggestion> Places::Suggest(std::string_view text, std::size_t limit
     Stmt s(db_, sql.c_str());
     collect(bind_prefixes(s), Suggestion::Source::kBookmark);
   }
-  {
+  if (history) {
     const std::string sql = std::string("SELECT url, title FROM urls WHERE ") + kPrefixMatch +
                             " ORDER BY visit_count DESC, last_visit DESC LIMIT ?5";
     Stmt s(db_, sql.c_str());
@@ -703,7 +703,7 @@ std::vector<Suggestion> Places::Suggest(std::string_view text, std::size_t limit
            "(title LIKE ?1 ESCAPE '\\' OR url LIKE ?1 ESCAPE '\\') ORDER BY added DESC LIMIT ?2");
     collect(s.Bind(1, std::string_view(anywhere)).Bind(2, max), Suggestion::Source::kBookmark);
   }
-  {
+  if (history) {
     Stmt s(db_,
            "SELECT url, title FROM urls WHERE (title LIKE ?1 ESCAPE '\\' OR url LIKE ?1 ESCAPE '\\') "
            "ORDER BY visit_count DESC, last_visit DESC LIMIT ?2");

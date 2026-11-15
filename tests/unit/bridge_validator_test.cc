@@ -187,6 +187,47 @@ TEST(BridgeValidator, ValidatesStageTwoArguments) {
             Reject::kArgumentOutOfRange);
 }
 
+TEST(BridgeValidator, SuggestionListOnlyReportsAClickedRow) {
+  constexpr char kSuggest[] = "torfox://suggest/";
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"suggest.open","args":{"index":0}})"), Reject::kNone);
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"suggest.open","args":{"index":5}})"), Reject::kNone);
+  EXPECT_EQ(Check(Ctx(kSuggest, true), R"({"cmd":"suggest.subscribe"})"), Reject::kNone);
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"suggest.open","args":{"index":6}})"),
+            Reject::kArgumentOutOfRange);
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"suggest.open","args":{"index":-1}})"),
+            Reject::kArgumentOutOfRange);
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"suggest.open","args":{"index":0,"url":"https://a/"}})"),
+            Reject::kUnknownArgument);
+  // The list cannot navigate, open tabs, read places or query suggestions itself.
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"nav.open","args":{"url":"https://a/"}})"),
+            Reject::kUnknownCommand);
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"nav.go","args":{"input":"x"}})"),
+            Reject::kUnknownCommand);
+  EXPECT_EQ(Check(Ctx(kSuggest), R"({"cmd":"tab.new"})"), Reject::kUnknownCommand);
+  EXPECT_EQ(Check(Ctx(kSuggest),
+                  R"({"cmd":"suggest.query","args":{"text":"a","x":0,"y":0,"width":10}})"),
+            Reject::kUnknownCommand);
+  EXPECT_EQ(Check(Ctx(kSuggest, true), R"({"cmd":"state.subscribe"})"), Reject::kUnknownCommand);
+  // The shell asks; other pages cannot.
+  EXPECT_EQ(Check(Ctx(kShell), R"({"cmd":"suggest.query","args":{"text":"exa","x":120,"y":72,"width":600}})"),
+            Reject::kNone);
+  EXPECT_EQ(Check(Ctx(kShell), R"({"cmd":"suggest.highlight","args":{"index":-1}})"), Reject::kNone);
+  EXPECT_EQ(Check(Ctx(kShell), R"({"cmd":"suggest.hide"})"), Reject::kNone);
+  EXPECT_EQ(Check(Ctx(kShell), R"({"cmd":"suggest.open","args":{"index":0}})"),
+            Reject::kUnknownCommand);
+  EXPECT_EQ(Check(Ctx(kShell),
+                  R"({"cmd":"suggest.query","args":{"text":"a","x":0,"y":0,"width":0}})"),
+            Reject::kArgumentOutOfRange);
+  EXPECT_EQ(Check(Ctx(kShell), R"({"cmd":"suggest.query","args":{"text":")" +
+                                   std::string(257, 'a') + R"(","x":0,"y":0,"width":10}})"),
+            Reject::kArgumentOutOfRange);
+  for (const char* page : {kSettings, kNewTab, "torfox://history/"}) {
+    EXPECT_EQ(Check(Ctx(page), R"({"cmd":"suggest.open","args":{"index":0}})"),
+              Reject::kUnknownCommand)
+        << page;
+  }
+}
+
 TEST(BridgeValidator, TablesAreConsistent) {
   for (const PageSpec& page : TorFoxPages()) {
     EXPECT_TRUE(IsInternalPage(page.host)) << page.host;

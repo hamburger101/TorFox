@@ -99,6 +99,21 @@ constexpr std::array<ArgSpec, 1> kHistoryRemoveArgs = {
     ArgSpec{"url", ArgType::kString, true, kMaxNavInputLength, 0, 0},
 };
 
+// Address-bar suggestions. The shell sends what is typed and where the
+// address bar is; the list page only says which row was clicked.
+constexpr std::array<ArgSpec, 4> kSuggestQueryArgs = {
+    ArgSpec{"text", ArgType::kString, true, 256, 0, 0},
+    ArgSpec{"x", ArgType::kInt, true, 0, 0, kMaxScreen},
+    ArgSpec{"y", ArgType::kInt, true, 0, 0, kMaxScreen},
+    ArgSpec{"width", ArgType::kInt, true, 0, 1, kMaxScreen},
+};
+constexpr std::array<ArgSpec, 1> kSuggestHighlightArgs = {
+    ArgSpec{"index", ArgType::kInt, true, 0, -1, kMaxSuggestions - 1},
+};
+constexpr std::array<ArgSpec, 1> kSuggestOpenArgs = {
+    ArgSpec{"index", ArgType::kInt, true, 0, 0, kMaxSuggestions - 1},
+};
+
 // Downloads: Chromium's download ids are uint32.
 constexpr std::array<ArgSpec, 1> kDownloadIdArgs = {
     ArgSpec{"id", ArgType::kInt, true, 0, 1, 0xFFFFFFFFLL},
@@ -109,7 +124,7 @@ constexpr CommandSpec Cmd(std::string_view name, std::span<const ArgSpec> args,
   return CommandSpec{name, args, persistent};
 }
 
-const std::array<CommandSpec, 30> kShellCommands = {
+const std::array<CommandSpec, 33> kShellCommands = {
     Cmd("state.subscribe", kNoArgs, true),
     Cmd("appearance.subscribe", kNoArgs, true),
     Cmd("tab.new", kNoArgs),
@@ -140,6 +155,15 @@ const std::array<CommandSpec, 30> kShellCommands = {
     Cmd("app.openHistory", kNoArgs),
     Cmd("app.openDownloads", kNoArgs),
     Cmd("app.focusContent", kNoArgs),
+    Cmd("suggest.query", kSuggestQueryArgs),
+    Cmd("suggest.highlight", kSuggestHighlightArgs),
+    Cmd("suggest.hide", kNoArgs),
+};
+
+const std::array<CommandSpec, 3> kSuggestCommands = {
+    Cmd("appearance.subscribe", kNoArgs, true),
+    Cmd("suggest.subscribe", kNoArgs, true),
+    Cmd("suggest.open", kSuggestOpenArgs),
 };
 
 const std::array<CommandSpec, 2> kNewTabCommands = {
@@ -194,13 +218,14 @@ const std::array<CommandSpec, 7> kDownloadsCommands = {
     Cmd("downloads.clear", kNoArgs),
 };
 
-const std::array<PageSpec, 6> kPages = {
+const std::array<PageSpec, 7> kPages = {
     PageSpec{"shell", kShellCommands},
     PageSpec{"newtab", kNewTabCommands},
     PageSpec{"settings", kSettingsCommands},
     PageSpec{"bookmarks", kBookmarksCommands},
     PageSpec{"history", kHistoryCommands},
     PageSpec{"downloads", kDownloadsCommands},
+    PageSpec{"suggest", kSuggestCommands},
 };
 
 // ----- Validation -----------------------------------------------------------

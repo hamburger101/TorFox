@@ -43,6 +43,7 @@ class RendererApp : public CefApp, public CefRenderProcessHandler {
  private:
   CefRefPtr<CefMessageRouterRendererSide> router_;
   std::set<int> internal_browsers_;
+  std::set<int> tor_browsers_;
   IMPLEMENT_REFCOUNTING(RendererApp);
 };
 

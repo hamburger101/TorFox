@@ -96,6 +96,7 @@ void TorService::Start(const BridgeConfig& bridges) {
 void TorService::Restart(const BridgeConfig& bridges) {
   CEF_REQUIRE_UI_THREAD();
   StopWorker();
+  ForgetPort();
   restarts_ = 0;
   {
     std::lock_guard<std::mutex> guard(lock_);
@@ -119,6 +120,17 @@ void TorService::StopWorker() {
     worker_.join();
   }
   stop_ = false;
+}
+
+void TorService::ForgetPort() {
+  CEF_REQUIRE_UI_THREAD();
+  if (port_applied_ == 0) {
+    return;
+  }
+  const int old = port_applied_;
+  port_applied_ = 0;
+  const bool ok = apply_port_ && apply_port_(0);
+  test_log::Event("tor_port_forgotten", {{"port", old}, {"ok", ok}});
 }
 
 void TorService::Shutdown() {
@@ -163,6 +175,11 @@ void TorService::OnStatus(int generation, Status status, int socks_port) {
   CEF_REQUIRE_UI_THREAD();
   if (generation != generation_.load()) {
     return;  // From a session that has since been stopped.
+  }
+  if (status.state == State::kError) {
+    // This tor has stopped (or never took over): its port is not TorFox's
+    // any more.
+    ForgetPort();
   }
   if (socks_port != 0 && socks_port != port_applied_) {
     if (apply_port_ && apply_port_(socks_port)) {

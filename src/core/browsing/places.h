@@ -118,8 +118,9 @@ class Places {
 
   // ----- Address bar -----
   // Bookmarks and history matching |text|: URL prefix matches (ignoring the
-  // scheme and "www.") first, then title and URL substring matches.
-  std::vector<Suggestion> Suggest(std::string_view text, std::size_t limit);
+  // scheme and "www.") first, then title and URL substring matches. Without
+  // |history|, bookmarks only (Tor windows).
+  std::vector<Suggestion> Suggest(std::string_view text, std::size_t limit, bool history = true);
 
  private:
   explicit Places(sqlite3* db);

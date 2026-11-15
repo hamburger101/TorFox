@@ -20,6 +20,7 @@ import json
 import os
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -311,18 +312,70 @@ class UpdateTest(unittest.TestCase):
             # A real, correctly signed, newer-than-installed but older release.
             old = self.publish("9.2.0", 1900000000)
             s = self.check(page)
-            self.assertEqual(s["state"], "up_to_date", s)
+            # Reported as a refused release, never as "up to date".
+            self.assertEqual(s["state"], "error", s)
             self.assertIn("older than one TorFox has already seen", s["message"])
             self.assertEqual(self.requests_for(old["path"]), [])
+            # Also when its version is not even newer than this one.
+            installed = self.status(page)["installed"]
+            self.publish(installed, 1900000000)
+            s = self.check(page)
+            self.assertEqual(s["state"], "error", s)
+            self.assertIn("older than one TorFox has already seen", s["message"])
         # Remembered across restarts.
         saved = json.loads((self.user_data / "update.json").read_text(encoding="utf-8"))
         self.assertEqual(saved["newestSeen"], 2000000000)
         with self.torfox() as tf:
             page = self.settings(tf)
-            self.assertEqual(self.check(page)["state"], "up_to_date")
+            self.assertEqual(self.check(page)["state"], "error")
             # The newest one is still offered.
             self.publish("9.3.0", 2000000000)
             self.assertEqual(self.check(page)["state"], "available")
+
+    def test_the_installer_is_started_by_its_real_path(self) -> None:
+        # Another program makes the Updates folder a junction to a folder of
+        # its own after TorFox started. TorFox must start the file it checked
+        # by the path Windows resolved for it, never through the junction,
+        # which could be pointed elsewhere between the check and the start.
+        elsewhere = pathlib.Path(tempfile.mkdtemp(prefix="torfox-e2e-updates-elsewhere-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox() as tf:
+            page = self.settings(tf)
+            self.assertEqual(self.check(page)["state"], "available")
+            link = self.user_data / "Updates"
+            shutil.rmtree(link, ignore_errors=True)
+            made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(elsewhere)],
+                                  capture_output=True, text=True)
+            self.assertEqual(made.returncode, 0, made.stdout + made.stderr)
+            self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+            self.act(page, "update.download")
+            self.assertEqual(self.wait_status(page, {"ready", "error"})["state"], "ready")
+            self.assertEqual((elsewhere / release["name"]).read_bytes(), self.installer)
+            page.evaluate("window.torfoxQuery({request: JSON.stringify({cmd: 'update.install'}),"
+                          " persistent: false, onSuccess: () => {}, onFailure: () => {}}), true")
+            tf.proc.wait(30)
+        lines = wait_for(lambda: self.marker.exists() and
+                         self.marker.read_text(encoding="utf-8").splitlines(), 20,
+                         "the installer to start")
+        started = os.path.normcase(lines[1])
+        self.assertEqual(started, os.path.normcase(str(elsewhere / release["name"])), lines)
+        self.assertNotIn(os.path.normcase(str(link)), started)
+
+    def test_no_update_is_offered_while_the_record_cannot_be_saved(self) -> None:
+        # update.json cannot be written (a folder is in its place): the replay
+        # record would not survive a restart, so nothing is offered.
+        (self.user_data / "update.json").mkdir(parents=True)
+        release = self.publish("9.1.0", 2000000000)
+        with self.torfox() as tf:
+            page = self.settings(tf)
+            s = self.check(page)
+            self.assertEqual(s["state"], "error", s)
+            self.assertIn("could not save its record", s["message"])
+            self.act(page, "update.download")
+            time.sleep(1)
+            self.assertEqual(self.requests_for(release["path"]), [])
+            self.assertEqual(tf.events("update_download"), [])
 
     def test_downloads_follow_redirects_only_to_allowed_hosts(self) -> None:
         with Fixture() as cdn, Fixture() as elsewhere:

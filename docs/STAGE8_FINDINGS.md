@@ -7,7 +7,7 @@ releases. It also connects the Stage 7 updater to the real Windows setup. Result
 - **Release-build platform tests:** 3 of 3 pass, including the new `test_release_builds_ignore_the_test_update_source`.
 - **Release tooling tests:** 5 of 5 pass, with signatures made by the official minisign 0.12.
 - **Unit and end-to-end tests:** see [`STAGE7_FINDINGS.md`](STAGE7_FINDINGS.md). Both stages share one build.
-- **Mutation check:** pending: it runs on this commit, and its results follow in the next one.
+- **Mutation check:** 6 of 6 detected, after the test change in §3.6 (§5).
 
 ## 1. What was built
 - **Windows setup** (`packaging/windows/TorFox.iss`, Inno Setup 7.1.1).
@@ -96,6 +96,16 @@ LZMA2 at the highest level takes most of the packaging time. The tests check beh
 so CI and the mutation check build them with `--compression none`. The release workflow builds the
 compressed setup and runs the release-build tests before it.
 
+### 3.6 Inno's Restart Manager is a second, rougher stop
+`CloseApplications=yes` makes Inno ask Windows' Restart Manager which programs use the files it is about
+to replace, and try to shut them down. The mutation check found this: with TorFox's own "is TorFox
+running" check removed from Setup, `test_setup_and_uninstall_refuse_while_torfox_is_open` still passed.
+Setup still failed, but only after it had tried to shut TorFox down. This time TorFox did not close, so
+Setup gave up and rolled back. A program that does close would lose its open windows, and Setup would
+then install over it. So the test now also reads Setup's log. The refusal must come from TorFox's own
+check (`PrepareToInstall failed: TorFox is running`), before the installation starts and before anything
+tries to shut TorFox down. The update test checks the same when it gives up.
+
 ## 4. How it is tested
 - **Installer** (`tests/platform/test_installer_win.py`): see [`TESTING.md`](TESTING.md). Both variants run
   the same tests. The per-user variant ran here. The per-machine variant needs administrator rights and
@@ -107,7 +117,16 @@ compressed setup and runs the release-build tests before it.
 - **macOS:** `check_dmg.sh` on CI. Never run yet.
 
 ## 5. Mutation check
-Pending (see the results above).
+Run on the Stage 7 and 8 commit (`81f980c`) with the per-user test setups. The first run detected 5 of the
+6: `installer-ignores-running-torfox` survived, which is how §3.6 was found. With the test reading Setup's
+log, the rerun detected all three installer mutations, so all 6 are detected:
+
+- `installer-update-does-not-wait`, `installer-ignores-running-torfox`, `uninstaller-ignores-running-torfox`:
+  the waits and refusals while TorFox runs;
+- `update-not-restarted`: TorFox is started again after an update;
+- `installer-ships-build-files`: the packaging allowlist;
+- `installer-keeps-nothing-running-check`: Setup's whole "is TorFox running" check (the mutex and the
+  processes running from the program folder).
 
 ## 6. Gaps
 - **Per-machine setup.** Not run here (no administrator rights in this session). It is tested on CI, which

@@ -116,7 +116,8 @@ class UpdateService {
                   const std::string& signature, const std::string& manifest);
   void Fail(const std::string& message, const char* stage, bool automatic);
   void SetState(State state, std::string message = {});
-  void SaveState();
+  // False if update.json could not be written.
+  bool SaveState();
   void Notify();
   void CancelFetch();
   std::filesystem::path PartPath() const;

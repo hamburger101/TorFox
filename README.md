@@ -19,7 +19,11 @@ official Tor client.
   are never sent to any other provider.
 - **Tor:** `.onion` addresses open in Tor windows through the bundled official tor, with optional bridges
   (obfs4, WebTunnel, Snowflake; not yet tried over the real network). Tor windows fail closed: without a working tor nothing loads, and nothing
-  is ever resolved or connected outside Tor. Normal windows never load `.onion` addresses.
+  is ever resolved or connected outside Tor. As in Tor Browser, Tor windows have no WebRTC. *New identity*
+  closes the Tor windows, and the old ones' context sends nothing more. Normal windows never load `.onion`
+  addresses.
+- **Address bar:** suggestions come from your bookmarks and history only, never from a search engine or
+  the network. Tor windows suggest bookmarks only.
 - **Download protection:** *Ask before downloading* (on by default) and *Disable downloads*, which blocks
   every kind of download.
 - **Privacy:** tracker blocking, third-party cookie blocking, HTTPS-first, pop-up blocking, permissions

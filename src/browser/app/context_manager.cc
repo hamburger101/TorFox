@@ -118,10 +118,12 @@ class ContextManager::Handler : public CefRequestContextHandler {
 };
 
 // Cancels the Tor context's requests that no tab made, while tor is not
-// connected, and any to this computer or the local network.
+// connected or once the context is retired (New Identity), and any to this
+// computer or the local network.
 class TorGate : public CefResourceRequestHandler {
  public:
-  explicit TorGate(std::function<bool()> allowed) : allowed_(std::move(allowed)) {}
+  TorGate(std::function<bool()> allowed, std::shared_ptr<const std::atomic<bool>> retired)
+      : allowed_(std::move(allowed)), retired_(std::move(retired)) {}
 
   ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser,
                                    CefRefPtr<CefFrame> frame,
@@ -129,6 +131,9 @@ class TorGate : public CefResourceRequestHandler {
                                    CefRefPtr<CefCallback> callback) override {
     const std::string url = request->GetURL().ToString();
     std::string why = guards::ResourceBlockReason(guards::Role::kTorTab, url);
+    if (why.empty() && retired_ && retired_->load()) {
+      why = "tor identity retired";
+    }
     if (why.empty() && !fault_injection::SkipTorGuard() && !(allowed_ && allowed_())) {
       why = "tor not connected";
     }
@@ -141,17 +146,19 @@ class TorGate : public CefResourceRequestHandler {
 
  private:
   const std::function<bool()> allowed_;
+  const std::shared_ptr<const std::atomic<bool>> retired_;
   IMPLEMENT_REFCOUNTING(TorGate);
 };
 
 class ContextManager::PrivateHandler : public CefRequestContextHandler {
  public:
   PrivateHandler(ContextManager* owner, PrivateCallback done, bool tor = false,
-                 std::function<bool()> tor_gate = nullptr)
+                 std::function<bool()> tor_gate = nullptr,
+                 std::shared_ptr<const std::atomic<bool>> retired = nullptr)
       : owner_(owner),
         done_(std::move(done)),
         tor_(tor),
-        gate_(tor ? new TorGate(std::move(tor_gate)) : nullptr) {}
+        gate_(tor ? new TorGate(std::move(tor_gate), std::move(retired)) : nullptr) {}
 
   // Only reached for requests no browser's client handles (CEF asks the
   // browser's client first, and TorFox's tabs always answer).
@@ -227,9 +234,11 @@ void ContextManager::CreateTor(int socks_port, PrivateCallback done) {
     return;
   }
   tor_pending_ = true;
+  tor_pending_retired_ = std::make_shared<std::atomic<bool>>(false);
   CefRequestContextSettings settings;
   settings.persist_session_cookies = false;
-  CefRefPtr<PrivateHandler> handler = new PrivateHandler(this, nullptr, true, tor_gate_);
+  CefRefPtr<PrivateHandler> handler =
+      new PrivateHandler(this, nullptr, true, tor_gate_, tor_pending_retired_);
   pending_private_[handler.get()] = CefRequestContext::CreateContext(settings, handler);
 }
 
@@ -248,6 +257,7 @@ void ContextManager::OnTorInitialized(PrivateHandler* handler,
     return;
   }
   tor_ = context;
+  tor_retired_ = std::move(tor_pending_retired_);
   test_log::Event("context_ready", {{"kind", "tor"}, {"socks_port", tor_port_}});
   for (PrivateCallback& done : waiting) {
     done(context, std::string());
@@ -256,19 +266,42 @@ void ContextManager::OnTorInitialized(PrivateHandler* handler,
 
 bool ContextManager::SetTorPort(int socks_port, std::string* error) {
   CEF_REQUIRE_UI_THREAD();
-  tor_port_ = socks_port;
+  tor_port_ = socks_port > 0 ? socks_port : kTorPlaceholderPort;
   if (!tor_) {
     return true;
   }
   return SetPrefVerified(tor_, "tor", "proxy", TorProxyValue(tor_port_), error);
 }
 
-void ContextManager::DropTor() {
+bool ContextManager::DropTor(std::string* error) {
   CEF_REQUIRE_UI_THREAD();
-  if (tor_) {
-    old_tor_.push_back(tor_);
+  if (!tor_) {
+    return true;
   }
+  tor_retired_->store(true);
+  const bool ok = SetPrefVerified(tor_, "tor (retired)", "proxy",
+                                  TorProxyValue(kTorPlaceholderPort), error);
+  test_log::Event("tor_context_retired", {{"proxy_changed", ok}});
+  old_tor_.emplace_back(tor_, tor_retired_);
   tor_ = nullptr;
+  tor_retired_ = nullptr;
+  return ok;
+}
+
+std::shared_ptr<const std::atomic<bool>> ContextManager::TorRetired(
+    CefRefPtr<CefRequestContext> context) const {
+  if (!context) {
+    return nullptr;
+  }
+  if (tor_ && tor_->IsSame(context)) {
+    return tor_retired_;
+  }
+  for (const auto& [old, retired] : old_tor_) {
+    if (old->IsSame(context)) {
+      return retired;
+    }
+  }
+  return nullptr;
 }
 
 bool ContextManager::IsTor(CefRefPtr<CefRequestContext> context) const {
@@ -278,7 +311,7 @@ bool ContextManager::IsTor(CefRefPtr<CefRequestContext> context) const {
   if (tor_ && tor_->IsSame(context)) {
     return true;
   }
-  for (const auto& old : old_tor_) {
+  for (const auto& [old, retired] : old_tor_) {
     if (old->IsSame(context)) {
       return true;
     }
@@ -414,6 +447,13 @@ bool ContextManager::ApplyPrefs(Kind kind, CefRefPtr<CefRequestContext> context,
   // history service would otherwise record every visit in <profile>/History,
   // which TorFox's history page could neither show nor clear.
   if (!SetPrefVerified(context, name, "history.saving_disabled", BoolValue(true), error)) {
+    return false;
+  }
+  // Chromium's DNS probe: after a page fails with "name not resolved" it
+  // looks up google.com itself, to tell the user whether DNS works. TorFox
+  // shows its own error pages and sends nothing it was not asked to
+  // (docs/STAGE9_FINDINGS.md). The probe runs only while this is on.
+  if (!SetPrefVerified(context, name, "alternate_error_pages.enabled", BoolValue(false), error)) {
     return false;
   }
   // Downloads (web contexts): TorFox chooses every file's path itself

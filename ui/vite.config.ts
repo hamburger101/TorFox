@@ -32,6 +32,7 @@ export default defineConfig({
         bookmarks: `${root}pages/bookmarks/index.html`,
         history: `${root}pages/history/index.html`,
         downloads: `${root}pages/downloads/index.html`,
+        suggest: `${root}pages/suggest/index.html`,
       },
     },
   },

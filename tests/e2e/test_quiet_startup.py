@@ -118,8 +118,11 @@ class OnionResolverTest(unittest.TestCase):
         returns the NetLog of the whole session."""
         with Fixture() as fx:
             page = fx.html("/onion", f"""<!doctype html><title>onion</title>
-              <img src="http://{ONION}/a.png"><script>fetch("https://{ONION}/b").catch(() => {{}});
-              try {{ new WebSocket("wss://{ONION}/c"); }} catch (e) {{}}</script>""")
+              <img src="http://{ONION}/a.png"><img src="http://{ONION}./d.png">
+              <script>fetch("https://{ONION}/b").catch(() => {{}});
+              try {{ new WebSocket("wss://{ONION}/c"); }} catch (e) {{}}
+              // "x.onion." is the same name to DNS (a fully qualified name).
+              try {{ new WebSocket("wss://{ONION}./e"); }} catch (e) {{}}</script>""")
             tf = TorFox(start_url=page, extra_args=extra_args)
             log_path = tf.user_data / "netlog.json"
             tf.args += [f"--log-net-log={log_path}", "--net-log-capture-mode=Everything"]
@@ -144,6 +147,8 @@ class OnionResolverTest(unittest.TestCase):
         self.assertFalse([u for u in urls if ONION in u and not u.startswith(("ws:", "wss:"))], urls)
         self.assertTrue([u for u in urls if u.startswith(f"wss://{ONION}/")],
                         "the WebSocket attempt was not seen; the test page did not run")
+        self.assertTrue([u for u in urls if u.startswith(f"wss://{ONION}./")],
+                        "the WebSocket attempt to the name with a trailing dot was not seen")
         self.assertFalse(netlog.connected_addresses(log, ONION))
 
     def test_resolver_rule_alone_keeps_onion_names_local(self) -> None:
@@ -154,9 +159,39 @@ class OnionResolverTest(unittest.TestCase):
         urls = netlog.requested_urls(log)
         self.assertTrue([u for u in urls if u.startswith(f"http://{ONION}/")],
                         "the requests never reached the network stack")
+        self.assertTrue([u for u in urls if u.startswith(f"http://{ONION}./")],
+                        "the request to the name with a trailing dot never reached the network stack")
         resolved = netlog.resolved_hosts(log)
         self.assertFalse([h for h in resolved if "onion" in h], resolved)
         self.assertFalse(netlog.connected_addresses(log, ONION))
+
+
+class FailedLookupTest(unittest.TestCase):
+    """A name that does not resolve: Chromium's DNS probe would then look up
+    google.com on its own. TorFox looks up the name it was asked for and
+    nothing else, in normal and private windows."""
+
+    NAME = "torfox-unresolvable-probe.test"
+
+    def test_a_failed_lookup_makes_no_other_lookup(self) -> None:
+        tf = TorFox()
+        log_path = tf.user_data / "netlog.json"
+        tf.args += [f"--log-net-log={log_path}", "--net-log-capture-mode=Everything"]
+        with tf:
+            shell = tf.shell()
+            mark = len(tf.log())
+            self.assertTrue(bridge_call(shell, "nav.go", {"input": f"http://{self.NAME}/"})["ok"])
+            wait = time.time() + 20
+            while time.time() < wait and not [e for e in tf.log()[mark:] if e.get("ev") == "load_error"]:
+                time.sleep(0.2)
+            self.assertTrue([e for e in tf.log()[mark:] if e.get("ev") == "load_error"], "the page did not fail")
+            # The probe starts as the error page shows; give it time.
+            time.sleep(5.0)
+            self.assertEqual(tf.close(), 0)
+            log = netlog.load(log_path)
+        network = netlog.network_lookups(log)
+        self.assertIn(self.NAME, network, "the check must be able to see real lookups")
+        self.assertFalse([h for h in network if not h.endswith(self.NAME)], network)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,33 @@ std::string Narrow(const std::wstring& s) {
   return out;
 }
 
+// The path of the file open as |h|, with every junction and link resolved,
+// as a normal drive or UNC path; "" if Windows cannot say.
+std::wstring RealPath(HANDLE h) {
+  std::wstring buf(1024, L'\0');
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const DWORD n = ::GetFinalPathNameByHandleW(h, buf.data(), static_cast<DWORD>(buf.size()),
+                                                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n > 32767) {
+      return std::wstring();
+    }
+    if (n < buf.size()) {
+      buf.resize(n);
+      constexpr std::wstring_view kUnc = L"\\\\?\\UNC\\";
+      constexpr std::wstring_view kLocal = L"\\\\?\\";
+      if (buf.rfind(kUnc, 0) == 0) {
+        return L"\\\\" + buf.substr(kUnc.size());
+      }
+      if (buf.rfind(kLocal, 0) == 0) {
+        return buf.substr(kLocal.size());
+      }
+      return std::wstring();  // Not a path ShellExecute understands.
+    }
+    buf.assign(n, L'\0');
+  }
+  return std::wstring();
+}
+
 }  // namespace
 
 std::filesystem::path DefaultUserDataDir() {
@@ -459,13 +486,24 @@ bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, 
     *error = "the update changed after it was checked";
     return false;
   }
-  // The update installs per machine: the installer asks for administrator
-  // rights (UAC). It waits for TorFox to exit (MarkRunning).
+  // Start the file by its real path, as Windows resolved it for this handle,
+  // never by |file|: a junction or link anywhere in |file| could be pointed
+  // elsewhere after the check. The real path has none, and while TorFox
+  // holds the handle Windows refuses to rename or delete any folder on it
+  // (docs/STAGE9_FINDINGS.md §3.1).
+  const std::wstring real = RealPath(h);
+  if (real.empty()) {
+    ::CloseHandle(h);
+    *error = "the update's location could not be checked";
+    return false;
+  }
+  // The setup asks for administrator rights itself (UAC) and waits for
+  // TorFox to exit (MarkRunning).
   SHELLEXECUTEINFOW info = {};
   info.cbSize = sizeof info;
   info.fMask = SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
   info.lpVerb = L"open";
-  info.lpFile = file.c_str();
+  info.lpFile = real.c_str();
   info.lpParameters = L"/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE";
   info.nShow = SW_SHOWNORMAL;
   const bool started = ::ShellExecuteExW(&info) != FALSE;
@@ -474,8 +512,7 @@ bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, 
   }
   ::CloseHandle(h);
   if (!started) {
-    *error = ::GetLastError() == ERROR_CANCELLED ? "the installer was not allowed to run"
-                                                 : "the installer could not be started";
+    *error = "the installer could not be started";
     return false;
   }
   return true;

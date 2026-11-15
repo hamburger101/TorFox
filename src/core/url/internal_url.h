@@ -20,8 +20,13 @@ inline constexpr std::string_view kInternalScheme = "torfox";
 //   settings - the settings page
 //   bookmarks - the bookmarks manager
 //   history  - the history page
+//   downloads - the downloads page
+//   suggest  - the address bar's suggestion list (never in a tab)
 std::span<const std::string_view> InternalPages();
 bool IsInternalPage(std::string_view host);
+// The pages a tab may show: every page but the window's own (shell) and the
+// address bar's suggestion list (suggest).
+bool IsTabPage(std::string_view host);
 
 struct InternalUrl {
   std::string host;  // e.g. "settings"

@@ -5,9 +5,11 @@
 #ifndef TORFOX_BROWSER_APP_CONTEXT_MANAGER_H_
 #define TORFOX_BROWSER_APP_CONTEXT_MANAGER_H_
 
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -65,12 +67,21 @@ class ContextManager {
   // the context and its preferences have been read back. While the context
   // exists, later calls get the same one.
   void CreateTor(int socks_port, PrivateCallback done);
-  // Points the Tor context (if any, and any created later) at |socks_port|.
+  // Points the Tor context (if any, and any created later) at |socks_port|,
+  // or at kTorPlaceholderPort when it is 0 (tor has stopped).
   bool SetTorPort(int socks_port, std::string* error);
-  // Forgets the Tor context: windows that still hold it keep it until they
-  // close; the next CreateTor() makes a new one (New Identity).
-  void DropTor();
+  // Retires the Tor context (New Identity): from now on it sends nothing.
+  // The guards of its windows and its own gate cancel every request
+  // (TorRetired()), and its proxy points at kTorPlaceholderPort, so even a
+  // request no guard sees (a WebSocket) cannot reach tor. Windows that still
+  // hold it keep it until they close; the next CreateTor() makes a new one.
+  // False, with |error|, if the proxy could not be changed (the context is
+  // retired all the same).
+  bool DropTor(std::string* error);
   bool IsTor(CefRefPtr<CefRequestContext> context) const;
+  // Set once |context|, a Tor context, has been retired by DropTor(); null
+  // for any other context. Safe to read on any thread.
+  std::shared_ptr<const std::atomic<bool>> TorRetired(CefRefPtr<CefRequestContext> context) const;
   // Requests in the Tor context that no tab makes (service workers, for
   // example) are cancelled unless |allowed| returns true. Called on the IO
   // thread; set before the first Tor context is created.
@@ -112,7 +123,11 @@ class ContextManager {
   CefRefPtr<CefRequestContext> internal_;
   CefRefPtr<CefRequestContext> normal_;
   CefRefPtr<CefRequestContext> tor_;
-  std::vector<CefRefPtr<CefRequestContext>> old_tor_;  // Dropped, possibly still in use.
+  using RetiredFlag = std::shared_ptr<std::atomic<bool>>;
+  RetiredFlag tor_retired_;          // tor_'s.
+  RetiredFlag tor_pending_retired_;  // The Tor context being created.
+  // Retired by DropTor(), possibly still in use.
+  std::vector<std::pair<CefRefPtr<CefRequestContext>, RetiredFlag>> old_tor_;
   int tor_port_ = kTorPlaceholderPort;
   bool tor_pending_ = false;
   std::vector<PrivateCallback> tor_waiting_;

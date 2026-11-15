@@ -24,6 +24,7 @@
 #include "src/browser/shell/dialogs.h"
 #include "src/browser/shell/menus.h"
 #include "src/browser/shell/tab_client.h"
+#include "src/core/bridge/validator.h"
 #include "src/core/browsing/context_menu.h"
 #include "src/core/browsing/zoom.h"
 #include "src/core/tor/onion.h"
@@ -88,8 +89,13 @@ class ViewDelegate : public CefBrowserViewDelegate {
 
 bool IsInternalTabUrl(const std::string& url) {
   auto parsed = ParseInternalUrl(url);
-  return parsed && IsInternalPage(parsed->host) && parsed->host != "shell";
+  return parsed && IsTabPage(parsed->host);
 }
+
+// The suggestion list's rows and frame (ui/src/suggest/main.ts): 32 px rows
+// inside 4 px of padding and a 1 px border, above and below.
+constexpr int kSuggestRowHeight = 32;
+constexpr int kSuggestFrameHeight = 2 * 4 + 2 * 1;
 
 // Menu labels: no mnemonics from page-controlled text, and kept short.
 std::string MenuLabel(const std::string& text) {
@@ -219,6 +225,8 @@ BrowserWindow::BrowserWindow(std::string first_url, bool private_window, bool to
         return next_id++;
       }()),
       web_context_(std::move(web_context)),
+      tor_retired_(tor && GetServices().contexts ? GetServices().contexts->TorRetired(web_context_)
+                                                 : nullptr),
       shell_height_(std::make_shared<int>(kStripHeight + kToolbarHeight)) {}
 
 CefRefPtr<CefBrowserView> BrowserWindow::CreateView(BrowserRole role,
@@ -234,6 +242,9 @@ CefRefPtr<CefBrowserView> BrowserWindow::CreateView(BrowserRole role,
   if (internal) {
     extra = CefDictionaryValue::Create();
     extra->SetBool(kExtraInfoInternal, true);
+  } else if (tor_) {
+    extra = CefDictionaryValue::Create();
+    extra->SetBool(kExtraInfoTor, true);
   }
   CefBrowserSettings settings;
   settings.background_color =
@@ -589,6 +600,7 @@ void BrowserWindow::SelectTabNumber(int number) {
 }
 
 void BrowserWindow::Activate(int tab_id) {
+  SuggestHide();
   if (find_open_ && find_tab_id_ != tab_id) {
     // The find bar belongs to the tab it was opened in.
     if (Tab* old = FindTab(find_tab_id_); old && old->client && old->client->browser()) {
@@ -776,7 +788,7 @@ void BrowserWindow::OpenSettings() {
 }
 
 void BrowserWindow::OpenInternalPage(std::string_view page) {
-  if (closing_window_ || !content_ || !IsInternalPage(page) || page == "shell") {
+  if (closing_window_ || !content_ || !IsTabPage(page)) {
     return;
   }
   const std::string url = InternalPageUrl(page);
@@ -1195,11 +1207,12 @@ void BrowserWindow::OnClientCreated(TabClient* client, CefRefPtr<CefBrowser> bro
 
 void BrowserWindow::StartClose(CefRefPtr<TabClient> client,
                                CefRefPtr<CefBrowserView> view,
-                               CefRefPtr<CefPanel> parent) {
+                               CefRefPtr<CefPanel> parent,
+                               CefRefPtr<CefOverlayController> overlay) {
   if (!client) {
     return;
   }
-  closing_[client.get()] = Closing{view, parent};
+  closing_[client.get()] = Closing{view, parent, overlay};
   client->Close();
 }
 
@@ -1213,7 +1226,7 @@ void BrowserWindow::OnClientDoClose(TabClient* client) {
       return;
     }
     const int tab_id = it->id;
-    closing_[client] = Closing{it->view, content_};
+    closing_[client] = Closing{it->view, content_, nullptr};
     tabs_.erase(it);
     if (tabs_.empty()) {
       active_tab_id_ = 0;
@@ -1241,13 +1254,19 @@ void BrowserWindow::OnClientDoClose(TabClient* client) {
                             // OnClientClosed then erases this map entry.
                             CefRefPtr<CefBrowserView> view = std::move(it->second.view);
                             CefRefPtr<CefPanel> parent = std::move(it->second.parent);
+                            CefRefPtr<CefOverlayController> overlay =
+                                std::move(it->second.overlay);
                             it->second.view = nullptr;
                             it->second.parent = nullptr;
-                            if (parent && view) {
+                            it->second.overlay = nullptr;
+                            if (overlay) {
+                              overlay->Destroy();  // Removes the view with it.
+                            } else if (parent && view) {
                               parent->RemoveChildView(view);
                             }
                             view = nullptr;
                             parent = nullptr;
+                            overlay = nullptr;
                           },
                           self, CefRefPtr<TabClient>(client)));
 }
@@ -1258,9 +1277,17 @@ void BrowserWindow::OnClientClosed(TabClient* client) {
     shell_client_ = nullptr;
     shell_view_ = nullptr;
   }
-  for (auto it = state_subscribers_.begin(); it != state_subscribers_.end();) {
-    auto entry = Registry().Find(it->browser_id);
-    it = entry ? std::next(it) : state_subscribers_.erase(it);
+  if (client == suggest_client_.get()) {
+    suggest_client_ = nullptr;
+    suggest_view_ = nullptr;
+    suggest_overlay_ = nullptr;
+    suggest_shown_ = false;
+  }
+  for (std::vector<Subscriber>* list : {&state_subscribers_, &suggest_subscribers_}) {
+    for (auto it = list->begin(); it != list->end();) {
+      auto entry = Registry().Find(it->browser_id);
+      it = entry ? std::next(it) : list->erase(it);
+    }
   }
   --live_clients_;
   if (closing_window_ && live_clients_ == 0 && window_) {
@@ -1374,6 +1401,14 @@ bool BrowserWindow::CanClose(CefRefPtr<CefWindow> window) {
     CefRefPtr<CefBrowserView> shell_view = std::move(shell_view_);
     shell_view_ = nullptr;
     StartClose(shell_client_, shell_view, window_);
+    // The suggestion list, if it was ever made: its overlay goes with it.
+    suggestions_.clear();
+    suggest_shown_ = false;
+    CefRefPtr<CefBrowserView> suggest_view = std::move(suggest_view_);
+    suggest_view_ = nullptr;
+    CefRefPtr<CefOverlayController> suggest_overlay = std::move(suggest_overlay_);
+    suggest_overlay_ = nullptr;
+    StartClose(suggest_client_, suggest_view, nullptr, suggest_overlay);
   }
   return false;
 }
@@ -1407,6 +1442,11 @@ void BrowserWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
     places_observer_ = 0;
   }
   state_subscribers_.clear();
+  suggest_subscribers_.clear();
+  suggestions_.clear();
+  suggest_view_ = nullptr;
+  suggest_client_ = nullptr;
+  suggest_overlay_ = nullptr;
   closing_.clear();
   tabs_.clear();
   closed_tabs_.Clear();
@@ -1618,12 +1658,111 @@ void BrowserWindow::AddStateSubscriber(int browser_id,
 }
 
 void BrowserWindow::RemoveStateSubscriber(int browser_id, int64_t query_id) {
-  state_subscribers_.erase(
-      std::remove_if(state_subscribers_.begin(), state_subscribers_.end(),
-                     [&](const Subscriber& s) {
-                       return s.browser_id == browser_id && s.query_id == query_id;
-                     }),
-      state_subscribers_.end());
+  for (std::vector<Subscriber>* list : {&state_subscribers_, &suggest_subscribers_}) {
+    list->erase(std::remove_if(list->begin(), list->end(),
+                               [&](const Subscriber& s) {
+                                 return s.browser_id == browser_id && s.query_id == query_id;
+                               }),
+                list->end());
+  }
+}
+
+// ----- Address-bar suggestions -------------------------------------------------
+
+Json BrowserWindow::SuggestionsJson() const {
+  Json items = Json::array();
+  for (const browsing::Suggestion& s : suggestions_) {
+    items.push_back({{"url", s.url},
+                     {"title", s.title},
+                     {"source", s.source == browsing::Suggestion::Source::kBookmark ? "bookmark"
+                                                                                    : "history"}});
+  }
+  return {{"items", items}, {"highlight", suggest_highlight_}};
+}
+
+void BrowserWindow::PushSuggestions() {
+  const std::string payload = DumpJson(SuggestionsJson());
+  for (Subscriber& s : suggest_subscribers_) {
+    s.callback->Success(payload);
+  }
+}
+
+Json BrowserWindow::SuggestQuery(const std::string& text, int x, int y, int width) {
+  CEF_REQUIRE_UI_THREAD();
+  suggestions_.clear();
+  suggest_highlight_ = -1;
+  browsing::Places* db = PlacesDb();
+  if (db && window_ && shell_view_ && !closing_window_) {
+    // Tor windows: bookmarks only, so nothing of normal browsing shows up in
+    // them. Nothing is ever looked up on the network.
+    suggestions_ = db->Suggest(text, static_cast<std::size_t>(bridge::kMaxSuggestions), !tor_);
+  }
+  if (suggestions_.empty()) {
+    SuggestHide();
+    return SuggestionsJson();
+  }
+  if (!suggest_view_) {
+    CefRefPtr<TabClient> client;
+    suggest_view_ = CreateView(BrowserRole::kSuggest, 0, InternalPageUrl("suggest"), &client);
+    suggest_client_ = client;
+    // Never activated: the address bar keeps the focus while the list shows.
+    suggest_overlay_ = window_->AddOverlayView(suggest_view_, CEF_DOCKING_MODE_CUSTOM, false);
+  }
+  CefPoint origin(x, y);
+  shell_view_->ConvertPointToWindow(origin);
+  const int height =
+      kSuggestFrameHeight + kSuggestRowHeight * static_cast<int>(suggestions_.size());
+  if (suggest_overlay_) {
+    suggest_overlay_->SetBounds(CefRect(origin.x, origin.y, width, height));
+    suggest_overlay_->SetVisible(true);
+  }
+  suggest_shown_ = true;
+  PushSuggestions();
+  test_log::Event("suggest_shown", {{"count", suggestions_.size()},
+                                    {"bounds", Json::array({origin.x, origin.y, width, height})}});
+  return SuggestionsJson();
+}
+
+void BrowserWindow::SuggestHighlight(int index) {
+  if (index < -1 || index >= static_cast<int>(suggestions_.size())) {
+    return;
+  }
+  suggest_highlight_ = index;
+  PushSuggestions();
+}
+
+void BrowserWindow::SuggestHide() {
+  const bool was_shown = suggest_shown_;
+  suggest_shown_ = false;
+  suggestions_.clear();
+  suggest_highlight_ = -1;
+  if (suggest_overlay_ && was_shown) {
+    suggest_overlay_->SetVisible(false);
+  }
+  if (was_shown) {
+    PushSuggestions();
+    test_log::Event("suggest_hidden", Json::object());
+  }
+}
+
+BrowserWindow::Result BrowserWindow::SuggestOpen(int index) {
+  if (!suggest_shown_ || index < 0 || index >= static_cast<int>(suggestions_.size())) {
+    return {false, "no such suggestion"};
+  }
+  const std::string url = suggestions_[static_cast<std::size_t>(index)].url;
+  SuggestHide();
+  Result r = OpenUrl(0, url, false);
+  PushEvent({{"type", "suggestOpened"}, {"ok", r.ok}});
+  test_log::Event("suggest_opened", {{"ok", r.ok}});
+  return r;
+}
+
+void BrowserWindow::AddSuggestSubscriber(
+    int browser_id,
+    int64_t query_id,
+    CefRefPtr<CefMessageRouterBrowserSide::Callback> callback) {
+  suggest_subscribers_.push_back(Subscriber{browser_id, query_id, callback});
+  callback->Success(DumpJson(SuggestionsJson()));
 }
 
 }  // namespace torfox

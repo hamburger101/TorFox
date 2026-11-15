@@ -124,8 +124,9 @@ bool BridgeHandler::OnQuery(CefRefPtr<CefBrowser> browser,
   bridge::Validated msg = bridge::Validate(bridge::TorFoxPages(), ctx, request.ToString());
 
   // The page must also match the browser's role: only the shell browser may
-  // speak for torfox://shell/, and the shell browser for nothing else.
-  if (msg.ok() && ((msg.page == "shell") != (entry->role == BrowserRole::kShell))) {
+  // speak for torfox://shell/, only the suggestion list for
+  // torfox://suggest/, and each of them for nothing else.
+  if (msg.ok() && !guards::PageAllowedForRole(msg.page, GuardRole(entry->role))) {
     msg.reject = bridge::Reject::kBadOrigin;
     msg.detail = "page does not match browser role";
   }
@@ -328,6 +329,21 @@ void BridgeHandler::Dispatch(const bridge::Validated& msg,
   const int sender_tab = entry->role == BrowserRole::kShell ? 0 : entry->tab_id;
   if (cmd == "state.subscribe") {
     window->AddStateSubscriber(browser_id, query_id, callback);
+  } else if (cmd == "suggest.query") {
+    Reply(callback, window->SuggestQuery(GetString(msg.args, "text").value_or(""),
+                                         static_cast<int>(GetInt(msg.args, "x").value_or(0)),
+                                         static_cast<int>(GetInt(msg.args, "y").value_or(0)),
+                                         static_cast<int>(GetInt(msg.args, "width").value_or(1))));
+  } else if (cmd == "suggest.highlight") {
+    window->SuggestHighlight(static_cast<int>(GetInt(msg.args, "index").value_or(-1)));
+    Reply(callback, Json::object());
+  } else if (cmd == "suggest.hide") {
+    window->SuggestHide();
+    Reply(callback, Json::object());
+  } else if (cmd == "suggest.subscribe") {
+    window->AddSuggestSubscriber(browser_id, query_id, callback);
+  } else if (cmd == "suggest.open") {
+    window_result(window->SuggestOpen(static_cast<int>(GetInt(msg.args, "index").value_or(-1))));
   } else if (cmd == "tab.new") {
     window->NewTab();
     Reply(callback, Json::object());

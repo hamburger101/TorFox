@@ -462,6 +462,43 @@ class ProxyLayerAfterDeathTest(TorBase):
         self.assertEqual(len(self.rec("socks")), socks_before)
         self.assert_nothing_direct()
 
+    def test_a_dead_tors_port_is_never_used_again(self) -> None:
+        # Once tor has exited, any program could listen on its old SOCKS port
+        # and would be sent the names Tor windows open. The guard is off here,
+        # so only the Tor context's proxy stands between the request and it.
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        self.load(shell, self.url("/page"), "Tor page")
+        old_port = self.rec("listening")[-1]["socks"]
+        mark = self.mark()
+        self.die.touch()
+        self.wait_since(mark, "tor_stopped")
+        wait_for(lambda: (self.tor_status(shell) or {"connected": True})["connected"] is False, 10,
+                 "Tor shown as not connected")
+        squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(squatter.close)
+        squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        squatter.bind(("127.0.0.1", old_port))
+        squatter.listen(8)
+        squatter.settimeout(0.2)
+        self.assertTrue(self.go(shell, self.url("/two"))["ok"])
+        self.wait_since(mark, "load_error")
+        accepted = []
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                conn, _ = squatter.accept()
+            except (socket.timeout, TimeoutError):
+                continue
+            with conn:
+                conn.settimeout(1.0)
+                try:
+                    accepted.append(conn.recv(64))
+                except OSError:
+                    accepted.append(b"")
+        self.assertEqual(accepted, [], "a Tor window's request went to tor's old port")
+        self.assert_nothing_direct()
+
 
 class NewIdentityTest(TorBase):
     def test_new_identity_closes_tor_windows_and_starts_fresh(self) -> None:
@@ -608,6 +645,61 @@ class BridgeSettingsTest(TorBase):
 
 
 class TorContextIsolationTest(TorBase):
+    # RTCDataChannel is not here: Blink installs it after TorFox has seen the
+    # context, so it stays, but it cannot be constructed (checked below) and
+    # only an RTCPeerConnection makes one.
+    WEBRTC_NAMES = ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCRtpTransceiver", "RTCRtpSender"]
+    # The WebRTC interfaces a page can reach: in its own window, in an
+    # about:blank and a srcdoc frame it makes, and in a frame of another
+    # site (another renderer process), which reports by postMessage.
+    WEBRTC_PROBE = """new Promise(resolve => {
+        const names = %s;
+        const seen = w => names.filter(n => { try { return typeof w[n] !== "undefined"; } catch (e) { return false; } });
+        const blank = document.createElement("iframe");
+        document.body.append(blank);
+        const srcdoc = document.createElement("iframe");
+        srcdoc.srcdoc = "<p>x</p>";
+        const out = {top: seen(window), blank: seen(blank.contentWindow),
+                     channel: (() => { try { new RTCDataChannel(); return "constructed"; }
+                                       catch (e) { return e.name; } })()};
+        let other = null, inner = null;
+        const finish = () => { if (other !== null && inner !== null) resolve({...out, srcdoc: inner, other}); };
+        srcdoc.onload = () => { inner = seen(srcdoc.contentWindow); finish(); };
+        addEventListener("message", e => { other = e.data; finish(); });
+        document.body.append(srcdoc);
+        const cross = document.createElement("iframe");
+        cross.src = %s;
+        document.body.append(cross);
+        setTimeout(() => resolve({...out, srcdoc: inner, other, timeout: true}), 10000);
+    })"""
+
+    def routes(self) -> None:
+        super().routes()
+        names = json.dumps(self.WEBRTC_NAMES)
+        self.both("/rtc-frame", f"""<!doctype html><script>
+            parent.postMessage({names}.filter(n => typeof window[n] !== "undefined"), "*");</script>""")
+
+    def test_tor_windows_have_no_webrtc(self) -> None:
+        # WebRTC looks up servers and candidates by name itself, outside the
+        # proxy (TorDnsTest.test_webrtc_looks_up_no_name_for_tor_windows), so
+        # Tor windows have none, as in Tor Browser.
+        def probe(page) -> dict:
+            frame = self.url("/rtc-frame", host="other.test")
+            return page.evaluate(self.WEBRTC_PROBE % (json.dumps(self.WEBRTC_NAMES), json.dumps(frame)),
+                                 timeout=20)
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        # Each window its own page: the harness finds tabs by URL.
+        tor = probe(self.load(shell, self.url("/page"), "Tor page"))
+        self.assertNotIn("timeout", tor)
+        self.assertEqual(tor, {"top": [], "blank": [], "srcdoc": [], "other": [], "channel": "TypeError"})
+        self.assert_nothing_direct()
+        # Control: a normal window has it everywhere.
+        normal = probe(self.load(self.normal, self.url("/two"), "Page two"))
+        self.assertNotIn("timeout", normal)
+        for where in ("top", "blank", "srcdoc", "other"):
+            self.assertIn("RTCPeerConnection", normal[where], (where, normal))
+
     def test_system_proxy_setting_never_changes_the_tor_context(self) -> None:
         shell = self.open_tor()
         self.wait_connected(shell)
@@ -664,19 +756,17 @@ class TorContextIsolationTest(TorBase):
 
         shell = self.open_tor()
         self.wait_connected(shell)
-        page = self.load(shell, self.url("/page"), "Tor page")
-        result = page.evaluate(script, user_gesture=True, timeout=20)
+        # Another page than the control's: the harness finds tabs by URL.
+        page = self.load(shell, self.url("/two"), "Page two")
+        # Tor windows have no WebRTC at all (test_tor_windows_have_no_webrtc).
+        result = page.evaluate("typeof RTCPeerConnection === 'undefined' ? 'absent' : " + script,
+                               user_gesture=True, timeout=20)
+        self.assertEqual(result, "absent")
         # SOCKS cannot carry UDP: nothing may leave outside Tor.
         self.assertEqual(received(), 0, "a Tor window's page sent UDP")
-        self.assertEqual(result["candidates"], [])
-        addresses = {socket.gethostbyname(socket.gethostname()), local}
-        for info in socket.getaddrinfo(socket.gethostname(), None):
-            addresses.add(info[4][0].split("%")[0])
-        addresses -= {"127.0.0.1", "::1"}
-        for address in addresses:
-            self.assertNotIn(address, result["sdp"])
-        # The policy that makes it so, as Chromium read it back for the Tor
-        # context: no UDP except through the proxy (which has none).
+        # A second layer, should WebRTC ever be reachable: the policy, as
+        # Chromium read it back for the Tor context, allows no UDP except
+        # through the proxy (which has none).
         policy = [e for e in self.tf.events("pref", context="tor")
                   if e.get("name") == "webrtc.ip_handling_policy"]
         self.assertTrue(policy)
@@ -771,6 +861,18 @@ class TorContextGateTest(TorBase):
             e.respondWith(fetch(u.searchParams.get('to'), {cache: 'no-store'})
               .then(r => r.text(), () => 'failed').then(t => new Response(t)));
           }
+        });
+        // 'tick': for 20 seconds, whatever its pages do, the worker keeps
+        // fetching and opening WebSockets on its own.
+        self.addEventListener('message', e => {
+          if (e.data !== 'tick') return;
+          e.waitUntil((async () => {
+            for (let i = 0; i < 130; i++) {
+              fetch('/tick?n=' + i, {cache: 'no-store'}).catch(() => {});
+              try { new WebSocket('wss://' + location.host + '/ws?n=' + i); } catch (err) {}
+              await new Promise(r => setTimeout(r, 150));
+            }
+          })());
         });"""
 
     def via_worker(self, page, url: str) -> str:
@@ -812,6 +914,49 @@ class TorContextGateTest(TorBase):
         self.assertEqual(self.via_worker(page, ok + "?n=2"), "failed")
         self.wait_since(mark, "tor_blocked", role="context", why="tor not connected")
         self.assertEqual(len(self.rec("socks")), socks, "nothing may reach tor before it is connected")
+        self.assert_nothing_direct()
+
+    def test_after_new_identity_the_old_context_sends_nothing(self) -> None:
+        # A service worker outlives its window: if the old Tor context could
+        # still send, its requests would use circuits built after NEWNYM and
+        # link the old identity to the new one.
+        host = self.TLS_HOST
+        self.sites.raw(host, "/worker.js", 200, {"Content-Type": "text/javascript"}, self.WORKER)
+        self.sites.html(host, "/worker-page", "<!doctype html><title>worker</title>")
+        self.sites.html(host, "/tick", "tick")
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        page = self.load(shell, self.sites.url("https", host, "/worker-page"), "worker")
+        page.evaluate("""navigator.serviceWorker.register('/worker.js')
+            .then(() => navigator.serviceWorker.ready)
+            .then(() => navigator.serviceWorker.controller ? 1 : new Promise(r =>
+              navigator.serviceWorker.addEventListener('controllerchange', () => r(1))))""", timeout=20)
+        page.evaluate("navigator.serviceWorker.controller.postMessage('tick'); 1")
+
+        def ws_attempts() -> int:
+            return len([r for r in self.rec("socks") if r["host"] == host])
+        # The probe works: both kinds of request reach tor while the context is current.
+        socks_before = ws_attempts()
+        wait_for(lambda: len(self.sites.seen(host, "/tick")) >= 3 and ws_attempts() >= socks_before + 3,
+                 15, "the worker's requests through tor")
+        mark = self.mark()
+        shell.evaluate("document.querySelector('tf-shell').shadowRoot"
+                       ".querySelector('#tor-identity').click(); 1")
+        retired = self.wait_since(mark, "tor_context_retired")
+        self.assertTrue(retired["proxy_changed"], retired)
+        self.assertTrue(self.wait_since(mark, "tor_newnym")["ok"])
+        self.wait_since(mark, "tor_new_identity")
+        # Requests already on their way when the context was retired may
+        # still arrive; after that, nothing.
+        time.sleep(1.0)
+        ticks, attempts = len(self.sites.seen(host, "/tick")), ws_attempts()
+        # The worker is still running, and the old context refuses it.
+        blocked = len(self.since(mark, "tor_blocked", role="context", why="tor identity retired"))
+        wait_for(lambda: len(self.since(mark, "tor_blocked", role="context",
+                                        why="tor identity retired")) >= blocked + 5,
+                 15, "the old worker's requests, refused")
+        self.assertEqual(len(self.sites.seen(host, "/tick")), ticks, "the old context still sends")
+        self.assertEqual(ws_attempts(), attempts, "the old context's WebSockets still reach tor")
         self.assert_nothing_direct()
 
 
@@ -859,6 +1004,53 @@ class TorDnsTest(TorBase):
                 self.assertTrue(set(request["tasks"]) <= netlog.LOCAL_TASKS, request)
         self.assert_nothing_direct()
 
+    # Names WebRTC could look up itself: STUN and TURN servers and a remote
+    # candidate given as a name, all under the domain |n|.
+    RTC_NAMES = """(async () => {
+        const n = %s;
+        if (typeof RTCPeerConnection === "undefined") return "absent";
+        const a = new RTCPeerConnection({iceServers: [
+            {urls: `stun:stun.${n}:3478`},
+            {urls: `turn:turn.${n}:3478?transport=tcp`, username: "u", credential: "p"}]});
+        const b = new RTCPeerConnection();
+        a.createDataChannel("x");
+        await a.setLocalDescription(await a.createOffer());
+        await b.setRemoteDescription(a.localDescription);
+        await b.setLocalDescription(await b.createAnswer());
+        await a.setRemoteDescription(b.localDescription);
+        try {
+          await a.addIceCandidate({candidate: `candidate:1 1 udp 2122260223 peer.${n} 54400 typ host`,
+                                   sdpMid: "0", sdpMLineIndex: 0});
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 4000));
+        a.close(); b.close();
+        return 1;
+    })()"""
+
+    def test_webrtc_looks_up_no_name_for_tor_windows(self) -> None:
+        shell = self.open_tor()
+        self.wait_connected(shell)
+        tor_page = self.load(shell, self.url("/page"), "Tor page")
+        # Tor windows have no WebRTC (TorContextIsolationTest); the names
+        # must not be looked up either way.
+        self.assertIn(tor_page.evaluate(self.RTC_NAMES % json.dumps("rtc-tor.test"),
+                                        user_gesture=True, timeout=20), (1, "absent"))
+        self.assert_nothing_direct()
+        # Control: the same script in a normal window (another page: the
+        # harness finds tabs by URL).
+        control = self.load(self.normal, self.url("/two", host="other.test"), "Page two")
+        self.assertEqual(control.evaluate(self.RTC_NAMES % json.dumps("rtc-normal.test"),
+                                          user_gesture=True, timeout=20), 1)
+        self.tf.close()
+        log = netlog.load(self.netlog)
+        network = netlog.network_lookups(log)
+        named = sorted({r["host"] for r in netlog.resolver_requests(log) if "rtc-" in r["host"]})
+        print(f"\n[WebRTC names] resolver requests: {named}; network lookups: "
+              f"{sorted(h for h in network if 'rtc-' in h)}", end=" ")
+        self.assertTrue([h for h in network if h.endswith("rtc-normal.test")],
+                        "the check must be able to see WebRTC's lookups")
+        self.assertFalse([h for h in network if h.endswith("rtc-tor.test")], network)
+
 
 def bundled_tor() -> pathlib.Path:
     from harness import torfox_exe
@@ -867,6 +1059,49 @@ def bundled_tor() -> pathlib.Path:
 
 LIVE = unittest.skipUnless(os.environ.get("TORFOX_LIVE_TESTS") == "1",
                            "uses the Tor network: set TORFOX_LIVE_TESTS=1")
+
+
+class TorSuggestTest(TorBase):
+    """Address-bar suggestions in Tor windows: bookmarks only, so that what
+    was browsed outside Tor never shows up in a Tor window (and nothing is
+    ever looked up on the network for a suggestion)."""
+
+    SUGGEST_ROWS = ("(() => { const root = document.querySelector('tf-suggest')?.shadowRoot;"
+                    " return root ? [...root.querySelectorAll('li')].length : null; })()")
+
+    def suggest_targets(self) -> set[str]:
+        return {t["targetId"] for t in self.tf.browser.targets()
+                if t["url"].startswith("torfox://suggest/")}
+
+    def test_tor_windows_suggest_bookmarks_only(self) -> None:
+        # The normal window's history and bookmarks.
+        self.load(self.normal, self.url("/page"), "Tor page")
+        self.assertTrue(bridge_call(self.normal, "app.openBookmarks")["ok"])
+        bookmarks = self.tf.page(lambda t: t["url"].startswith("torfox://bookmarks/"))
+        r = bridge_call(bookmarks, "bookmarks.add",
+                        {"parent": 1, "title": "Bookmarked two", "url": self.url("/two")})
+        self.assertTrue(r["ok"], r)
+        args = {"text": "site.test", "x": 10, "y": 40, "width": 400}
+        normal = json.loads(bridge_call(self.normal, "suggest.query", args)["response"])
+        found = {(i["source"], i["url"]) for i in normal["items"]}
+        self.assertIn(("history", self.url("/page")), found)  # The control.
+        self.assertIn(("bookmark", self.url("/two")), found)
+        bridge_call(self.normal, "suggest.hide")
+
+        shell = self.open_tor()
+        before = self.suggest_targets()
+        mark = self.mark()
+        tor = json.loads(bridge_call(shell, "suggest.query", args)["response"])
+        self.assertEqual([(i["source"], i["url"]) for i in tor["items"]], [("bookmark", self.url("/two"))])
+        self.assertEqual(self.wait_since(mark, "suggest_shown")["count"], 1)
+        # The Tor window's own list shows that one row.
+        new = wait_for(lambda: self.suggest_targets() - before, 10, "the Tor window's list")
+        page = self.tf.page(lambda t: t.get("targetId", next(iter(new))) in new)
+        wait_for(lambda: page.evaluate(self.SUGGEST_ROWS) == 1, 10, "one row")
+        # A history entry's text alone finds nothing in the Tor window.
+        none = json.loads(bridge_call(shell, "suggest.query", {**args, "text": "Tor page"})["response"])
+        self.assertEqual(none["items"], [])
+        self.wait_since(mark, "suggest_hidden")
 
 
 @LIVE

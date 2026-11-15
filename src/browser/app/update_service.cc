@@ -468,8 +468,21 @@ void UpdateService::OnManifest(bool automatic, const update::LatestRelease& late
   saved_.newest_seen = std::max(saved_.newest_seen, c.release.timestamp);
   saved_.last_check = Now();
   status_.last_check = saved_.last_check;
-  SaveState();
+  // The record of the newest release seen is what stops an old release from
+  // being replayed after a restart: no update is offered unless it is saved.
+  if (!SaveState()) {
+    Fail("TorFox could not save its record of the releases it has seen (update.json in its data "
+         "folder), so it offers no updates until it can.",
+         "state", automatic);
+    return;
+  }
   const std::string version = update::VersionString(c.release.version);
+  if (offer.replayed) {
+    Fail("GitHub offered TorFox " + version +
+             ", a release older than one TorFox has already seen, so TorFox ignored it.",
+         "replay", automatic);
+    return;
+  }
   test_log::Event("update_check", {{"result", offer.update ? "available" : "up_to_date"},
                                    {"version", version},
                                    {"reason", offer.reason},
@@ -678,10 +691,12 @@ void UpdateService::SetState(State state, std::string message) {
   Notify();
 }
 
-void UpdateService::SaveState() {
+bool UpdateService::SaveState() {
   if (!WriteFileAtomically(state_file_, update::SerializeSavedState(saved_))) {
     test_log::Event("update_state_save_failed");
+    return false;
   }
+  return true;
 }
 
 void UpdateService::Notify() {

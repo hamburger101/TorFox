@@ -6,7 +6,7 @@ now active. Results:
 
 - **Unit tests:** 177 tests: 176 pass, 1 skipped (`ClearData.NeverFollowsLinks`, which needs permission to create symbolic links; unchanged since Stage 4).
 - **End-to-end tests:** 229 tests (test build, no network): all pass, 3 skipped (the real-Tor tests, run separately). Two earlier full runs each had one failure in an older test: the tab-drag test stalled because its window was covered by another (§3.5), and the session-restore test read the list of windows twice and could see two different lists. Both tests were fixed; the full run after that passed.
-- **Mutation check:** pending: it runs on this commit, and its results follow in the next one.
+- **Mutation check:** 15 of 15 detected, run on the Stage 7 and 8 commit (§5).
 
 ## 1. What was built
 - **Signature check** (`src/core/update/minisign.cc`). minisign's prehashed format (Ed25519 over
@@ -122,7 +122,20 @@ error. Nothing had tested for it before.
 - **Mutation check:** 15 new mutations, each removing one check (§5).
 
 ## 5. Mutation check
-Pending (see the results above).
+Run on the Stage 7 and 8 commit (`81f980c`) in a separate worktree, with `tests/e2e/run_mutations.py`.
+Each mutation removes one check, and at least one of the tests listed for it must then fail. All 15 were
+detected:
+
+- `minisign-data-signature-ignored`, `minisign-comment-signature-ignored`: the signature over the
+  manifest, and the global signature over the trusted comment;
+- `manifest-comment-not-compared`, `manifest-file-names-unchecked`: the manifest rules;
+- `update-same-version-offered`, `update-old-release-replayable`: version order and anti-replay;
+- `update-any-host-allowed`, `updater-redirects-unchecked`, `update-other-repository-files-used`: where
+  files may come from;
+- `update-download-hash-unchecked`, `update-not-rechecked-before-install`: the downloaded file's hash,
+  then again just before it is started;
+- `updates-off-ignored`, `update-auto-check-setting-ignored`, `update-auto-check-not-daily`,
+  `update-notice-setting-ignored`: the settings and the daily limit.
 
 ## 6. Gaps
 - **Real GitHub.** No release has been signed with the official key, so no test has run against GitHub

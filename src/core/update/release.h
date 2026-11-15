@@ -72,6 +72,9 @@ std::string TrustedComment(const Version& version, int64_t timestamp);
 
 struct Offer {
   bool update = false;
+  // Older than a release TorFox has already verified: shown as an error, never
+  // as "up to date", whatever its version.
+  bool replayed = false;
   std::string reason;  // Why not, when |update| is false.
   Asset asset;
 };

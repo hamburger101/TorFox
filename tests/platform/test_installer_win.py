@@ -222,10 +222,14 @@ class InstallerTests:
                     time.sleep(0.1)
 
     def run_setup(self, setup: pathlib.Path, args: list[str], timeout: float = 600) -> int:
-        cmd = [str(setup), *args, f"/LOG={self.log_path(setup)}"]
+        self.last_log = self.log_path(setup)
+        cmd = [str(setup), *args, f"/LOG={self.last_log}"]
         if self.variant.per_user:
             cmd.append(f"/DIR={self.app}")
         return subprocess.run(cmd, timeout=timeout).returncode
+
+    def last_log_text(self) -> str:
+        return self.last_log.read_text(encoding="utf-8-sig", errors="replace")
 
     def log_path(self, setup: pathlib.Path) -> pathlib.Path:
         return pathlib.Path(tempfile.gettempdir()) / f"{setup.stem}-{int(time.time() * 1000)}.log"
@@ -290,6 +294,9 @@ class InstallerTests:
         if not self.variant.update_setup.is_file():
             self.skipTest(f"{self.variant.update_setup} not found")
         self.install()
+        # A file an older version shipped and this one may not.
+        stale = self.app / "dxil.dll"
+        stale.write_bytes(b"stale")
         with self.start() as tf:
             wait_for(lambda: "GET /page" in self.fixture.requests, 60, "the page request")
             log = self.log_path(self.variant.update_setup)
@@ -310,6 +317,8 @@ class InstallerTests:
             self.assertEqual(tf.close(), 0)
         self.assertEqual(setup.wait(600), 0)
         self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.update_version)
+        # Gone, or replaced by the copy this version ships.
+        self.assertFalse(stale.exists() and stale.read_bytes() == b"stale", "a stale file was kept")
         # TorFox is started again, from the program folder.
         browsers = wait_for(lambda: [p for p in processes_in(self.app) if p["Name"] == "TorFox.exe"
                                      and p["ParentProcessId"] not in
@@ -328,6 +337,9 @@ class InstallerTests:
             code = self.run_setup(self.variant.update_setup, UPDATE_ARGS, timeout=300)
             self.assertNotEqual(code, 0)
             self.assertGreaterEqual(time.monotonic() - started, 55, "it did not wait")
+            log = self.last_log_text()
+            self.assertIn("PrepareToInstall failed: TorFox did not close", log)
+            self.assertNotIn("Shutting down applications", log)
             self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.version)
             self.assertEqual(tf.close(), 0)
 
@@ -336,6 +348,14 @@ class InstallerTests:
         with self.start() as tf:
             wait_for(lambda: "GET /page" in self.fixture.requests, 60, "the page request")
             self.assertNotEqual(self.run_setup(self.variant.setup, QUIET_ARGS, timeout=300), 0)
+            # Refused by TorFox's own check, before anything was changed or
+            # anything tried to close TorFox. (Inno's Restart Manager would
+            # also stop Setup, but only after trying to shut TorFox down,
+            # which could close the user's windows: STAGE8_FINDINGS.md §3.6.)
+            log = self.last_log_text()
+            self.assertIn("PrepareToInstall failed: TorFox is running", log)
+            self.assertNotIn("Shutting down applications", log)
+            self.assertNotIn("Starting the installation process", log)
             self.uninstall(check=False)
             time.sleep(5)  # The uninstaller's second phase, had it started.
             self.assertTrue((self.app / "TorFox.exe").is_file(), "uninstalled while TorFox was open")

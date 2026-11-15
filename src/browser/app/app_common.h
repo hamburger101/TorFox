@@ -20,6 +20,8 @@ CefMessageRouterConfig BridgeRouterConfig();
 // Key in the browser's extra_info marking it as internal (set only by the
 // browser process when it creates shell/internal-tab browsers).
 inline constexpr char kExtraInfoInternal[] = "torfox.internal";
+// Web tabs of Tor windows: their renderers remove WebRTC (RendererApp).
+inline constexpr char kExtraInfoTor[] = "torfox.tor";
 
 }  // namespace torfox
 

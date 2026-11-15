@@ -14,7 +14,8 @@ namespace torfox::browsing {
 std::optional<std::string> RestorableUrl(std::string_view url) {
   if (HasInternalScheme(url)) {
     const std::optional<InternalUrl> parsed = ParseInternalUrl(url);
-    if (!parsed || parsed->host == "shell" || !IsInternalPage(parsed->host)) {
+    if (!parsed || !IsInternalPage(parsed->host) ||
+        !guards::PageAllowedForRole(parsed->host, guards::Role::kInternalTab)) {
       return std::nullopt;
     }
     return InternalPageUrl(parsed->host);

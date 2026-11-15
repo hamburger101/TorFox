@@ -63,7 +63,9 @@ class TorService : public std::enable_shared_from_this<TorService> {
 
   // |apply_port| runs on the UI thread with tor's SOCKS port before the
   // state can become Connected; it must point the Tor context at it and
-  // return false if that could not be verified.
+  // return false if that could not be verified. It runs with 0 once that
+  // tor has stopped: another program could listen on the old port, so the
+  // Tor context must then point at a port where nothing listens.
   TorService(Options options, std::function<bool(int port)> apply_port);
   ~TorService();
 
@@ -91,6 +93,8 @@ class TorService : public std::enable_shared_from_this<TorService> {
   void Post(int generation, Status status, int socks_port = 0);
   void OnStatus(int generation, Status status, int socks_port);
   void StopWorker();
+  // UI thread: apply_port_(0) if a port is applied (the session is over).
+  void ForgetPort();
   bool Stopping() const { return stop_.load(); }
 
   const Options options_;

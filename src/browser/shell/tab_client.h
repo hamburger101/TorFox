@@ -5,6 +5,7 @@
 #ifndef TORFOX_BROWSER_SHELL_TAB_CLIENT_H_
 #define TORFOX_BROWSER_SHELL_TAB_CLIENT_H_
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -261,11 +262,16 @@ class TabClient : public CefClient,
                                               const platform::ConfirmPrompt& prompt,
                                               std::function<void(bool)> done);
 
+  // A tab of the window (not its shell or suggestion list): the window
+  // shows its title, address, loading state and find results.
+  bool IsTab() const { return role_ == BrowserRole::kInternalTab || role_ == BrowserRole::kWebTab; }
+
   const BrowserRole role_;
   const int tab_id_;
   const int download_context_;
   const bool tor_;
   const std::shared_ptr<TorService> tor_service_;  // Tor windows only.
+  const std::shared_ptr<const std::atomic<bool>> tor_retired_;  // Tor windows only.
   std::string tor_pending_url_;
   CefRefPtr<BrowserWindow> window_;  // Cleared in OnBeforeClose.
   CefRefPtr<CefMessageRouterBrowserSide> router_;  // Internal roles only.

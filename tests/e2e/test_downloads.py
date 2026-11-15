@@ -654,13 +654,18 @@ class DownloadTest(DownloadBase):
 
     def close_private(self, shell) -> None:
         # Its shell goes with the window, so no reply comes back: send the
-        # raw key only.
-        if self.tf.events("window_destroyed", private=True):
+        # raw key only. The test's cleanup calls it again, so it remembers
+        # which windows this test closed (another test's window does not count).
+        closed = self.__dict__.setdefault("_closed_private", set())
+        if id(shell) in closed:
             return
+        before = len(self.tf.events("window_destroyed", private=True))
         shell.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", "windowsVirtualKeyCode": 0x57,
                                               "nativeVirtualKeyCode": 0x57,
                                               "modifiers": CTRL | SHIFT})  # Ctrl+Shift+W.
-        wait_for(lambda: self.tf.events("window_destroyed", private=True), 15, "private window closed")
+        wait_for(lambda: len(self.tf.events("window_destroyed", private=True)) > before, 15,
+                 "private window closed")
+        closed.add(id(shell))
 
     def test_finished_files_are_marked_as_downloaded(self) -> None:
         # Windows' mark of the web (SmartScreen, Office Protected View) is kept
@@ -675,6 +680,33 @@ class DownloadTest(DownloadBase):
         zone = pathlib.Path(str(path) + ":Zone.Identifier").read_text(encoding="utf-8")
         self.assertIn("ZoneId=3", zone)
         self.assertEqual(self.files(self.dl), [f"{MARK}-marked.bin"])
+
+    def test_private_downloads_keep_the_mark_but_not_the_address(self) -> None:
+        # The mark (ZoneId=3) must stay, but a private window's file must not
+        # record where it came from (Chromium can write HostUrl and
+        # ReferrerUrl into the mark).
+        self.set_mode(disable=False, ask=False)
+        self.fixture.raw("/f/private-marked", 200, attachment_headers(f"{MARK}-private-marked.bin"), b"Q" * 50)
+        known = self.tf.shell_ids()
+        created = len(self.tf.events("window_created", private=True))
+        self.assertTrue(bridge_call(self.shell, "window.newPrivate")["ok"])
+        wait_for(lambda: len(self.tf.events("window_created", private=True)) > created, 15, "private window")
+        private_shell = self.tf.new_shell(known)
+        self.addCleanup(self.close_private, private_shell)
+        wait_state(private_shell, lambda s: s["private"], "private shell")
+        m = self.mark()
+        self.assertTrue(bridge_call(private_shell, "nav.go", {"input": self.origin + "/f/private-marked"})["ok"])
+        self.wait_since(m, "download_complete", name=f"{MARK}-private-marked.bin")
+        path = self.dl / f"{MARK}-private-marked.bin"
+        wait_for(path.exists, 10, "the file")
+        zone = pathlib.Path(str(path) + ":Zone.Identifier").read_text(encoding="utf-8")
+        print(f"\n[private Zone.Identifier] {zone!r}", end=" ")
+        self.assertIn("ZoneId=3", zone)
+        host = self.origin.split("//", 1)[1].split(":", 1)[0]
+        self.assertNotIn(host, zone)
+        self.assertNotIn("private-marked", zone)
+        self.assertNotIn("HostUrl=http", zone)
+        self.assertNotIn("ReferrerUrl=http", zone)
 
     def test_unfinished_files_never_have_their_final_name(self) -> None:
         self.set_mode(disable=False, ask=False)

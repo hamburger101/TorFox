@@ -120,7 +120,9 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     ], ["unit:TorOnion.ChecksVersion3AddressesIncludingTheirChecksum",
         TOR + ".TorWindowTest.test_mistyped_onion_addresses_are_refused_and_never_searched"]),
     "tor-new-identity-keeps-the-context": ([
-        (APP, "  contexts_->DropTor();\n  tor_->NewIdentity(", "  tor_->NewIdentity("),
+        (APP, "  std::string error;\n  if (!contexts_->DropTor(&error)) {\n"
+              "    LOG(ERROR) << \"New identity: the old Tor context's proxy was not changed: \" << error;\n"
+              "  }\n  tor_->NewIdentity(", "  tor_->NewIdentity("),
     ], [TOR + ".NewIdentityTest"]),
     "tor-not-in-a-kill-on-close-job": ([
         ("src/browser/platform/platform_win.cc", "  if (!::AssignProcessToJobObject(job, pi.hProcess)) {", "  if (false) {"),
@@ -167,7 +169,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         "e2e:test_isolation.BrowserInitiatedNavigationTest.test_internal_tab_refuses_web_urls"]),
     "shell-page-role-check": ([
         (GUARDS,
-         '    if ((parsed->host == "shell") != (role == Role::kShell)) {\n      return "page not allowed for this browser";',
+         '    if (!PageAllowedForRole(parsed->host, role)) {\n      return "page not allowed for this browser";',
          '    if (false) {\n      return "page not allowed for this browser";'),
     ], ["unit:GuardsTest.InternalBrowsersShowOnlyTheirOwnPages",
         "e2e:test_isolation.BrowserInitiatedNavigationTest.test_shell_refuses_other_pages"]),
@@ -186,7 +188,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         "e2e:test_isolation.SchemeIsolationTest.test_no_bridge_in_web_subframes"]),
     "bridge-page-allowlist": ([
         ("src/browser/bridge/bridge_handler.cc",
-         "  if (msg.ok() && ((msg.page == \"shell\") != (entry->role == BrowserRole::kShell))) {",
+         "  if (msg.ok() && !guards::PageAllowedForRole(msg.page, GuardRole(entry->role))) {",
          "  if (false) {"),
         ("src/core/bridge/validator.cc",
          "  for (const CommandSpec& c : page->commands) {",
@@ -305,6 +307,50 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
          '  std::string rules;\n  if (!test_host_rules.empty()) {\n    rules = test_host_rules;\n  }'),
     ], ["unit:CmdlinePolicy.AddsForcedSwitches",
         "e2e:test_quiet_startup.OnionResolverTest.test_onion_names_never_reach_the_resolver",
+        "e2e:test_quiet_startup.OnionResolverTest.test_resolver_rule_alone_keeps_onion_names_local"]),
+    # New identity: the old Tor context must send nothing more.
+    "tor-retired-context-not-refused": ([
+        (CTX, "  tor_retired_->store(true);\n", ""),
+    ], [TOR + ".TorContextGateTest.test_after_new_identity_the_old_context_sends_nothing"]),
+    "tor-retired-context-keeps-proxy": ([
+        (CTX, '  const bool ok = SetPrefVerified(tor_, "tor (retired)", "proxy",\n'
+              '                                  TorProxyValue(kTorPlaceholderPort), error);',
+         "  const bool ok = true;"),
+    ], [TOR + ".TorContextGateTest.test_after_new_identity_the_old_context_sends_nothing"]),
+    # Site isolation turned off: the test must see frames of other sites
+    # move into their parent's process.
+    "site-isolation-off": ([
+        (POLICY, '      {"site-per-process", ""},\n', '      {"disable-site-isolation-trials", ""},\n'),
+    ], ["e2e:test_site_isolation.SiteIsolationTest.test_frames_of_other_sites_run_in_other_processes",
+        "e2e:test_site_isolation.SiteIsolationTest.test_private_windows_isolate_sites_too"]),
+    # Chromium's DNS probe (google.com) after a failed lookup.
+    "dns-probe-left-on": ([
+        (CTX, '  if (!SetPrefVerified(context, name, "alternate_error_pages.enabled", BoolValue(false), error)) {\n'
+              '    return false;\n  }\n', ""),
+    ], [QUIET[:-len(".QuietStartupTest")] + ".FailedLookupTest.test_a_failed_lookup_makes_no_other_lookup"]),
+    # WebRTC looks names up outside the proxy: Tor windows have none.
+    "tor-webrtc-kept": ([
+        ("src/browser/app/renderer_app.cc", "    RemoveWebRtc(context);\n", ""),
+    ], [TOR + ".TorContextIsolationTest.test_tor_windows_have_no_webrtc",
+        TOR + ".TorDnsTest.test_webrtc_looks_up_no_name_for_tor_windows"]),
+    # After tor stops, its old SOCKS port is not TorFox's any more.
+    "tor-dead-port-kept": ([
+        ("src/browser/app/tor_service.cc", "  if (status.state == State::kError) {\n    // This tor has stopped",
+         "  if (false) {\n    // This tor has stopped"),
+    ], [TOR + ".ProxyLayerAfterDeathTest.test_a_dead_tors_port_is_never_used_again"]),
+    # A user switch must not remove CEF's own switch of the same name.
+    "cmdline-erases-cef-switches": ([
+        (POLICY, "    if (it != plan.switches.end() && it->second == value) {\n      plan.switches.erase(it);",
+         "    if (it != plan.switches.end()) {\n      plan.switches.erase(it);"),
+    ], ["unit:CmdlinePolicy.TheUsersSwitchNeverRemovesCefsOwn"]),
+    "cmdline-release-logging-not-forced": ([
+        (POLICY, '    plan.switches["log-severity"] = "disable";\n', ""),
+    ], ["unit:CmdlinePolicy.TheUsersSwitchNeverRemovesCefsOwn"]),
+    # "x.onion." does not match "*.onion" (docs/STAGE9_FINDINGS.md).
+    "onion-trailing-dot-resolvable": ([
+        (POLICY, 'constexpr char kOnionRule[] = "MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND";',
+         'constexpr char kOnionRule[] = "MAP *.onion ~NOTFOUND";'),
+    ], ["e2e:test_quiet_startup.OnionResolverTest.test_onion_names_never_reach_the_resolver",
         "e2e:test_quiet_startup.OnionResolverTest.test_resolver_rule_alone_keeps_onion_names_local"]),
     # Service contexts (internal, global, system) never look for a proxy.
     "service-contexts-follow-system-proxy": ([
@@ -560,6 +606,18 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     "update-not-rechecked-before-install": ([
         (UPDATER, "  if (!d || d->size != asset_.size || d->sha256 != asset_.sha256) {", "  if (!d) {"),
     ], [UPD + ".test_a_file_changed_after_its_download_is_not_installed"]),
+    # Stage 9 review findings.
+    "update-started-through-links": ([
+        ("src/browser/platform/platform_win.cc", "  info.lpFile = real.c_str();",
+         "  info.lpFile = file.c_str();"),
+    ], [UPD + ".test_the_installer_is_started_by_its_real_path"]),
+    "update-replay-shown-as-up-to-date": ([
+        (RELEASE, "    o.replayed = true;\n", ""),
+    ], ["unit:Release.OnlyNewerReleasesAreOffered",
+        UPD + ".test_an_older_signed_release_cannot_be_replayed"]),
+    "update-record-save-failure-ignored": ([
+        (UPDATER, "  if (!SaveState()) {", "  if (!SaveState() && false) {"),
+    ], [UPD + ".test_no_update_is_offered_while_the_record_cannot_be_saved"]),
     "updates-off-ignored": ([
         (UPDATER, '  return settings_ && settings_->store().GetBool("updates.enabled");',
          "  return settings_ != nullptr;"),
@@ -592,6 +650,9 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     "update-not-restarted": ([
         (ISS, 'Filename: "{app}\\TorFox.exe"; Flags: nowait runasoriginaluser; Check: IsUpdate\n', ""),
     ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it"]),
+    "installer-keeps-stale-files": ([
+        (ISS, 'Type: files; Name: "{app}\\dxil.dll"\n', ""),
+    ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it"]),
     "installer-ships-build-files": ([
         (PACKAGER, "    for name in REQUIRED_FILES + [f for f in OPTIONAL_FILES if (build / f).is_file()]:",
          "    for name in [p.name for p in build.iterdir() if p.is_file()]:"),
@@ -600,6 +661,30 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         (ISS, "  Result := CheckForMutexes(RunningMutex) or ProgramFolderInUse(Dir);", "  Result := False;"),
     ], [INST + "test_update_waits_for_torfox_then_installs_and_restarts_it",
         INST + "test_setup_and_uninstall_refuse_while_torfox_is_open"]),
+    # Stage 9: address-bar suggestions. Tor windows list bookmarks only.
+    "suggest-history-in-tor-windows": ([
+        ("src/browser/shell/browser_window.cc",
+         "db->Suggest(text, static_cast<std::size_t>(bridge::kMaxSuggestions), !tor_);",
+         "db->Suggest(text, static_cast<std::size_t>(bridge::kMaxSuggestions), true);"),
+    ], [TOR + ".TorSuggestTest.test_tor_windows_suggest_bookmarks_only"]),
+    # The list's page is never tab content.
+    "suggest-page-in-tabs": ([
+        ("src/core/url/internal_url.cc",
+         '  return IsInternalPage(host) && host != "shell" && host != "suggest";',
+         '  return IsInternalPage(host) && host != "shell";'),
+    ], ["unit:NavInput.InternalPages",
+        "e2e:test_suggestions.SuggestionsTest.test_the_list_cannot_do_anything_else"]),
+    # The list must not stay over another tab's page.
+    "suggest-kept-on-tab-switch": ([
+        ("src/browser/shell/browser_window.cc",
+         "void BrowserWindow::Activate(int tab_id) {\n  SuggestHide();\n",
+         "void BrowserWindow::Activate(int tab_id) {\n"),
+    ], ["e2e:test_suggestions.SuggestionsTest.test_escape_and_switching_tabs_hide_the_list"]),
+    # Closing a window closes its list too.
+    "suggest-list-not-closed": ([
+        ("src/browser/shell/browser_window.cc",
+         "    StartClose(suggest_client_, suggest_view, nullptr, suggest_overlay);\n", ""),
+    ], ["e2e:test_suggestions.SuggestionsTest.test_the_list_closes_with_its_window"]),
 }
 
 

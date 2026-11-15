@@ -34,7 +34,7 @@ tracked only in [`FEATURE_STATUS.md`](FEATURE_STATUS.md).
   2. TorFox's policy (`src/core/cmdline/policy.cc`). It drops every user switch, keeps only absolute
      http(s) URL arguments, and then forces TorFox's own switches:
      - `--site-per-process`
-     - `--host-resolver-rules="MAP *.onion ~NOTFOUND"`
+     - `--host-resolver-rules="MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND"`
      - `--disable-extensions`
      - Chromium background services off: background networking, component update, domain reliability,
        client-side phishing detection, sync, default apps, pings
@@ -101,6 +101,16 @@ checks that it stays empty of browsing data.
   URLs without an onion host and TorFox's own pages are kept, and a damaged or foreign file restores nothing
   (`src/core/browsing/session.cc`). A save that would leave no window is skipped, so the file keeps the
   windows that were open when the last one closed.
+- **Address-bar suggestions:** as the user types, the shell sends the text and where the address bar is
+  (`suggest.query`). The browser process asks `Places::Suggest` for up to six bookmarks and history entries
+  whose address starts with the text, or whose title or address contains it. Tor windows get bookmarks
+  only. Nothing is ever sent to a search engine or looked up on the network for a suggestion. The list is
+  its own internal page, `torfox://suggest/`, in a CEF overlay over the top of the page that never takes
+  the focus. It is made the first time there is something to show, and closes with its window. It shows
+  only what the browser pushes to it (`suggest.subscribe`), and its one other command, `suggest.open`,
+  names a row by its position, not an address. No tab can show that page (`IsTabPage`). The arrow keys
+  and Enter in the address bar, or a click on a row, open a suggestion in the active tab. Escape, leaving
+  the address bar, switching tabs or resizing the window hides the list.
 - **Search** (*Settings > Search engine*): DuckDuckGo, DuckDuckGo HTML (`html.duckduckgo.com/html/`) or
   DuckDuckGo Lite (`lite.duckduckgo.com/lite/`); in Tor windows the same page on DuckDuckGo's onion service
   (`src/core/url/search.cc`). Used by the address bar, the new tab page and the page menu's selection search.

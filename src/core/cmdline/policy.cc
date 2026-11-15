@@ -56,7 +56,9 @@ const std::vector<std::string> kDisableFeatures = {
     "AimServerRequestOnStartupEnabled",  // www.google.com/async/folae: AI mode eligibility
 };
 
-constexpr char kOnionRule[] = "MAP *.onion ~NOTFOUND";
+// Both spellings: "x.onion." (a fully qualified name) is the same host to
+// DNS but does not match "*.onion" (docs/STAGE9_FINDINGS.md).
+constexpr char kOnionRule[] = "MAP *.onion ~NOTFOUND,MAP *.onion. ~NOTFOUND";
 
 bool Contains(const std::vector<std::string>& v, const std::string& s) {
   return std::find(v.begin(), v.end(), s) != v.end();
@@ -204,7 +206,14 @@ Plan Apply(const Input& input) {
       }
       continue;
     }
-    plan.switches.erase(name);
+    // Only the user's own switch goes. A switch of the same name with
+    // another value is CEF's (release builds never even pass the user's
+    // switches to Chromium: command_line_args_disabled), and erasing it would
+    // undo a CEF setting such as log-severity=disable.
+    auto it = plan.switches.find(name);
+    if (it != plan.switches.end() && it->second == value) {
+      plan.switches.erase(it);
+    }
   }
 
   // 2. Forced switches always win.
@@ -217,6 +226,12 @@ Plan Apply(const Input& input) {
   }
   for (const auto& [name, value] : ForcedSwitches(test_rules)) {
     plan.switches[name] = value;
+  }
+  if (!input.test_hooks) {
+    // No logs in release builds: they could record URLs. CEF sets this from
+    // CefSettings too; forcing it here means no switch of the user's can
+    // ever remove it.
+    plan.switches["log-severity"] = "disable";
   }
 
   // 3. Merge feature lists. A feature TorFox enables can never stay disabled,

@@ -61,7 +61,21 @@ type ShellEvent =
   | { type: "focusAddress" }
   | { type: "focusFind" }
   | { type: "star" }
-  | { type: "notice"; text: string };
+  | { type: "notice"; text: string }
+  | { type: "suggestOpened"; ok: boolean };
+
+/** One row of the address bar's suggestion list (bookmarks and history only). */
+interface Suggestion {
+  url: string;
+  title: string;
+  source: "bookmark" | "history";
+}
+
+// Typing pauses this long before the list is updated.
+const SUGGEST_DELAY_MS = 60;
+// After the address bar loses the focus, the list waits this long before it
+// goes, so that a press on one of its rows still opens it.
+const SUGGEST_BLUR_MS = 200;
 
 const NEW_TAB_URL = "torfox://newtab/";
 // Pointer travel before a press on a tab becomes a drag.
@@ -159,6 +173,16 @@ export class TorFoxShell extends LitElement {
   declare drag: Drag | null;
   declare downloads: { active: number; count: number };
   private noticeTimer = 0;
+  // The suggestion list: what TorFox last showed, and the highlighted row.
+  private suggestions: Suggestion[] = [];
+  private suggestHighlight = -1;
+  private suggestTimer = 0;
+  private suggestBlurTimer = 0;
+  // Each query and each hide gets a new number; a reply to an older one is
+  // dropped. TorFox handles them in order, so the last one sent wins there too.
+  private suggestSeq = 0;
+  private suggestPending = false;
+  private readonly onResize = (): void => this.hideSuggestions();
 
   constructor() {
     super();
@@ -185,6 +209,13 @@ export class TorFoxShell extends LitElement {
     super.connectedCallback();
     subscribe<ShellEvent>("state.subscribe", (e) => this.onEvent(e), (err) =>
       this.showNotice(`TorFox could not connect to its interface (${err.message}).`));
+    // The list is placed under the address bar; a new window size moves it.
+    window.addEventListener("resize", this.onResize);
+  }
+
+  override disconnectedCallback(): void {
+    window.removeEventListener("resize", this.onResize);
+    super.disconnectedCallback();
   }
 
   private onEvent(e: ShellEvent): void {
@@ -200,6 +231,15 @@ export class TorFoxShell extends LitElement {
         return;
       case "notice":
         this.showNotice(e.text, "info");
+        return;
+      case "suggestOpened":
+        // A row of the list was clicked: TorFox opened it in this tab.
+        this.forgetSuggestions();
+        if (e.ok) {
+          this.editing = false;
+          this.notice = "";
+          this.input?.blur();
+        }
         return;
       case "find":
         this.findCount = e.count;
@@ -230,6 +270,8 @@ export class TorFoxShell extends LitElement {
         if (activeChanged) {
           this.editing = false;
           this.notice = "";
+          // TorFox hides the list itself when the tab changes.
+          this.forgetSuggestions();
         }
         return;
       }
@@ -283,7 +325,10 @@ export class TorFoxShell extends LitElement {
 
   private async go(e: Event): Promise<void> {
     e.preventDefault();
-    const value = this.input?.value ?? "";
+    // Enter on a highlighted suggestion opens its address.
+    const picked = this.suggestions[this.suggestHighlight];
+    const value = picked ? picked.url : (this.input?.value ?? "");
+    this.hideSuggestions();
     if (!value.trim()) {
       return;
     }
@@ -300,9 +345,97 @@ export class TorFoxShell extends LitElement {
   private onInput(e: InputEvent): void {
     this.editing = true;
     this.draft = (e.target as HTMLInputElement).value;
+    window.clearTimeout(this.suggestTimer);
+    window.clearTimeout(this.suggestBlurTimer);
+    this.suggestTimer = window.setTimeout(() => void this.querySuggestions(), SUGGEST_DELAY_MS);
+  }
+
+  // ----- Address-bar suggestions -----
+
+  private async querySuggestions(): Promise<void> {
+    const input = this.input;
+    const form = this.el<HTMLElement>("form.address");
+    const text = input?.value ?? "";
+    if (!input || !form || (this.renderRoot as ShadowRoot).activeElement !== input || !text.trim()) {
+      this.hideSuggestions();
+      return;
+    }
+    // Under the address bar, as wide as it is, in shell coordinates.
+    const r = form.getBoundingClientRect();
+    const seq = ++this.suggestSeq;
+    this.suggestPending = true;
+    try {
+      const reply = await call<{ items: Suggestion[]; highlight: number }>("suggest.query", {
+        // The bridge takes at most 256 bytes; 80 UTF-16 units are at most 240.
+        text: text.slice(0, 80),
+        x: Math.max(0, Math.round(r.left)),
+        y: Math.max(0, Math.round(r.bottom)),
+        width: Math.max(1, Math.round(r.width)),
+      });
+      if (seq === this.suggestSeq) {
+        this.suggestPending = false;
+        this.suggestions = reply.items;
+        this.suggestHighlight = reply.highlight;
+      }
+    } catch {
+      if (seq === this.suggestSeq) {
+        this.suggestPending = false;
+        this.suggestions = [];
+        this.suggestHighlight = -1;
+      }
+    }
+  }
+
+  /** The list is shown, or about to be. */
+  private get suggesting(): boolean {
+    return this.suggestPending || this.suggestions.length > 0;
+  }
+
+  /** Drops the list here, and any reply still to come. */
+  private forgetSuggestions(): void {
+    window.clearTimeout(this.suggestTimer);
+    window.clearTimeout(this.suggestBlurTimer);
+    ++this.suggestSeq;
+    this.suggestPending = false;
+    this.suggestions = [];
+    this.suggestHighlight = -1;
+  }
+
+  private hideSuggestions(): void {
+    this.forgetSuggestions();
+    void call("suggest.hide").catch(() => undefined);
+  }
+
+  private moveHighlight(step: number): void {
+    const n = this.suggestions.length;
+    // -1 is the typed text itself, then the rows in order, round again.
+    let next = this.suggestHighlight + step;
+    if (next < -1) {
+      next = n - 1;
+    } else if (next >= n) {
+      next = -1;
+    }
+    this.suggestHighlight = next;
+    void call("suggest.highlight", { index: next }).catch(() => undefined);
+  }
+
+  private onAddressBlur(): void {
+    window.clearTimeout(this.suggestBlurTimer);
+    this.suggestBlurTimer = window.setTimeout(() => this.hideSuggestions(), SUGGEST_BLUR_MS);
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && this.suggestions.length > 0) {
+      e.preventDefault();
+      this.moveHighlight(e.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (e.key === "Escape" && this.suggesting) {
+      // The first Escape closes the list and keeps what was typed.
+      e.preventDefault();
+      this.hideSuggestions();
+      return;
+    }
     if (e.key === "Escape") {
       this.editing = false;
       this.notice = "";
@@ -559,6 +692,7 @@ export class TorFoxShell extends LitElement {
             .value=${value}
             @input=${this.onInput}
             @keydown=${this.onKeyDown}
+            @blur=${this.onAddressBlur}
             @focus=${(e: FocusEvent) => (e.target as HTMLInputElement).select()} />
           ${this.notice
             ? html`<div class="notice ${this.noticeKind}" role=${this.noticeKind === "error" ? "alert" : "status"} title=${this.notice}>${this.notice}</div>`

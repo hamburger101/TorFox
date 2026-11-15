@@ -45,9 +45,21 @@ TEST(GuardsTest, InternalBrowsersShowOnlyTheirOwnPages) {
   EXPECT_EQ(NavigationBlockReason(Role::kShell, "torfox://shell/"), "");
   EXPECT_EQ(NavigationBlockReason(Role::kInternalTab, "torfox://newtab/"), "");
   EXPECT_EQ(NavigationBlockReason(Role::kInternalTab, "torfox://settings/"), "");
+  EXPECT_EQ(NavigationBlockReason(Role::kSuggest, "torfox://suggest/"), "");
   // Role mismatch.
   EXPECT_NE(NavigationBlockReason(Role::kShell, "torfox://settings/"), "");
   EXPECT_NE(NavigationBlockReason(Role::kInternalTab, "torfox://shell/"), "");
+  // The suggestion list shows only its own page, and no other browser shows it.
+  EXPECT_NE(NavigationBlockReason(Role::kSuggest, "torfox://shell/"), "");
+  EXPECT_NE(NavigationBlockReason(Role::kSuggest, "torfox://settings/"), "");
+  EXPECT_NE(NavigationBlockReason(Role::kSuggest, "https://example.com/"), "");
+  EXPECT_NE(NavigationBlockReason(Role::kShell, "torfox://suggest/"), "");
+  EXPECT_NE(NavigationBlockReason(Role::kInternalTab, "torfox://suggest/"), "");
+  EXPECT_NE(NavigationBlockReason(Role::kWebTab, "torfox://suggest/"), "");
+  EXPECT_NE(NavigationBlockReason(Role::kTorTab, "torfox://suggest/"), "");
+  EXPECT_EQ(DecideInternalRequest(true, Role::kInternalTab, "GET", "torfox://suggest/").status, 403);
+  EXPECT_EQ(DecideInternalRequest(true, Role::kSuggest, "GET", "torfox://suggest/").status, 200);
+  EXPECT_EQ(DecideInternalRequest(true, Role::kSuggest, "GET", "torfox://newtab/").status, 403);
   // Unknown pages and malformed URLs.
   for (const char* url : {"torfox://evil/", "torfox://Settings/", "TORFOX://settings/",
                           "torfox://settings:80/", "torfox://user@settings/", "torfox:settings",

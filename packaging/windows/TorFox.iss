@@ -83,6 +83,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[InstallDelete]
+; Optional files an earlier version may have installed but this one may not
+; ship (scripts/package_windows.py OPTIONAL_FILES): an update must not leave
+; a stale copy next to newer CEF files. [Files] replaces everything else.
+Type: files; Name: "{app}\dxil.dll"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

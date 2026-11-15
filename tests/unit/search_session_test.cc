@@ -62,7 +62,7 @@ TEST(Session, KeepsWebPagesAndTorFoxPagesOnly) {
   EXPECT_EQ(RestorableUrl("torfox://newtab/"), "torfox://newtab/");
   const std::string onion = std::string(tor::kDuckDuckGoOnion);
   for (const std::string& bad :
-       {std::string("torfox://shell/"), std::string("torfox://nosuchpage/"), std::string("TORFOX://settings/"),
+       {std::string("torfox://shell/"), std::string("torfox://suggest/"), std::string("torfox://nosuchpage/"), std::string("TORFOX://settings/"),
         std::string("javascript:alert(1)"), std::string("data:text/html,x"), std::string("file:///C:/x"),
         std::string("about:blank"), std::string(""), "http://" + onion + "/", "https://" + onion + "/html/",
         "https://sub." + onion + "/", std::string("https://exa mple.com/")}) {
