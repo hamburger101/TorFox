@@ -1,0 +1,5 @@
+TorFox 0.1.1 is the first update of TorFox.
+
+It changes nothing in how TorFox works. It exists to show that automatic updates work from start to finish: an installed TorFox 0.1.0 finds this version on GitHub, checks its signature and checksum, downloads it and installs it.
+
+If you installed 0.1.0 and are reading this in the What's new tab, the update worked.

@@ -8,9 +8,9 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_CONFIGURATION_TYPES Debug Release CACHE STRING "Supported configurations" FORCE)
 
 if(APPLE)
-  project(TorFox VERSION 0.1.0 LANGUAGES C CXX OBJC OBJCXX)
+  project(TorFox VERSION 0.1.1 LANGUAGES C CXX OBJC OBJCXX)
 else()
-  project(TorFox VERSION 0.1.0 LANGUAGES C CXX)
+  project(TorFox VERSION 0.1.1 LANGUAGES C CXX)
 endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
