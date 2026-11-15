@@ -630,6 +630,8 @@ CefRefPtr<CefRequestContext> ContextManager::Get(Kind kind) const {
       return normal_;
     case Kind::kPrivate:
       break;  // Owned by each private window.
+    case Kind::kTor:
+      break;  // Not handed out here: Tor windows wait for tor first.
   }
   return nullptr;
 }

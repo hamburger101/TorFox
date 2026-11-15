@@ -197,6 +197,9 @@ class BrowserWindow : public CefWindowDelegate {
   void ApplyTheme();
 
  private:
+  // Defined where TabClient is a complete type (clang needs it for the
+  // CefRefPtr<TabClient> members).
+  ~BrowserWindow() override;
   BrowserWindow(std::string first_url, bool private_window, bool tor,
                 CefRefPtr<CefRequestContext> web_context);
 

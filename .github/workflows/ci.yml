@@ -167,7 +167,8 @@ jobs:
         run: cmake -S . -B out/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DTORFOX_CEF_FLAVOR=minimal
 
       - name: Build app and unit tests
-        run: cmake --build out/ci --parallel
+        # -k 0: report every compile error, not only the first few.
+        run: cmake --build out/ci --parallel -- -k 0
 
       - name: Unit tests
         run: ctest --test-dir out/ci --output-on-failure

@@ -220,6 +220,8 @@ void BrowserWindow::Close() {
   }
 }
 
+BrowserWindow::~BrowserWindow() = default;
+
 BrowserWindow::BrowserWindow(std::string first_url, bool private_window, bool tor,
                              CefRefPtr<CefRequestContext> web_context)
     : first_url_(std::move(first_url)),

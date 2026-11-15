@@ -140,7 +140,9 @@ TEST_F(ChromiumProfileTest, ErasesSiteScoresAndOptionallyZoomLevels) {
   r = ScrubSiteRecords(dir_, true);
   EXPECT_TRUE(r.ok);
   EXPECT_EQ(r.removed, 0);
-  EXPECT_EQ(std::filesystem::last_write_time(dir_ / "Preferences"), before);
+  // Compared, not printed: gtest prints a time point with std::format,
+  // which macOS before 13.3 lacks for floating point.
+  EXPECT_TRUE(std::filesystem::last_write_time(dir_ / "Preferences") == before);
 }
 
 TEST_F(ChromiumProfileTest, UnreadablePreferencesAreReportedAndLeftAlone) {
