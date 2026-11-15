@@ -1,0 +1,19 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Generated from config/release.json by CMake. No secrets: only where
+// releases are published and the public key that verifies them.
+
+#ifndef TORFOX_BROWSER_APP_RELEASE_CONFIG_H_
+#define TORFOX_BROWSER_APP_RELEASE_CONFIG_H_
+
+namespace torfox {
+// "owner/name", or empty: then TorFox never looks for updates.
+inline constexpr char kUpdateRepository[] = "@TORFOX_UPDATE_REPOSITORY@";
+// The minisign public key (the "RW..." line of minisign.pub), or empty: then
+// TorFox never looks for updates, since it could not verify one.
+inline constexpr char kUpdatePublicKey[] = "@TORFOX_UPDATE_PUBLIC_KEY@";
+}  // namespace torfox
+
+#endif  // TORFOX_BROWSER_APP_RELEASE_CONFIG_H_

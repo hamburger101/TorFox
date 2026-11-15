@@ -1,5 +1,6 @@
-# Continuous integration. Windows builds on every push to main and on PRs.
-# macOS (10x minute cost on private repos) runs on PRs and manual dispatch only.
+# Continuous integration. Windows builds and tests on every push to main and
+# on PRs. macOS (10x minute cost on private repos) runs on PRs and manual
+# dispatch only.
 name: CI
 
 on:
@@ -18,13 +19,17 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
 
       - name: Cache verified dependencies
         uses: actions/cache@v6
@@ -35,7 +40,19 @@ jobs:
       - name: Fetch CEF (hash-verified)
         run: python -I scripts/fetch_deps.py cef windows64-minimal
 
-      - name: Configure
+      - name: Fetch libraries (hash-verified)
+        shell: bash
+        run: |
+          python -I scripts/fetch_deps.py nlohmann_json header
+          python -I scripts/fetch_deps.py googletest source
+          python -I scripts/fetch_deps.py sqlite source
+          python -I scripts/fetch_deps.py tor windows-x86_64
+          python -I scripts/fetch_deps.py libsodium windows-msvc
+
+      - name: Install UI dependencies (lockfile, no install scripts)
+        run: npm --prefix ui ci
+
+      - name: Configure release and test builds
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -47,10 +64,52 @@ jobs:
             '17' { $gen = 'Visual Studio 17 2022' }
             default { throw "Unsupported or missing Visual Studio: '$line' ($ver)" }
           }
-          cmake -S . -B out/ci -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal -DTORFOX_BUILD_SPIKES=ON
+          cmake -S . -B out/dev -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal
+          cmake -S . -B out/test -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal -DTORFOX_TEST_HOOKS=ON
 
       - name: Build
-        run: cmake --build out/ci --config Release --parallel
+        run: |
+          cmake --build out/dev --config Release --parallel
+          cmake --build out/test --config Release --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir out/test -C Release --output-on-failure
+
+      # scripts/release.py, which the release workflow uses, checked with
+      # signatures made by the official minisign tool.
+      - name: Release tooling tests
+        run: |
+          python -I scripts/fetch_deps.py minisign windows
+          python -m unittest discover -v -s tests/tools
+
+      - name: End-to-end tests (test build)
+        working-directory: tests/e2e
+        env:
+          TORFOX_QUIET_SECONDS: "60"
+        run: python -m unittest -v test_isolation test_bridge test_internal_pages test_settings test_lifecycle test_stage1_defaults test_quiet_startup test_browsing test_places test_private test_downloads test_privacy test_tor test_startup test_updates test_site_isolation test_suggestions test_whats_new test_memory test_js_optimizer test_adblock
+
+      # The bundled tor itself (needs the network; LiveTorTest is skipped,
+      # not failed, if tor cannot finish bootstrapping from the runner).
+      - name: Tor tests with the bundled tor (network)
+        working-directory: tests/e2e
+        env:
+          TORFOX_LIVE_TESTS: "1"
+        run: python -m unittest -v test_tor.RealTorTest test_tor.RealTorNonAsciiProfileTest test_tor.LiveTorTest
+
+      # The setups use no compression here: the tests check the setup's
+      # behaviour, and the release workflow builds the compressed one.
+      - name: Windows setups (per-user test build and the real one, this version and the next)
+        run: |
+          python -I scripts/package_windows.py --test-peruser --compression none
+          python -I scripts/package_windows.py --test-peruser --compression none --next-patch
+          python -I scripts/package_windows.py --compression none
+          python -I scripts/package_windows.py --compression none --next-patch
+
+      # Includes the installer tests: the test build of the setup in a
+      # temporary folder, and the real one where it installs by default
+      # (both for the current user, without administrator rights).
+      - name: Release-build platform and installer tests
+        run: python -m unittest discover -v -s tests/platform -p "test_*_win.py"
 
   macos:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -60,18 +119,26 @@ jobs:
         include:
           - runner: macos-15
             cef: macosarm64-minimal
+            tor: macos-aarch64
             arch: arm64
+            pkg: arm64
           - runner: macos-15-intel
             cef: macosx64-minimal
+            tor: macos-x86_64
             arch: x86_64
+            pkg: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
 
       - name: Cache verified dependencies
         uses: actions/cache@v6
@@ -82,11 +149,47 @@ jobs:
       - name: Fetch CEF (hash-verified)
         run: python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }}
 
+      - name: Fetch libraries (hash-verified)
+        run: |
+          python3 -I scripts/fetch_deps.py nlohmann_json header
+          python3 -I scripts/fetch_deps.py googletest source
+          python3 -I scripts/fetch_deps.py sqlite source
+          python3 -I scripts/fetch_deps.py tor ${{ matrix.tor }}
+          python3 -I scripts/fetch_deps.py libsodium source
+
+      - name: Install UI dependencies (lockfile, no install scripts)
+        run: npm --prefix ui ci
+
       - name: Ensure Ninja
         run: command -v ninja || brew install ninja
 
       - name: Configure
         run: cmake -S . -B out/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DTORFOX_CEF_FLAVOR=minimal
 
-      - name: Build CEF wrapper
-        run: cmake --build out/ci --target libcef_dll_wrapper
+      - name: Build app and unit tests
+        # -k 0: report every compile error, not only the first few.
+        run: cmake --build out/ci --parallel -- -k 0
+
+      - name: Unit tests
+        run: ctest --test-dir out/ci --output-on-failure
+
+      - name: Bundle layout
+        run: |
+          app="out/ci/src/browser/Release/TorFox.app"
+          test -x "$app/Contents/MacOS/TorFox"
+          test -d "$app/Contents/Frameworks/Chromium Embedded Framework.framework"
+          for h in "" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)"; do
+            test -x "$app/Contents/Frameworks/TorFox Helper$h.app/Contents/MacOS/TorFox Helper$h"
+          done
+          plutil -lint "$app/Contents/Info.plist"
+          test -x "$app/Contents/Helpers/tor/tor"
+          test -x "$app/Contents/Helpers/tor/pluggable_transports/lyrebird"
+          test -f "$app/Contents/Helpers/tor/pluggable_transports/pt_config.json"
+          test -f "$app/Contents/Helpers/tor/data/geoip"
+
+      - name: DMG (made, mounted, copied out and run)
+        run: |
+          version=$(python3 -I scripts/release.py version)
+          cef=$(python3 -I scripts/fetch_deps.py cef ${{ matrix.cef }} | tail -n 1)
+          sh packaging/macos/make_dmg.sh out/ci/src/browser/Release/TorFox.app "$version" ${{ matrix.pkg }} "$cef" out/dist
+          sh packaging/macos/check_dmg.sh "out/dist/TorFox-$version-mac-${{ matrix.pkg }}.dmg"

@@ -2,5 +2,5 @@
   "_comment": "Build-time release configuration. No secrets belong in this file. The updater is disabled when github_owner or github_repo is empty, or when update_public_key is empty.",
   "github_owner": "hamburger101",
   "github_repo": "TorFox",
-  "update_public_key": ""
+  "update_public_key": "RWRA+fZAaRQQoUBF88mJxHm9aajSyikI/SRBTsuBamAnNM672Eshd7LV"
 }

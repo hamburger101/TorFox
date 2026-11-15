@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned third-party dependencies. Every artifact is verified by size, SHA-256 and (for CEF) the SHA-1 published in the official CEF build index before it is extracted. Update only via scripts/bump_cef.py / scripts/bump_tor.py.",
+  "_comment": "Pinned third-party dependencies. Every artifact is verified by size, SHA-256 and (for CEF) the SHA-1 published in the official CEF build index, or (libsodium, minisign) the upstream minisign signature, before it is extracted. Update only via scripts/bump_cef.py / scripts/bump_tor.py.",
   "cef": {
     "version": "156.0.30+g6028375+chromium-156.0.8078.96",
     "chromium_version": "156.0.8078.96",
@@ -55,6 +55,99 @@
         "size": 19005562,
         "sha256": "0b7d022017c31e3f972d06465bcd7ac50feb66ac825547419a934914fe4bb156",
         "pgp_signing_subkey": "022DA248432D2A0E0F54E65E316C1FACD62D07D9"
+      }
+    }
+  },
+  "googletest": {
+    "_comment": "Test-only dependency. SHA-256 matches the digest GitHub publishes for the official release asset.",
+    "version": "1.18.0",
+    "base_url": "https://github.com/google/googletest/releases/download/v1.18.0/",
+    "files": {
+      "source": {
+        "name": "googletest-1.18.0.tar.gz",
+        "size": 894741,
+        "sha256": "6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5"
+      }
+    }
+  },
+  "nlohmann_json": {
+    "_comment": "Single-header JSON library. The release file's OpenPGP signature was verified against Niels Lohmann's key (fingerprint published in the project README), then pinned by SHA-256.",
+    "version": "3.12.0",
+    "signing_key_primary_fpr": "797167AE41C0A6D9232E48457F3CEA63AE251B69",
+    "base_url": "https://github.com/nlohmann/json/releases/download/v3.12.0/",
+    "files": {
+      "header": {
+        "name": "json.hpp",
+        "size": 953436,
+        "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63",
+        "install_as": "json-3.12.0/nlohmann/json.hpp"
+      }
+    }
+  },
+  "sqlite": {
+    "_comment": "SQLite amalgamation (public domain), from the autoconf release tarball. The SHA3-256 is the one published on https://www.sqlite.org/download.html; SHA-256 pinned after checking it.",
+    "version": "3.54.1",
+    "base_url": "https://www.sqlite.org/2026/",
+    "files": {
+      "source": {
+        "name": "sqlite-autoconf-3540100.tar.gz",
+        "size": 3332984,
+        "sha3_256": "b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4",
+        "sha256": "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e"
+      }
+    }
+  },
+  "libsodium": {
+    "_comment": "Official libsodium release (prebuilt MSVC libraries for Windows; source for macOS). Verified with the minisign key published at https://doc.libsodium.org/installation, then pinned by SHA-256.",
+    "version": "1.0.22",
+    "minisign_key": "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3",
+    "base_url": "https://download.libsodium.org/libsodium/releases/",
+    "files": {
+      "windows-msvc": {
+        "name": "libsodium-1.0.22-msvc.zip",
+        "size": 17690194,
+        "sha256": "3e03a726fac4bc09cb61d8f29d658ef7a5eca0811de59082130414f7ca2e4279"
+      },
+      "source": {
+        "name": "libsodium-1.0.22.tar.gz",
+        "size": 2008529,
+        "sha256": "adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349"
+      }
+    }
+  },
+  "minisign": {
+    "_comment": "The official minisign tool: makes the updater's test vectors and signs release manifests in CI. Verified with the minisign key published in the minisign README (the same key as libsodium's), then pinned by SHA-256.",
+    "version": "0.12",
+    "minisign_key": "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3",
+    "base_url": "https://github.com/jedisct1/minisign/releases/download/0.12/",
+    "files": {
+      "windows": {
+        "name": "minisign-0.12-win64.zip",
+        "size": 252505,
+        "sha256": "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479"
+      },
+      "linux": {
+        "name": "minisign-0.12-linux.tar.gz",
+        "size": 271043,
+        "sha256": "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73"
+      },
+      "macos": {
+        "name": "minisign-0.12-macos.zip",
+        "size": 83496,
+        "sha256": "89000b19535765f9cffc65a65d64a820f433ef6db8020667f7570e06bf6aac63"
+      }
+    }
+  },
+  "innosetup": {
+    "_comment": "Inno Setup, which builds the Windows installer (a build tool; not shipped). The official release from jrsoftware's GitHub releases. Before pinning, its SHA-256 matched the one in the winget manifest (JRSoftware.InnoSetup.7) and its Authenticode signature was valid. scripts/package_windows.py installs it in portable mode under .deps.",
+    "version": "7.1.1",
+    "base_url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/",
+    "files": {
+      "windows": {
+        "name": "innosetup-7.1.1-x64.exe",
+        "size": 14336568,
+        "sha256": "8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0",
+        "install_as": "innosetup-7.1.1/innosetup-7.1.1-x64.exe"
       }
     }
   }

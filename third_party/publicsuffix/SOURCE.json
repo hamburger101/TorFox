@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/publicsuffix/list",
+  "commit": "5c632f0b1899b116f8a08b5b567f37817a07cb33",
+  "date": "2026-11-14T13:53:59Z",
+  "files": {
+    "public_suffix_list.dat": {
+      "sha256": "24be1caae8375d5213d817fbfd95ab0538c5fcb5f1aa76213e91522bcde60ff7",
+      "size": 340948,
+      "git_blob": "686d29fa379f79d08b20ee18d52bc53c70a4f75f"
+    },
+    "test_psl.txt": {
+      "sha256": "8f50ad958916d6a8f79fba2363501475571acce752757f9126fe9d2f17dd920d",
+      "size": 4308,
+      "git_blob": "012e5fecd7fada82ba124ea32e93882f8cea1b62"
+    }
+  }
+}

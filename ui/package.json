@@ -1,0 +1,22 @@
+{
+  "name": "torfox-ui",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "type": "module",
+  "description": "Bundled, trusted TorFox interface pages served only on the internal torfox:// scheme.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "build": "tsc --noEmit -p . && vite build"
+  },
+  "dependencies": {
+    "lit": "3.3.3"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vite": "8.3.5"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
