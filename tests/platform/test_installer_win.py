@@ -21,10 +21,10 @@ TorFox opened while an update installs exits at once and is started afterwards;
 that Setup and Uninstall refuse to run while TorFox is open; and that
 uninstalling removes the program but keeps the user's data.
 
-The installed TorFox is a release build, so it uses the real per-user data
-folder (%LOCALAPPDATA%\\TorFox). As in test_release_win.py, a folder the test
-created is removed afterwards and an existing one is left alone, and the
-tests are skipped while another TorFox is running.
+The installed TorFox is a release build, so it uses the per-user data folder
+(%LOCALAPPDATA%\\TorFox). As in test_release_win.py, the user's own folder is
+set aside while the tests run and put back afterwards, checked byte for byte
+(real_profile.py), and the tests are skipped while another TorFox is running.
 
 Needs the setups made by scripts/package_windows.py, in out/dist:
   TorFox-<v>-win-x64-setup[-peruser-test].exe and, for the update test, the
@@ -54,6 +54,20 @@ if sys.platform == "win32":
 
     import win_process_inspect as wpi
     from harness import WM_CLOSE, Fixture, _top_level_windows, _user32, wait_for
+
+    import real_profile
+
+
+def setUpModule() -> None:
+    # The user's own data folder is set aside while these tests run.
+    if sys.platform == "win32":
+        real_profile.set_aside()
+
+
+def tearDownModule() -> None:
+    if sys.platform == "win32":
+        real_profile.restore()
+
 
 SETUP_DIR = pathlib.Path(os.environ.get("TORFOX_SETUP_DIR", REPO / "out" / "dist"))
 UPDATE_ARGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TORFOXUPDATE"]
@@ -325,7 +339,11 @@ class InstallerTests:
         self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.update_version)
         # Gone, or replaced by the copy this version ships.
         self.assertFalse(stale.exists() and stale.read_bytes() == b"stale", "a stale file was kept")
-        # TorFox is started again, from the program folder.
+        # TorFox is started again, from the program folder, by the setup's
+        # [Run] entry (not by its fallback for a setup that stopped early).
+        text = log.read_text(encoding="utf-8", errors="replace")
+        self.assertIn("Update: starting TorFox", text)
+        self.assertNotIn("stopped early", text)
         browsers = wait_for(lambda: [p for p in processes_in(self.app) if p["Name"] == "TorFox.exe"
                                      and p["ParentProcessId"] not in
                                      {q["ProcessId"] for q in processes_in(self.app)}],
@@ -410,6 +428,11 @@ class InstallerTests:
             self.assertIn("PrepareToInstall failed: TorFox did not close", log)
             self.assertNotIn("Shutting down applications", log)
             self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.version)
+            # TorFox never closed, so the setup does not start it again
+            # (that would only open another window in it).
+            time.sleep(8)
+            self.assertEqual(len(_top_level_windows(tf.proc.pid)), 1)
+            self.assertIn("Update: not starting TorFox, it is still running", log)
             self.assertEqual(tf.close(), 0)
 
     def test_setup_and_uninstall_refuse_while_torfox_is_open(self) -> None:

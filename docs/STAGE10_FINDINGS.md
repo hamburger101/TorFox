@@ -17,7 +17,8 @@ closes is installed then. It adds a *Memory* section to Settings and closes two 
 - **The rest of the E2E suite** passed as a whole (272 tests, 3 live-Tor tests skipped) before the review
   fixes in §4, but has not been run again since. Those fixes changed the toolbar button, startup notices
   and start-up.
-- **The mutation checks** for Stage 10 are written but not run (§5).
+- **The mutation checks:** all 23 of Stage 10's mutations were run, and the tests caught every one (§5).
+  The first run found one that survived; the test was tightened and a setup bug it hid was fixed.
 - **macOS** was not built or tested.
 
 ## 1. Security changes
@@ -39,8 +40,7 @@ one.
 Binding 127.0.0.1 on the port fails, with and without `SO_REUSEADDR`. A test listener on `0.0.0.0` of the
 same port receives nothing, neither from a direct connection nor from a page loaded in the Tor window, and
 TorFox's listener sends nothing back. The dead-tor and *New identity* tests now check that the proxy moves
-to this port. Two mutations are written for it, bound without listening and back to port 9, but not run
-yet (§5).
+to this port. Two mutations, bound without listening and back to port 9, are both caught (§5).
 
 On macOS the same listener is used (no `SO_REUSEADDR` or `SO_REUSEPORT`). It has never been compiled.
 
@@ -70,8 +70,7 @@ log, and nothing new may be next to `TorFox.exe`.
   reaching the file, but not Chromium opening it.
 - **Fix:** release builds now also force `--disable-logging` (`cmdline::Apply`), and the file is no longer
   created. A user's `--enable-logging` cannot undo it (`CmdlinePolicy.ReleaseBuildsOpenNoLogFile`).
-- **Mutation check:** a mutation that removes the switch is written for both tests, but has not been
-  run (§5).
+- **Mutation check:** a mutation that removes the switch is caught by both tests (§5).
 
 ## 2. Automatic updates
 How it works for the user: [`UPDATING.md`](UPDATING.md). What is new in the code:
@@ -124,11 +123,11 @@ high-severity problem. Its six findings and what was done:
 
 | # | Finding | Severity | Done |
 |---|---|---|---|
-| 1 | Between TorFox's shutdown and the setup taking `TorFoxUpdateInstalling` (more than a second: Chromium's shutdown, clearing data, hashing the installer, the setup unpacking itself), nothing held the mutex. A TorFox opened then started normally, and the setup gave up after a minute without a word. | Medium | **Fixed.** TorFox holds the mutex from before Chromium shuts down until the setup signals `TorFoxUpdateStarted` (bounded at 20 s), and lets go of it before showing a hand-over error. Tested: the fake installer records that the mutex existed when it started, that TorFox was still waiting 1.5 s later, and that TorFox exited once signalled (`test_an_update_downloads_by_itself_…`, `test_an_update_waiting_when_torfox_closes_…`); two mutations written, not run. |
+| 1 | Between TorFox's shutdown and the setup taking `TorFoxUpdateInstalling` (more than a second: Chromium's shutdown, clearing data, hashing the installer, the setup unpacking itself), nothing held the mutex. A TorFox opened then started normally, and the setup gave up after a minute without a word. | Medium | **Fixed.** TorFox holds the mutex from before Chromium shuts down until the setup signals `TorFoxUpdateStarted` (bounded at 20 s), and lets go of it before showing a hand-over error. Tested: the fake installer records that the mutex existed when it started, that TorFox was still waiting 1.5 s later, and that TorFox exited once signalled (`test_an_update_downloads_by_itself_…`, `test_an_update_waiting_when_torfox_closes_…`); two mutations, both caught. |
 | 2 | A start checked the mutex, then wrote its request. In between, the setup could finish (it lets go, then reads), so the start was lost. | Low | **Fixed** by a second check after writing: if the mutex has gone, TorFox starts after all. Not tested: the window is microseconds wide. |
 | 3 | What's new said every update "was verified with TorFox's signing key", including a newer setup run by hand. | Low | **Fixed.** The sentence appears only when `update-handoff` names this version (`update::CheckHandoff`, `WhatsNew.HandoffRecordTellsWhetherTheUpdateInstalled`, `test_an_update_torfox_installed_itself_is_said_to_be_checked`); a record naming a newer version shows a notice that the update did not install (`test_an_update_that_did_not_install_is_reported_once`). |
 | 4 | The relaunch prompt promised the normal windows back even while history is cleared on exit, and said "TorFox restarts" on macOS, where it only opens the disk image. | Low | **Fixed.** The prompt, the toolbar button (*Update TorFox* on macOS) and Settings say what happens (`test_nothing_is_kept_for_a_relaunch_while_history_is_cleared_on_exit` checks the prompt). The macOS wording is not tested. |
-| 5 | A *Relaunch to update* whose setup failed left TorFox closed, with no message. | Low | **Fixed.** The setup's `DeinitializeSetup` starts TorFox whenever it should have, and TorFox then shows that the update did not install (finding 3). The failing setup itself is not tested: making it fail takes a minute (`UpdateWaitSeconds`). |
+| 5 | A *Relaunch to update* whose setup failed left TorFox closed, with no message. | Low | **Fixed.** The setup's `DeinitializeSetup` starts TorFox whenever it should have, and TorFox then shows that the update did not install (finding 3). It does not start one while TorFox is still running (§5). The failing setup itself is not tested: making it fail takes a minute (`UpdateWaitSeconds`). |
 | 6 | The mutex and registry value have fixed names shared by every copy (the per-user test setup, development builds), and a link opened during an install is dropped. | Low | **Documented** in [`UPDATING.md`](UPDATING.md) *Limits*; not changed. |
 
 The reviewer also checked and found sound:
@@ -145,34 +144,54 @@ The platform tests found two more problems:
 - **An installer test that closed TorFox too early.** It asked a TorFox the setup had just started to
   close before that TorFox had a window. The test now asks again until TorFox has gone.
 
-## 5. Mutation check: written, not run
+## 5. Mutation check
 Earlier stages ran every mutation and recorded that the tests caught each one (**M** in
-[`FEATURE_STATUS.md`](FEATURE_STATUS.md)). For Stage 10, `tests/e2e/run_mutations.py` has 22 mutations:
+[`FEATURE_STATUS.md`](FEATURE_STATUS.md)). Stage 10 adds 23 mutations to `tests/e2e/run_mutations.py`, and
+all of them are caught:
 
 | Area | Mutations |
 |---|---|
-| Updates | `update-auto-install-setting-ignored`, `update-installed-while-windows-shuts-down`, `update-relaunch-closes-private-windows-unasked`, `update-relaunch-keeps-tabs-despite-clear-history`, `update-runs-while-being-installed`, `update-handoff-mutex-not-held`, `update-handoff-does-not-wait-for-the-setup`, `update-not-installed-not-reported`, `update-not-restarted` (anchor updated) |
-| Installer | `installer-no-installing-mutex`, `installer-relaunches-after-install-on-exit` |
+| Updates | `update-auto-install-setting-ignored`, `update-installed-while-windows-shuts-down`, `update-relaunch-closes-private-windows-unasked`, `update-relaunch-keeps-tabs-despite-clear-history`, `update-runs-while-being-installed`, `update-handoff-mutex-not-held`, `update-handoff-does-not-wait-for-the-setup`, `update-not-installed-not-reported`, `update-not-restarted` |
+| Installer | `installer-no-installing-mutex`, `installer-relaunches-after-install-on-exit`, `installer-starts-torfox-that-never-closed` |
 | What's new | `whats-new-after-any-version-change`, `whats-new-always-says-checked` |
 | Memory | `memory-names-private-tabs`, `memory-trusts-renderer-pids`, `memory-query-from-the-toolbar` |
-| Tor | `tor-placeholder-only-bound`, `tor-placeholder-port-9`, `tor-retired-context-keeps-proxy` (anchor updated) |
+| Tor | `tor-placeholder-only-bound`, `tor-placeholder-port-9`, `tor-retired-context-keeps-proxy` |
 | JavaScript optimizer | `js-optimizer-on-in-tor-windows`, `js-optimizer-setting-ignored-by-open-windows` |
 | Release logging | `cmdline-release-log-file-opened` |
+| Clear on exit (older, re-anchored) | `clear-on-exit-skipped` |
 
-They have **not been run**. Each one starts TorFox windows on the desktop many times, and the run was
-stopped at the user's request while the computer was in use. Until they run, Stage 10's rows in
-`FEATURE_STATUS.md` carry no **M**. To run them, with no one using the desktop:
+Two older mutations had stopped matching the code after Stage 10 edits and were re-anchored first
+(`clear-on-exit-skipped`, `update-runs-while-being-installed`); one, `update-installed-while-windows-shuts-down`,
+left a variable unused (a build error) and now keeps it.
+
+**One survived the first run: `update-not-restarted`.** It removes the setup's `[Run]` entry that starts
+TorFox after *Relaunch to update*, and `test_update_waits_for_torfox_then_installs_and_restarts_it` still
+passed, because the fallback added for review finding 5 (`DeinitializeSetup`) started TorFox instead.
+Two changes:
+- The setup now logs which of its two ways started TorFox, and the test requires the `[Run]` entry. The
+  mutation is now caught.
+- Looking at the fallback found a bug: when the setup gave up because TorFox never closed, it still
+  "started" TorFox, which only opened a second window in the TorFox that was still running. It now
+  checks first and logs that it did not. `test_update_gives_up_when_torfox_stays_open` checks the window
+  count, and the new mutation `installer-starts-torfox-that-never-closed` is caught.
+
+**The user's own data was touched by the first run.** The installer checks start the installed TorFox,
+a release build that uses the real data folder (`%LOCALAPPDATA%\TorFox`). The tests left an existing
+folder in place, so three mutation checks ran TorFox with the user's profile: four visits to the tests'
+`127.0.0.1` pages were added to its history, and Chromium's own files (preferences, caches) changed as
+they do on any start. Settings, bookmarks and saved tabs were not changed. The four history entries were
+removed (the database was backed up first, and its integrity check passes). To stop this happening again,
+`test_release_win.py` and `test_installer_win.py` now set the user's folder aside for the whole module
+and put it back afterwards (`tests/platform/real_profile.py`), and fail if any of its files changed. The
+next full platform run restored it byte for byte.
+
+To run the mutations, with no one using the desktop (they start TorFox windows many times):
 
 ```
 python -W ignore tests/e2e/run_mutations.py <names>
 ```
 
 Run this in a separate worktree, as [`TESTING.md`](TESTING.md) describes.
-
-Checked without running anything: each of the 148 mutations' edits still matches the code exactly once.
-One older mutation, `clear-on-exit-skipped`, no longer matched after a Stage 10 edit to the comment it was
-anchored on. It now anchors on the new comment, and `update-runs-while-being-installed` on the first of
-the two mutex checks.
 
 ## 6. Not verified
 - **macOS:** none of the new platform code (`ReservedLoopbackPort`, `TorFoxProcesses` with `libproc`) has

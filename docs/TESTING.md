@@ -122,7 +122,10 @@ These run the **release** build in `out/dev` (or `TORFOX_RELEASE_EXE`) the way a
 - that no log file is created, not even an empty one (Chromium's, CEF's or TorFox's test log), even with
   logging switches, and nothing appears next to `TorFox.exe`.
 
-They use the real `%LOCALAPPDATA%\TorFox` folder and delete it afterwards only if the test created it.
+They use the per-user data folder `%LOCALAPPDATA%\TorFox`. Your own folder is set aside (renamed to
+`TorFox.platform-test-aside`) while each test module runs and put back afterwards, and the run fails
+if any file in it changed (`tests/platform/real_profile.py`). A run that was killed leaves it aside; the
+next run puts it back first, keeping whatever it finds in its place as `TorFox.platform-test-leftover-*`.
 They are skipped while another TorFox is running, because a second launch would only open a window in the running one.
 
 `test_installer_win.py` installs the Windows setup and uninstalls it again. Build the setups first:
@@ -140,9 +143,8 @@ setups install for the current user only, and neither test needs administrator r
   `%LOCALAPPDATA%\Programs\TorFox`. It is skipped if TorFox is already installed there for this user
   (or its Start-menu shortcut exists), so a real installation is never touched.
 
-Both start the installed TorFox, a release build, with the real profile `%LOCALAPPDATA%\TorFox`. A
-profile the test did not create is used and left in place. To keep your own browsing data out of the
-tests, move that folder aside first and put it back afterwards.
+Both start the installed TorFox, a release build, with the data folder `%LOCALAPPDATA%\TorFox`; your
+own folder is set aside meanwhile, as above.
 
 Each variant checks Setup's log (non-administrative install mode, under `HKEY_CURRENT_USER`), the
 installed files against the setup's allowlist, the shortcut, the uninstall entry,

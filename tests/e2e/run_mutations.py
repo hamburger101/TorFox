@@ -653,6 +653,8 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         (ISS, "  while TorFoxRunning(Dir) do\n  begin\n    if UninstallSilent then",
          "  while False do\n  begin\n    if UninstallSilent then"),
     ], [INST + "test_setup_and_uninstall_refuse_while_torfox_is_open"]),
+    # The [Run] entry restarts TorFox after "Relaunch to update" (the test
+    # tells it from the fallback in DeinitializeSetup by the setup's log).
     "update-not-restarted": ([
         (ISS, 'Filename: "{app}\\TorFox.exe"; Flags: nowait runasoriginaluser; Check: StartAfterUpdate; '
               'BeforeInstall: UpdateFinished\n', ""),
@@ -702,7 +704,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
     # Never start the installer while Windows ends the session.
     "update-installed-while-windows-shuts-down": ([
         (APP, "      if (fatal_ || ending) {\n        test_log::Event(\"update_install_skipped\"",
-         "      if (fatal_) {\n        test_log::Event(\"update_install_skipped\""),
+         "      if (fatal_ || (ending && false)) {\n        test_log::Event(\"update_install_skipped\""),
     ], [AUTO + ".test_an_update_is_not_installed_while_windows_shuts_down"]),
     # Private and Tor windows are not closed for a relaunch without asking.
     "update-relaunch-closes-private-windows-unasked": ([
@@ -726,6 +728,12 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str, str]], list[str]]] = {
         (ISS, "    InstallingHandle := CreateMutex(0, False, InstallingMutex);\n", ""),
     ], [INST + "test_torfox_opened_during_an_update_starts_once_it_has_finished"]),
     # After TorFox closed with an update waiting, the setup must not start it.
+    # A setup that gave up because TorFox never closed must not start it
+    # again (another window would open in the running TorFox).
+    "installer-starts-torfox-that-never-closed": ([
+        (ISS, "    if CheckForMutexes(RunningMutex) then\n    begin\n      Log('Update: not starting",
+         "    if False then\n    begin\n      Log('Update: not starting"),
+    ], [INST + "test_update_gives_up_when_torfox_stays_open"]),
     "installer-relaunches-after-install-on-exit": ([
         (ISS, "  Result := IsUpdate and (not HasParam('/TORFOXNORELAUNCH') or\n",
          "  Result := IsUpdate and (True or\n"),

@@ -6,9 +6,10 @@
 command-line switch can weaken TorFox.
 
 These run the release build (no test hooks: no DevTools, no test log) the
-way a user would, so they use the real per-user data folder,
-%LOCALAPPDATA%\\TorFox. If that folder did not exist before a test, the test
-removes it afterwards; an existing folder (a real profile) is left alone.
+way a user would, so they use the per-user data folder,
+%LOCALAPPDATA%\\TorFox. The user's own folder is set aside while they run and
+put back afterwards, checked byte for byte (real_profile.py); a test removes
+the data it created.
 They are skipped while another TorFox is running, because a second launch
 only opens a window in the running one.
 
@@ -35,6 +36,20 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 if sys.platform == "win32":
     import win_process_inspect as wpi
     from harness import WM_CLOSE, Fixture, _top_level_windows, _user32, wait_for
+
+    import real_profile
+
+
+def setUpModule() -> None:
+    # The user's own data folder is set aside while these tests run.
+    if sys.platform == "win32":
+        real_profile.set_aside()
+
+
+def tearDownModule() -> None:
+    if sys.platform == "win32":
+        real_profile.restore()
+
 
 DEFAULT_EXE = REPO / "out" / "dev" / "src" / "browser" / "Release" / "TorFox.exe"
 DEBUG_PORT = 9333

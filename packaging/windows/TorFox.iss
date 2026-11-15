@@ -183,6 +183,7 @@ begin
   ReleaseInstalling;
   RegDeleteValue(HKCU, TorFoxKey, StartRequestValue);
   TorFoxStarted := True;
+  Log('Update: starting TorFox');
 end;
 
 function InitializeSetup: Boolean;
@@ -222,10 +223,18 @@ begin
   // request came after its [Run] entry was checked), but should have: after
   // "Relaunch to update", or because TorFox was opened while the update was
   // being installed. Start it now, installed or not; a TorFox that was not
-  // updated says so when it starts (update::CheckHandoff).
+  // updated says so when it starts (update::CheckHandoff). Not while
+  // TorFox is still running (it never closed, so the update did not
+  // install): starting it would only open another window in it.
   if not TorFoxStarted and StartAfterUpdate then
   begin
     RegDeleteValue(HKCU, TorFoxKey, StartRequestValue);
+    if CheckForMutexes(RunningMutex) then
+    begin
+      Log('Update: not starting TorFox, it is still running');
+      Exit;
+    end;
+    Log('Update: starting TorFox after the setup stopped early');
     try
       ExecAsOriginalUser(ExpandConstant('{app}\TorFox.exe'), '', '', SW_SHOWNORMAL,
                          ewNoWait, Code);
