@@ -142,8 +142,8 @@ const char* UpdatePlatform();
 // Hands a downloaded update over, after TorFox has shut down. The file is
 // opened so that it cannot be changed or replaced, hashed again through that
 // handle and only then started, while the handle is still held.
-//   Windows: runs the installer (it asks for administrator rights, waits for
-//            TorFox to exit and installs silently).
+//   Windows: runs the installer (for this user only, with no UAC prompt; it
+//            waits for TorFox to exit, installs silently and starts TorFox).
 //   macOS:   opens the disk image in Finder; the user copies TorFox to
 //            Applications (TorFox does not replace itself on macOS).
 bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, uint64_t size,

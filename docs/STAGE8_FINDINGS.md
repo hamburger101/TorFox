@@ -1,5 +1,9 @@
 # Stage 8 findings: installer, DMG and release workflow
 
+> **Changed later:** the Windows setup now installs for the current user only, without administrator
+> rights ([`STAGE9_FINDINGS.md`](STAGE9_FINDINGS.md) §2.1). What follows describes the per-machine setup
+> as Stage 8 built it.
+
 Stage 8 adds the Windows setup, the macOS disk image, and the workflow that builds, signs and publishes
 releases. It also connects the Stage 7 updater to the real Windows setup. Results:
 

@@ -2,7 +2,9 @@
 ; License, v. 2.0. If a copy of the MPL was not distributed with this
 ; file, You can obtain one at https://mozilla.org/MPL/2.0/.
 ;
-; TorFox for Windows: the per-machine installer (Inno Setup 7).
+; TorFox for Windows: the installer (Inno Setup 7). It installs TorFox for the
+; current user only, in %LOCALAPPDATA%\Programs\TorFox, and never asks for
+; administrator rights, neither to install nor for updates.
 ;
 ; Built by scripts/package_windows.py, which stages the release build and
 ; defines:
@@ -10,13 +12,14 @@
 ;   SourceDir    the staged program folder
 ;   OutputDir    where the setup is written
 ;   Compression  optional; "lzma2/max" when not given
-;   TestPerUser  optional, installer tests only: installs for the current user
-;                under another AppId and name. Such a setup is never published.
+;   TestPerUser  optional, installer tests only: the same setup under another
+;                AppId and name, so that a test never touches a real
+;                installation. Such a setup is never published.
 ;
 ; Updates: TorFox runs the setup after it has shut down with
 ;   /SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE
 ; The setup waits for TorFox to exit (PrepareToInstall), installs, and starts
-; TorFox again as the user who ran it (not elevated).
+; TorFox again.
 
 #ifndef AppVersion
   #error AppVersion is not defined (build with scripts/package_windows.py)
@@ -64,11 +67,9 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-#ifdef TestPerUser
+; For the current user only: {autopf} is %LOCALAPPDATA%\Programs, the
+; shortcuts and the uninstall entry are the user's own (HKEY_CURRENT_USER).
 PrivilegesRequired=lowest
-#else
-PrivilegesRequired=admin
-#endif
 WizardStyle=modern
 ; Files still in use after TorFox has closed (a slow child process) are
 ; found by the Restart Manager; TorFox itself is waited for in [Code].
@@ -98,7 +99,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\TorFox.exe"; Tasks: desktop
 
 [Run]
 ; An interactive install offers to start TorFox; an update starts it again.
-; Both run it as the user who started Setup, never elevated.
+; Setup never asks for elevation, so TorFox runs as the user who started
+; Setup (runasoriginaluser stays as a second guard).
 Filename: "{app}\TorFox.exe"; Description: "{cm:LaunchProgram,TorFox}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{app}\TorFox.exe"; Flags: nowait runasoriginaluser; Check: IsUpdate
 

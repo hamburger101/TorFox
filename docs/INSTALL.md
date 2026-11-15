@@ -14,8 +14,9 @@ signature (see [`UPDATING.md`](UPDATING.md)), which is independent of those cert
 2. Optionally check it: in PowerShell, `Get-FileHash .\TorFox-<version>-win-x64-setup.exe` must print the
    `sha256` listed for `windows-x64` in that release's `manifest.json`.
 3. Run it. Windows SmartScreen says *Windows protected your PC* because the file has no certificate:
-   choose **More info → Run anyway**. Then accept the User Account Control prompt: TorFox installs for all
-   users in `C:\Program Files\TorFox`, where ordinary programs cannot change its files.
+   choose **More info → Run anyway**. TorFox installs for you only, in
+   `%LOCALAPPDATA%\Programs\TorFox`. It needs no administrator rights, so there is no User Account Control
+   prompt, either now or for updates.
 4. The setup adds TorFox to the Start menu (and, if ticked, the desktop) and an entry in
    **Settings → Apps → Installed apps**.
 
@@ -27,8 +28,14 @@ TorFox is open. It removes the program files, shortcuts and the uninstall entry.
 again. Delete that folder yourself to remove it. Downloaded files stay in your Downloads folder.
 
 **Updates:** TorFox downloads and checks the new setup, then asks you to restart it. The setup waits up
-to a minute for TorFox to close, installs (with one UAC prompt) and starts TorFox again. If TorFox is
-still open after a minute, the setup stops without changing anything.
+to a minute for TorFox to close, installs and starts TorFox again, with no prompt. If TorFox is still
+open after a minute, the setup stops without changing anything.
+
+**Installed an earlier test build for all users?** Setups from before this change installed TorFox in
+`C:\Program Files\TorFox`. The new setup does not replace that copy; it installs a second one for you.
+Uninstall the old one from **Settings → Apps → Installed apps** (Windows asks for administrator rights this
+one last time, because that copy was installed with them). Both copies use the same profile, so nothing is
+lost.
 
 ## macOS (Apple silicon and Intel)
 1. Download the disk image for your Mac: `TorFox-<version>-mac-arm64.dmg` (Apple silicon: M1 and later)
@@ -58,8 +65,9 @@ See the README.
 ## What is verified
 - **Windows:** the setup's contents, shortcuts, uninstall, the installed TorFox running sandboxed, and an
   update that waits for TorFox and restarts it are tested automatically
-  (`tests/platform/test_installer_win.py`). These tests pass with a per-user test build of the setup.
-  The real per-machine setup needs administrator rights and is tested on CI, which has not run yet.
+  (`tests/platform/test_installer_win.py`), with the real setup in its default folder and with a test
+  build of it in a temporary folder. Both run without administrator rights. A test also checks the
+  setup's own log: it installs in non-administrative mode, under `HKEY_CURRENT_USER`.
 - **macOS:** CI is set up to make the disk image, mount it, check the app's ad-hoc signature, copy the app
   out and start it. This has not run yet. The Open Anyway step and drag-to-Applications cannot be
   automated and are not tested.

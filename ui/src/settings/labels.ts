@@ -62,7 +62,7 @@ export const SECTIONS: Record<string, SectionLabel> = {
       "update only if the release's signature verifies with the key built into this copy of " +
       "TorFox, the release is newer than this version, and the downloaded file has exactly the " +
       "size and SHA-256 the signed release lists. On Windows the installer starts when TorFox " +
-      "closes and asks for administrator rights. On macOS TorFox opens the checked disk image " +
+      "closes, installs the update and starts TorFox again. On macOS TorFox opens the checked disk image " +
       "and you copy TorFox to Applications yourself.",
   },
   about: { title: "About TorFox", icon: icons.info },

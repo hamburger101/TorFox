@@ -7,7 +7,7 @@ also builds the address-bar suggestions that Stage 6 left out (§5). Results:
 
 - **Unit tests:** 181 tests: 180 pass and 1 is skipped (`ClearData.NeverFollowsLinks`, which needs the right to make symbolic links; CI has it).
 - **End-to-end tests (Windows):** 246 tests: 243 pass and 3 are skipped (the live tests, which need the Tor network: `TORFOX_LIVE_TESTS=1`).
-- **Platform tests (Windows):** release build 3 of 3 pass; per-user installer 5 of 5 pass, including the update over a stale `dxil.dll`. The 5 per-machine installer tests are skipped here: they need administrator rights, which CI has.
+- **Platform tests (Windows):** release build 3 of 3 pass; installer 10 of 10 pass without administrator rights: the real setup and its test build, 5 tests each, including the update over a stale `dxil.dll` (§2.1).
 - **Release tooling tests:** 6 of 6 pass.
 - **Mutation check:** 19 of 19 detected (§4).
 
@@ -119,13 +119,26 @@ own. Tor windows never looked anything up.
   windows. Tor windows are not covered.
 
 ## 2. Remaining risks
-### 2.1 The update's elevated stage
-TorFox holds the checked setup open until it starts it (§1.4). Inno's setup then unpacks its second stage
-into the user's temporary folder, and only that stage asks for administrator rights. A program already
-running as the user could change it in between, and the user would approve its UAC prompt. Windows does
-not treat this as a security boundary, but it is a way from "runs as you" to "runs as administrator" that
-TorFox's own check does not close. Closing it needs a helper that runs as administrator and checks the
-setup itself. TorFox does not have one. See [`SECURITY.md`](SECURITY.md).
+### 2.1 Installing for the current user (changed after the review)
+The review found that an update's elevated stage could be tampered with. TorFox holds the checked setup
+open until it starts it (§1.4), but Inno's setup then unpacks its second stage into the user's temporary
+folder, and only that stage asked for administrator rights. A program already running as the user could
+change it in between, and the user would approve its UAC prompt: a way from "runs as you" to "runs as
+administrator".
+
+At the maintainer's request, the setup now installs for the current user only
+(`PrivilegesRequired=lowest`, in `%LOCALAPPDATA%\Programs\TorFox`), and never asks for administrator
+rights, neither to install nor to update. That removes the elevated stage, and with it this way to
+administrator rights. The cost is that the program files are now in the user's own folder, so any program
+running as that user can change them, as with Chrome's and Firefox's per-user installs. Such a program
+could already read and change TorFox's profile, so this widens what it can do, but not who can do it.
+Other standard users still cannot change the files.
+
+`tests/platform/test_installer_win.py` now runs the real setup in its default folder
+(`ReleaseSetupInstallerTest`) as well as the test build in a temporary folder. Both pass without
+administrator rights, and each test reads Setup's log to check that it installed in non-administrative mode,
+under `HKEY_CURRENT_USER`. An all-users copy from an earlier build is not replaced. The new setup installs
+alongside it, and [`INSTALL.md`](INSTALL.md) says how to remove the old one.
 
 ### 2.2 Others
 - **Withheld updates.** Signed releases do not expire, so someone who can answer for GitHub can hide newer

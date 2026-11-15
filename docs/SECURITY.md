@@ -21,17 +21,16 @@ vulnerability. Include the TorFox version, the platform, and the steps to reprod
 | Tampered, downgraded or replayed updates | A minisign (Ed25519) signature on the release manifest with the key compiled into TorFox; strictly newer versions and no release older than one already seen; size and SHA-256 of the file after download and again before install; GitHub's hosts only, for every redirect ([`UPDATING.md`](UPDATING.md)) | Verified on Windows against a fake GitHub. Builds have no release key yet, so they never look for updates |
 | Trackers, third-party cookies, HTTP downgrade | EasyPrivacy domain list, third-party cookie blocking, HTTPS-first with a question before http | Verified on Windows; tracker WebSockets and http form posts are not covered ([`STAGE4_FINDINGS.md`](STAGE4_FINDINGS.md) §6) |
 | Sites using the camera, microphone or clipboard, or opening other apps | Denied by default; *Ask* asks every time; only checked `mailto:`/`tel:` links reach the OS, after a click and a question | Verified on Windows, except the final hand-off to the mail or phone app |
-| Other programs changing TorFox's installed files | Windows: installed for all users in Program Files, which needs administrator rights to change; the setup and uninstaller refuse while TorFox runs, and an update restarts TorFox as the user who started it, not elevated | Per-user test setup verified on Windows (except that the restarted TorFox is not elevated, which no test can show here); the per-machine setup is tested on CI only ([`STAGE8_FINDINGS.md`](STAGE8_FINDINGS.md)). On macOS the app is wherever the user copies it |
+| Other users' programs changing TorFox's installed files | Windows: installed for the current user in `%LOCALAPPDATA%\Programs\TorFox`, a folder Windows lets only that user (and administrators) change; the setup and uninstaller refuse while TorFox runs | Both setups tested on Windows without administrator rights; the folder's permissions are Windows' own and not tested by TorFox. Programs running as you can change these files (below). On macOS the app is wherever the user copies it |
 | Browsing traces left on disk | Clear on exit (after shutdown and again at the next start); Chromium's per-site scores always erased | Verified on Windows |
 
 ## What TorFox does not defend against
 - **Malware on your machine.** Anything running under your account (or as administrator) can read
-  TorFox's profile and change its files. That includes the update: TorFox checks the setup and starts it
-  by its real path while it still holds the file open, but the setup then unpacks itself into your
-  temporary folder and only asks Windows for administrator rights after that. A program running as you
-  could change it in between, and you would then approve its UAC prompt. Closing this needs an update
-  helper that runs as administrator, which TorFox does not have ([`STAGE9_FINDINGS.md`](STAGE9_FINDINGS.md)
-  §2.1).
+  TorFox's profile and change its files. TorFox installs for you only, without administrator rights, so
+  its program files are in your own folder: such a program could replace TorFox or the bundled tor, as it
+  could with any per-user install (Chrome's and Firefox's included). Installing for all users would stop
+  that, but every install and update would then need administrator rights
+  ([`STAGE9_FINDINGS.md`](STAGE9_FINDINGS.md) §2.1).
 - **Withheld updates.** A signed release does not expire. Someone who can answer for GitHub to TorFox
   (for example with a certificate your computer trusts) cannot make it install anything unsigned or older,
   but can keep showing it the last release it saw, so it never learns of newer ones.

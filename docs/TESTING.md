@@ -123,17 +123,23 @@ They are skipped while another TorFox is running, because a second launch would 
 ```
 python scripts/package_windows.py --test-peruser --compression none
 python scripts/package_windows.py --test-peruser --compression none --next-patch
-python scripts/package_windows.py --compression none                 # per machine
+python scripts/package_windows.py --compression none                 # the real setup
 python scripts/package_windows.py --compression none --next-patch
 ```
-`--next-patch` builds the same files labelled with the next patch version, for the update test.
-- **Per user** (`PerUserInstallerTest`): a test build of the setup with its own name and uninstall entry,
-  installed into a temporary folder for the current user. It needs no administrator rights.
-- **Per machine** (`PerMachineInstallerTest`): the real setup, into Program Files. It runs only with
-  administrator rights (on CI) and is skipped otherwise. It is skipped too if TorFox is already
-  installed on this computer, so a real installation is never touched.
+`--next-patch` builds the same files labelled with the next patch version, for the update test. Both
+setups install for the current user only, and neither test needs administrator rights.
+- **Test build** (`PerUserInstallerTest`): the setup under its own name and uninstall entry, installed into
+  a temporary folder. It never touches a real installation.
+- **Real setup** (`ReleaseSetupInstallerTest`): installed where it installs by default,
+  `%LOCALAPPDATA%\Programs\TorFox`. It is skipped if TorFox is already installed there for this user
+  (or its Start-menu shortcut exists), so a real installation is never touched.
 
-Each variant checks the installed files against the setup's allowlist, the shortcut, the uninstall entry,
+Both start the installed TorFox, a release build, with the real profile `%LOCALAPPDATA%\TorFox`. A
+profile the test did not create is used and left in place. To keep your own browsing data out of the
+tests, move that folder aside first and put it back afterwards.
+
+Each variant checks Setup's log (non-administrative install mode, under `HKEY_CURRENT_USER`), the
+installed files against the setup's allowlist, the shortcut, the uninstall entry,
 that the installed TorFox runs sandboxed, the update path (the setup is started with the arguments TorFox's
 updater uses: it waits for TorFox to close, installs and starts TorFox again, or gives up after a minute
 without changing anything) and that the setup and uninstaller refuse while TorFox is open.
@@ -170,7 +176,7 @@ a mutation of its own.
 ## Continuous integration
 `.github/workflows/ci.yml`:
 - **Windows:** runs everything above, except mutations, on every push to `main` and on pull requests,
-  including both installer variants (CI runs as administrator).
+  including both installer variants.
 - **macOS:** builds the arm64 and x86_64 bundles, runs the unit tests, checks the bundle layout and makes,
   mounts and starts the DMG, on pull requests and manual runs only. The macOS E2E and sandbox tests haven't
   been written yet.

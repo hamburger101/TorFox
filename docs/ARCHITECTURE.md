@@ -247,15 +247,17 @@ User-facing behaviour and limits: [`UPDATING.md`](UPDATING.md). Making a release
   - *Install*: the file is hashed again, all windows close, and after `CefShutdown`
     `platform::LaunchUpdate` hashes it once more. On Windows it holds the file open without write sharing
     while it hashes it and starts the installer
-    (`/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE`, UAC). On macOS it opens the DMG.
+    (`/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE`, for this user, with no UAC prompt). On macOS it
+    opens the DMG.
 - There is no OS code-signature check: TorFox has no code-signing certificates (it is not distributed
   through app stores).
 
 ## Security assumptions
 - **Chromium/CEF security:** Chromium's sandbox and site isolation are TorFox's primary defence against
   malicious content. TorFox is only as current as the CEF build it ships.
-- **Operating system:** the OS, the user account and the install directory (Program Files, per-machine) are
-  not compromised. TorFox does not defend against local malware running with the user's privileges.
+- **Operating system:** the OS and the user account are not compromised. On Windows TorFox is installed
+  for the current user (`%LOCALAPPDATA%\Programs\TorFox`), so any program running as that user can
+  change its files. TorFox does not defend against local malware running with the user's privileges.
 - **Tor:** Tor provides network-level anonymity for traffic routed through it. TorFox does not provide
   Tor Browser's fingerprinting resistance; sites can still fingerprint the browser.
 - **Updates:** update integrity rests on the secrecy of the minisign key, held only as a GitHub Actions

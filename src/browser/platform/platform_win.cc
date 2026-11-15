@@ -497,8 +497,8 @@ bool LaunchUpdate(const std::filesystem::path& file, const std::string& sha256, 
     *error = "the update's location could not be checked";
     return false;
   }
-  // The setup asks for administrator rights itself (UAC) and waits for
-  // TorFox to exit (MarkRunning).
+  // The setup installs for this user only, so it runs without a UAC prompt,
+  // and waits for TorFox to exit (MarkRunning).
   SHELLEXECUTEINFOW info = {};
   info.cbSize = sizeof info;
   info.fMask = SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;

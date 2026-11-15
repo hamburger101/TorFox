@@ -4,15 +4,17 @@
 
 """The Windows installer (packaging/windows/TorFox.iss), installed for real.
 
-PerUserInstallerTest uses the per-user test build of the setup
-(scripts/package_windows.py --test-peruser): the same script, installed for
-the current user under another name and AppId, so it needs no administrator
-rights. PerMachineInstallerTest uses the real setup, installed for all users
-in Program Files; it needs administrator rights (GitHub's Windows runners
-have them) and is skipped without them, or when TorFox is already installed.
+TorFox's setup installs for the current user only, without administrator
+rights. PerUserInstallerTest uses the test build of the setup
+(scripts/package_windows.py --test-peruser): the same script under another
+name and AppId, installed into a temporary folder, so it never touches a real
+installation. ReleaseSetupInstallerTest uses the real setup, installed where
+it installs by default (%LOCALAPPDATA%\\Programs\\TorFox); it is skipped when
+TorFox is already installed there for this user.
 
-Both check: what is installed (and what is not), the shortcut and the
-uninstall entry; that the installed TorFox runs sandboxed; that an update
+Both check: that the setup runs without administrator rights; what is
+installed (and what is not), the shortcut and the uninstall entry; that the
+installed TorFox runs sandboxed; that an update
 (/TORFOXUPDATE) waits for TorFox to close, installs and starts TorFox again;
 that Setup and Uninstall refuse to run while TorFox is open; and that
 uninstalling removes the program but keeps the user's data.
@@ -30,7 +32,6 @@ Needs the setups made by scripts/package_windows.py, in out/dist:
 
 from __future__ import annotations
 
-import ctypes
 import json
 import os
 import pathlib
@@ -73,13 +74,6 @@ def next_version(v: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
-def is_admin() -> bool:
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except OSError:
-        return False
-
-
 def user_data_dir() -> pathlib.Path:
     return pathlib.Path(os.environ["LOCALAPPDATA"]) / "TorFox"
 
@@ -101,23 +95,22 @@ def processes_in(folder: pathlib.Path) -> list[dict]:
 
 
 class Variant:
-    def __init__(self, *, per_user: bool) -> None:
-        self.per_user = per_user
-        suffix = "-peruser-test" if per_user else ""
+    def __init__(self, *, test_build: bool) -> None:
+        self.test_build = test_build
+        suffix = "-peruser-test" if test_build else ""
         self.version = project_version()
         self.update_version = next_version(self.version)
         self.setup = SETUP_DIR / f"TorFox-{self.version}-win-x64-setup{suffix}.exe"
         self.update_setup = SETUP_DIR / f"TorFox-{self.update_version}-win-x64-setup{suffix}.exe"
-        if per_user:
+        if test_build:
             self.name = "TorFox Installer Test"
             self.app_id = "{a843f419-af80-4bad-b40a-b971e3ea64b1}_is1"
-            self.root = winreg.HKEY_CURRENT_USER
-            self.start_menu = pathlib.Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs"
         else:
             self.name = "TorFox"
             self.app_id = "{96a198f9-9688-44af-aa68-192fb7cadebc}_is1"
-            self.root = winreg.HKEY_LOCAL_MACHINE
-            self.start_menu = pathlib.Path(os.environ["PROGRAMDATA"]) / "Microsoft/Windows/Start Menu/Programs"
+        # Both install for the current user only.
+        self.root = winreg.HKEY_CURRENT_USER
+        self.start_menu = pathlib.Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs"
 
     def uninstall_entry(self) -> dict | None:
         path = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{self.app_id}"
@@ -204,7 +197,7 @@ class InstallerTests:
                 wait_for(lambda: self.variant.uninstall_entry() is None, 60, "the uninstall")
             except TimeoutError:
                 pass
-        if self.variant.per_user:
+        if self.variant.test_build or self.created_app:
             shutil.rmtree(self.app, ignore_errors=True)
             # A failed uninstall of the test build must not skip the next tests.
             if self.variant.uninstall_entry() is not None:
@@ -224,7 +217,7 @@ class InstallerTests:
     def run_setup(self, setup: pathlib.Path, args: list[str], timeout: float = 600) -> int:
         self.last_log = self.log_path(setup)
         cmd = [str(setup), *args, f"/LOG={self.last_log}"]
-        if self.variant.per_user:
+        if self.variant.test_build:
             cmd.append(f"/DIR={self.app}")
         return subprocess.run(cmd, timeout=timeout).returncode
 
@@ -236,6 +229,10 @@ class InstallerTests:
 
     def install(self) -> None:
         self.assertEqual(self.run_setup(self.variant.setup, QUIET_ARGS), 0)
+        # For this user only, never as administrator.
+        log = self.last_log_text()
+        self.assertIn("Administrative install mode: No", log)
+        self.assertIn("Install mode root key: HKEY_CURRENT_USER", log)
         self.assertEqual(self.variant.uninstall_entry()["DisplayVersion"], self.variant.version)
 
     def uninstall(self, check: bool = True) -> int:
@@ -369,25 +366,30 @@ class InstallerTests:
 class PerUserInstallerTest(InstallerTests, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.variant = Variant(per_user=True)
+        cls.variant = Variant(test_build=True)
 
     def setUp(self) -> None:
         parent = pathlib.Path(tempfile.mkdtemp(prefix="torfox-install-test-"))
         self.addCleanup(shutil.rmtree, parent, True)
         self.app = parent / "TorFox"
+        self.created_app = True
         super().setUp()
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows only")
-class PerMachineInstallerTest(InstallerTests, unittest.TestCase):
+class ReleaseSetupInstallerTest(InstallerTests, unittest.TestCase):
+    """The real setup, where it installs by default."""
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.variant = Variant(per_user=False)
+        cls.variant = Variant(test_build=False)
 
     def setUp(self) -> None:
-        if not is_admin():
-            self.skipTest("installing for all users needs administrator rights (CI has them)")
-        self.app = pathlib.Path(os.environ["ProgramW6432"]) / "TorFox"
+        self.app = pathlib.Path(os.environ["LOCALAPPDATA"]) / "Programs" / "TorFox"
+        shortcut = self.variant.start_menu / f"{self.variant.name}.lnk"
+        if self.app.exists() or shortcut.exists():
+            self.skipTest(f"{self.app} or its shortcut exists; a real installation is left alone")
+        self.created_app = True
         super().setUp()
 
 

@@ -105,8 +105,9 @@ jobs:
           python -I scripts/package_windows.py --compression none
           python -I scripts/package_windows.py --compression none --next-patch
 
-      # Includes the installer tests: the per-user setup, and the real one
-      # installed for all users (the runner has administrator rights).
+      # Includes the installer tests: the test build of the setup in a
+      # temporary folder, and the real one where it installs by default
+      # (both for the current user, without administrator rights).
       - name: Release-build platform and installer tests
         run: python -m unittest discover -v -s tests/platform -p "test_*_win.py"
 

@@ -186,7 +186,7 @@ export class TorFoxSettings extends LitElement {
         body = html`<div class="row-desc">The download matches the signed release.
           ${mac
             ? "TorFox will close and open the disk image; copy TorFox to Applications."
-            : "TorFox will close and start the installer, which asks for administrator rights."}</div>`;
+            : "TorFox will close, install the update and start again."}</div>`;
         action = html`<button class="button primary" id="update-install"
           @click=${() => this.updateAction("update.install")}>${mac ? "Close and open" : "Restart to update"}</button>`;
         break;

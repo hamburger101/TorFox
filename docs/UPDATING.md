@@ -56,8 +56,8 @@ emptied each time TorFox starts.
 Release notes come from the signed manifest and are shown as plain text before installing.
 
 **Windows.** *Install and restart* closes all windows. After TorFox has shut down, it starts the checked
-installer (`/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE`). TorFox is installed for all users in
-Program Files, so Windows asks for administrator permission (UAC). If the user declines, nothing changes.
+installer (`/SILENT /SUPPRESSMSGBOXES /NORESTART /TORFOXUPDATE`). TorFox is installed for the current
+user only, so the installer needs no administrator rights and Windows shows no prompt.
 The installer's behaviour is described in [`INSTALL.md`](INSTALL.md).
 
 **macOS.** *Install and restart* closes all windows. After TorFox has shut down, it opens the checked DMG.

@@ -37,8 +37,9 @@ official Tor client.
   signature before it is installed ([`docs/UPDATING.md`](docs/UPDATING.md)).
 
 ## Installing
-See [`docs/INSTALL.md`](docs/INSTALL.md). Files are not signed with Microsoft or Apple certificates, so
-Windows and macOS warn on first install.
+See [`docs/INSTALL.md`](docs/INSTALL.md). On Windows, TorFox installs for you only and never needs
+administrator rights. Files are not signed with Microsoft or Apple certificates, so Windows and macOS warn
+on first install.
 
 ## Repository layout
 | Path | Contents |
