@@ -7,8 +7,10 @@ checks, when it connects, and what happens on Windows and macOS. Maintainers: se
 ## When a build can update
 A build looks for updates only when `config/release.json` names a repository **and** contains the release
 public key. Both are compiled in. The repository's own `config/release.json` has the repository
-(`hamburger101/TorFox`) but **no public key** until the maintainer makes one (see `RELEASING.md`), so
-current builds never contact GitHub for updates. *Settings → Updates* says so ("not configured").
+(`hamburger101/TorFox`) and the release public key (made on 2026-11-15, see `RELEASING.md`), so builds
+made from it update from the repository's GitHub releases, on any computer. Builds made without a key, and
+test builds (`TORFOX_TEST_HOOKS`), never contact GitHub for updates; *Settings → Updates* says so ("not
+available in this build").
 
 ## What the user controls (Settings → Updates)
 | Setting | Default | Effect |

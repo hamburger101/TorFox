@@ -84,7 +84,14 @@ endif()
 if(NOT TORFOX_UPDATE_PUBLIC_KEY STREQUAL "" AND NOT TORFOX_UPDATE_PUBLIC_KEY MATCHES "^RW[A-Za-z0-9+/]+$")
   message(FATAL_ERROR "config/release.json: update_public_key must be the RW... line of a minisign public key.")
 endif()
-if(TORFOX_UPDATE_PUBLIC_KEY STREQUAL "" OR TORFOX_UPDATE_REPOSITORY STREQUAL "")
+if(TORFOX_TEST_HOOKS)
+  # Test builds never look for real updates: the update tests point them at
+  # a fake GitHub with a throw-away key (--torfox-test-update-config), and no
+  # other test may reach the real one.
+  set(TORFOX_UPDATE_PUBLIC_KEY "")
+  set(TORFOX_UPDATE_REPOSITORY "")
+  message(STATUS "TorFox updates: off in this build (test build)")
+elseif(TORFOX_UPDATE_PUBLIC_KEY STREQUAL "" OR TORFOX_UPDATE_REPOSITORY STREQUAL "")
   message(STATUS "TorFox updates: off in this build (config/release.json has no update_public_key)")
 else()
   message(STATUS "TorFox updates: ${TORFOX_UPDATE_REPOSITORY}, key ${TORFOX_UPDATE_PUBLIC_KEY}")

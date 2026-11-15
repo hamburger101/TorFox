@@ -11,6 +11,7 @@ Tor
 - Built-in or custom bridges for networks that block Tor.
 
 Privacy and security
+- A built-in ad blocker with the EasyList filters, in every window (Tor windows too): ad requests are blocked before they are sent, ad boxes are hidden and ad pop-ups are blocked. The shield next to the address bar shows what was blocked and can allow ads on a site.
 - Trackers and third-party cookies are blocked, pages load over HTTPS first, and pop-ups need a click.
 - Camera, microphone and other permissions are blocked unless you choose to be asked.
 - Downloads can be turned off, or asked about each time.

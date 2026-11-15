@@ -589,8 +589,8 @@ class UpdateTest(UpdateHelpers, unittest.TestCase):
         self.assertEqual(self.requests_for(release["path"]), [])
 
     def test_a_build_without_a_key_never_looks_for_updates(self) -> None:
-        # The test build's own config/release.json has no key (like this
-        # repository's): no fake GitHub configured.
+        # Test builds never compile in the release key (src/browser/
+        # CMakeLists.txt): with no fake GitHub configured, no updates.
         self.publish("9.1.0", 2000000000)
         with self.torfox(configured=False, delay_ms=300) as tf:
             page = self.settings(tf)
