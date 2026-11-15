@@ -230,3 +230,18 @@ back, compared byte for byte) reported that `User Data\chrome_debug.log` differe
 afterwards: no file in it had changed (all older than the test, and identical to a copy made before the
 next runs). The `chrome_debug.log` did not appear again in two further runs. Its cause is not known.
 
+## 10. The first real update (0.1.0 to 0.1.1)
+TorFox 0.1.1 (version and release notes only) was released to check updates end to end, from the real
+GitHub, on Windows 11. A script (not part of the test suite) set the user's profile aside, installed the
+signed 0.1.0 release for the current user, started it and waited:
+
+| Time | What happened |
+|---|---|
+| 18:12:02 | 0.1.0 installed for the current user (no administrator) and started |
+| 18:14:16 | TorFox had found 0.1.1 on GitHub by itself (the first automatic check is two minutes after start), checked its signed manifest and downloaded the setup (156,042,934 bytes) |
+| 18:14:23 | TorFox closed normally; the waiting update started |
+| 18:14:33 | The uninstall entry said 0.1.1 |
+
+The user's profile was then put back, and it was identical, byte for byte, to a copy made before the run.
+Not tried: *Relaunch to update* from the toolbar against the real GitHub (the E2E tests click it against a
+fake GitHub), and macOS.
