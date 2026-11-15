@@ -26,12 +26,12 @@ made with the bundled tor on the real Tor network.
 |---|---|---|---|---|
 | Engine | Sandbox on for every process type, incl. network service (release build) | ✅ | 🟡 | `tests/platform/test_release_win.py`; macOS helpers initialise the sandbox, untested |
 | Engine | Command-line switches can't weaken a release build | ✅ M | ⬜ | `test_command_line_cannot_weaken_torfox`, `CmdlinePolicy.*` |
-| Engine | Site isolation (`--site-per-process`): frames of other sites run in other renderer processes, in normal and private windows | ✅ | 🟡 | `test_site_isolation.py` (with a same-site control); Tor windows not covered |
+| Engine | Site isolation (`--site-per-process`): frames of other sites run in other renderer processes, in normal and private windows | ✅ M | 🟡 | `test_site_isolation.py` (with a same-site control); Tor windows not covered |
 | UI isolation | `torfox://` unreachable from web content (all layers) | ✅ M | ⬜ | `test_isolation.py` (37 tests, several covering many URL variants; each guard layer on its own) |
 | UI isolation | Bridge absent from web pages; every message validated | ✅ M | ⬜ | `test_isolation.py`, `test_bridge.py`, `BridgeValidator.*` |
 | UI isolation | Internal pages: strict CSP, no eval or inline scripts, no frames | ✅ | ⬜ | `test_internal_pages.py` |
 | UI isolation | Internal pages can't reach the web | ✅ M | ⬜ | `InternalPagesStayInternalTest` |
-| UI isolation | The suggestion list can only name a row by position, and no tab can show its page | ✅ | ⬜ | `test_the_list_cannot_do_anything_else`, `NavInput.InternalPages`, `BridgeValidator.*` |
+| UI isolation | The suggestion list can only name a row by position, and no tab can show its page | ✅ M | ⬜ | `test_the_list_cannot_do_anything_else`, `NavInput.InternalPages`, `BridgeValidator.*` |
 | Browsing | Open and close tabs and windows | ✅ | ⬜ | `test_lifecycle.py` |
 | Browsing | New, close, select, reorder (drag, keys), reopen closed tabs; links open next to their opener | ✅ | ⬜ | `test_browsing.py` (tab tests) |
 | Browsing | Back, forward, reload, home; error pages keep the failed URL | ✅ | ⬜ | `test_back_forward_reload_home`, `test_error_page_is_shown_and_not_searched` |
@@ -43,7 +43,7 @@ made with the bundled tor on the real Tor network.
 | Browsing | Clearing history also forgets per-site zoom levels | ✅ M | ⬜ | `test_clearing_history_forgets_zoomed_sites` (Stage 4 findings §3.5) |
 | Browsing | Native menus: app, star, bookmark folders, page context menu (no save/inspect items) | ✅ | 🟡 | `test_app_menu`, `test_web_context_menu_has_no_save_or_inspect`, via the menu test hook |
 | Browsing | Address-bar suggestions: matching bookmarks and history, never from the network; keyboard and mouse; hidden by Escape, blur and tab switches | ✅ | ⬜ | `test_suggestions.py`, `PlacesSuggest.*` |
-| Browsing | Suggestions in Tor windows: bookmarks only | ✅ | ⬜ | `test_tor.TorSuggestTest` (normal window as the control) |
+| Browsing | Suggestions in Tor windows: bookmarks only | ✅ M | ⬜ | `test_tor.TorSuggestTest` (normal window as the control) |
 | Browsing | On startup: restore previous tabs (normal windows; after a normal exit and a crash); never private or Tor windows, never while history is cleared on exit | ✅ M | ⬜ | `test_startup.py`, `Session.*` |
 | Search | Search engine setting (DuckDuckGo, HTML, Lite), on the onion service in Tor windows | ✅ M | ⬜ | `SearchEngineTest`, `test_searches_in_tor_windows_use_duckduckgos_onion_service`, `Search.*` |
 | Search | Typed queries go to DuckDuckGo (its onion service in Tor windows); `.onion` input is never searched | ✅ M | ⬜ | `test_search_goes_to_duckduckgo`, `test_searches_in_tor_windows_use_duckduckgos_onion_service`, `test_mistyped_onion_addresses_are_refused_and_never_searched` |
@@ -79,7 +79,7 @@ made with the bundled tor on the real Tor network.
 | Permissions | Camera, microphone, clipboard: Block (default) or Ask every time; no answer remembered | ✅ M | ⬜ | `PermissionTest` |
 | Permissions | Location, notifications, screen capture and all others always denied (shown as *Always blocked* in Settings) | ✅ | ⬜ | `test_location_and_notifications_are_always_denied`, `test_screen_capture_is_always_denied`, `test_permission_requests_are_denied` |
 | Network | WebRTC exposes no local addresses | ✅ | ⬜ | `WebRtcTest` (two layers; the test shows the outcome, Stage 4 findings §6) |
-| Network | No DNS probe (google.com) after a page's name fails to resolve | ✅ | ⬜ | `FailedLookupTest` (Stage 9 findings §1.7) |
+| Network | No DNS probe (google.com) after a page's name fails to resolve | ✅ M | ⬜ | `FailedLookupTest` (Stage 9 findings §1.7) |
 | Tor | Regular tabs never resolve or connect to `.onion`, also written with a trailing dot (incl. WebSockets) | ✅ M | ⬜ | `OnionResolverTest`, `test_onion_subresources_and_navigation_are_blocked` |
 | Tor | Bundled tor started, controlled (SAFECOOKIE, TAKEOWNERSHIP) and restarted after a crash | ✅ M | ⬜ | `test_torrc_and_control_session`, `TorFailsClosedTest`, `TorController.*`; live: `RealTorTest` (tor 0.4.9.16) |
 | Tor | tor ends with TorFox, also when TorFox is killed (job object) | ✅ M | 🟡 | `test_tor_runs_in_a_job_and_exits_with_torfox`, `test_the_job_alone_ends_tor_if_torfox_is_killed`; macOS relies on `__OwningControllerProcess` and TAKEOWNERSHIP, untested there |
@@ -89,11 +89,11 @@ made with the bundled tor on the real Tor network.
 | Tor | Onion addresses: v3 with checksum, typos and mixed input refused, opened in a Tor window from normal windows | ✅ M | ⬜ | `TorOnion.*`, `test_mistyped_onion_addresses_are_refused_and_never_searched`, `test_onion_addresses_from_a_normal_window_open_in_a_tor_window` |
 | Tor | Tor windows refuse local addresses (incl. workers), other apps, camera/microphone/clipboard and private-window links | ✅ M | ⬜ | `test_tor_windows_refuse_this_computer_and_the_local_network`, `TorContextGateTest`, `TorSecureContextTest`, `test_link_menu_never_leaves_tor` |
 | Tor | Tor windows: third-party cookies always blocked; system proxy setting ignored | ✅ M | ⬜ | `test_third_party_cookies_are_always_blocked` (with a control), `test_system_proxy_setting_never_changes_the_tor_context` |
-| Tor | Tor windows have no WebRTC (no `RTCPeerConnection` in any frame), so WebRTC looks up no name outside Tor | ✅ | ⬜ | `test_tor_windows_have_no_webrtc`, `test_webrtc_looks_up_no_name_for_tor_windows` (both with a normal-window control; Stage 9 findings §1.1) |
+| Tor | Tor windows have no WebRTC (no `RTCPeerConnection` in any frame), so WebRTC looks up no name outside Tor | ✅ M | ⬜ | `test_tor_windows_have_no_webrtc`, `test_webrtc_looks_up_no_name_for_tor_windows` (both with a normal-window control; Stage 9 findings §1.1) |
 | Tor | Tor windows: WebRTC's UDP policy (second layer) | ✅ M (config) | ⬜ | `test_webrtc_in_tor_windows_sends_nothing_and_reveals_no_address`: the policy as read back from Chromium (Stage 6 findings §3.2) |
 | Tor | Status indicator state (Connecting n%, Connected, Not connected with the reason); the *Try again* button is not tested | ✅ | ⬜ | `TorWindowTest`, `TorFailsClosedTest`, `test_custom_mode_without_bridges_never_starts_tor` |
 | Tor | New identity: Tor windows closed, new context, `SIGNAL NEWNYM` | ✅ M | ⬜ | `NewIdentityTest` |
-| Tor | New identity: the old context sends nothing more, not even from a service worker or a WebSocket | ✅ | ⬜ | `test_after_new_identity_the_old_context_sends_nothing` (Stage 9 findings §1.2) |
+| Tor | New identity: the old context sends nothing more, not even from a service worker or a WebSocket | ✅ M | ⬜ | `test_after_new_identity_the_old_context_sends_nothing` (Stage 9 findings §1.2) |
 | Tor | Bridges (none, built-in, custom): validated, written to `torrc`, tor restarted on change | ✅ M | ⬜ | `BridgeSettingsTest`, `TorBridges.*`, `Torrc.*` |
 | Tor | Bridges over the real network | 🟡 | 🟡 | Not exercised: this machine reaches Tor without them (Stage 5 findings §6) |
 | Tor | Profile folders whose names tor cannot read (8.3 path) | ✅ | — | `NonAsciiProfileTest`; live: `RealTorNonAsciiProfileTest` |
@@ -105,7 +105,7 @@ made with the bundled tor on the real Tor network.
 | Settings | 8 sections, every setting active: General, Search, Privacy & Security, Downloads, Tor, Appearance, Updates, About | ✅ | ⬜ | `test_only_implemented_settings_are_active`, `test_planned_settings_are_disabled_and_labelled` (none left) |
 | Updates | Only releases signed with the compiled-in minisign key; other keys, legacy signatures, changed manifests and changed signed comments refused | ✅ M | 🟡 | `Minisign.*` (signatures made by the official minisign tool), `Release.Manifest*`, `test_a_release_signed_with_another_key_is_ignored`, `test_a_changed_manifest_or_signed_comment_is_ignored` |
 | Updates | Only strictly newer releases; an older signed release cannot be replayed, and is reported | ✅ M | 🟡 | `Release.OnlyNewerReleasesAreOffered`, `test_older_and_same_versions_are_never_offered`, `test_an_older_signed_release_cannot_be_replayed` |
-| Updates | No update is offered while the record of seen releases cannot be saved | ✅ | 🟡 | `test_no_update_is_offered_while_the_record_cannot_be_saved` |
+| Updates | No update is offered while the record of seen releases cannot be saved | ✅ M | 🟡 | `test_no_update_is_offered_while_the_record_cannot_be_saved` |
 | Updates | Only GitHub's hosts, for every request and redirect; files only from the repository's release folder | ✅ M | 🟡 | `Release.OnlyGitHubsHostsAreAllowed`, `Release.LatestReleaseAnswer`, `test_downloads_follow_redirects_only_to_allowed_hosts`, `test_release_files_of_another_repository_are_not_used` |
 | Updates | The file must match the signed size and SHA-256, after download and again before install; it is started by its real path while still held open | ✅ M | 🟡 | `test_a_file_that_does_not_match_the_signed_release_is_deleted`, `test_a_file_changed_after_its_download_is_not_installed` |
 | Updates | Installed after TorFox exits (Windows: the installer is started after shutdown; macOS: the DMG is opened and the user copies the app) | ✅ | 🟡 | `test_a_signed_newer_release_is_checked_downloaded_and_installed_after_exit` (with a fake installer that records its arguments); the real setup with those arguments: `test_update_waits_for_torfox_then_installs_and_restarts_it` |

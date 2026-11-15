@@ -9,13 +9,14 @@ also builds the address-bar suggestions that Stage 6 left out (§5). Results:
 - **End-to-end tests (Windows):** 246 tests: 243 pass and 3 are skipped (the live tests, which need the Tor network: `TORFOX_LIVE_TESTS=1`).
 - **Platform tests (Windows):** release build 3 of 3 pass; per-user installer 5 of 5 pass, including the update over a stale `dxil.dll`. The 5 per-machine installer tests are skipped here: they need administrator rights, which CI has.
 - **Release tooling tests:** 6 of 6 pass.
-- **Mutation check:** not yet run on this commit (§4).
+- **Mutation check:** 19 of 19 detected (§4).
 
 ## 1. What the review found, and what changed
 Two reviews: one of the updater, the installer hand-off and the release workflow; one of the bridge, the
 internal scheme and Tor. The second found no way for a web page to reach `torfox://` or the bridge. Every
-finding below was fixed unless it says otherwise, and every fix has a test that fails without it (the
-mutation check, §4).
+finding below was fixed unless it says otherwise. Each code fix has a test that the mutation check (§4)
+shows fails without it. The release workflow's changes (§1.5) are checked by tests of its structure, not
+by mutations.
 
 ### 1.1 Tor windows: WebRTC looked names up outside Tor (found by a new test)
 The review listed this as unverified, so Stage 9 wrote the test first
@@ -158,7 +159,36 @@ New and changed tests:
 | Unit: `PlacesSuggest.*`, `NavInput.InternalPages`, `InternalUrl.KnownPages`, `BridgeValidator.*` (suggestion commands), `Guards.*` (the list's role) | §5 |
 
 ## 4. Mutation check
-Not yet run on this commit.
+Run on the Stage 9 commit (`02cd9c9`) in a separate worktree. Each mutation removes one protection, and
+every check listed for it must then fail. All 19 were detected, each by every one of its checks:
+
+- **Tor:**
+  - `tor-webrtc-kept`: WebRTC left in Tor windows (2 checks);
+  - `tor-retired-context-not-refused`, `tor-retired-context-keeps-proxy`: each half of retiring the old
+    context on *New identity*;
+  - `tor-new-identity-keeps-the-context`: *New identity* without retiring and replacing the context at
+    all (rewritten for the new code);
+  - `tor-dead-port-kept`: the context left on a stopped tor's port;
+  - `onion-trailing-dot-resolvable`: the resolver rule for `x.onion.` (2 checks).
+- **Network and engine:**
+  - `dns-probe-left-on`: Chromium's DNS probe;
+  - `site-isolation-off`: `--site-per-process` replaced by its opposite (2 checks);
+  - `cmdline-erases-cef-switches`, `cmdline-release-logging-not-forced`: the command-line policy (unit
+    tests).
+- **Updates and setup:**
+  - `update-started-through-links`: the setup started by its path instead of its real path;
+  - `update-replay-shown-as-up-to-date` (2 checks), `update-record-save-failure-ignored`;
+  - `installer-keeps-stale-files`: the setup's `[InstallDelete]` entry (the per-user update test).
+- **Suggestions and the bridge:**
+  - `suggest-history-in-tor-windows`: history suggested in Tor windows;
+  - `suggest-page-in-tabs`: the list's page allowed in tabs (2 checks: unit and end to end);
+  - `suggest-kept-on-tab-switch`, `suggest-list-not-closed`: hiding and closing the list;
+  - `bridge-page-allowlist`: the bridge's page-and-role check (2 checks; rewritten for the new role).
+
+Two earlier mutations no longer matched the code after Stage 9 changed it (`tor-new-identity-keeps-the-context`
+and `bridge-page-allowlist`). Both were rewritten and are among the 19. Every other mutation still applies
+to the code, but only these 19 were run on this commit. The rest last ran on the commits named in their
+stages' findings.
 
 ## 5. Address-bar suggestions
 Stage 6 left these out, because the list has to cover the top of the page and CEF had no pop-up for it
