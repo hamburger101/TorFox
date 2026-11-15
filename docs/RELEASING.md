@@ -8,6 +8,15 @@ pushed. This page is for the maintainer. What users see is described in [`UPDATI
 TorFox only installs updates signed with the minisign key whose public half is compiled into it. Until
 that key exists, builds never look for updates, and the release workflow refuses to run.
 
+The key is made once, by one maintainer, on any computer. Releases are then built and signed by GitHub
+Actions, so every TorFox installed from them, on any computer, updates from GitHub by itself.
+
+**The quick way:** set up the `release` environment first (step 4 below, without the secret), then run
+`python -I scripts/make_release_key.py` from a checkout, with the GitHub CLI signed in. It does steps 1,
+2, 3 and 5: it makes the key in a temporary folder, stores the secret half only as the environment's
+`MINISIGN_SECRET_KEY` (never printed), deletes the file, and writes the public half into
+`config/release.json` for you to commit. The steps by hand:
+
 1. Get the official minisign 0.12 (`python scripts/fetch_deps.py minisign windows`, or `linux`/`macos`; it is
    checked against its upstream signature), on a computer you trust.
 2. Make the key **without a password**. It will exist only as a GitHub Actions secret, and the workflow
