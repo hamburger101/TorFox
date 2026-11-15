@@ -229,7 +229,9 @@ Each layer is also tested end-to-end with the outer layers switched off (test bu
 - **Client:** the official Tor Expert Bundle (C tor; 16.0.1, tor 0.4.9.16). Bundles are GPG-verified
   against the Tor Browser Developers key `EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290` in CI, then
   pinned by SHA-256. tor and its pluggable transports are copied to `<TorFox>/tor` (Windows) or
-  `Contents/Helpers/tor` (macOS); `tor-gencert` is left out.
+  `Contents/Helpers/tor` (macOS, programs only: their data files, `pt_config.json` and licences go to
+  `Contents/Resources/tor`, as code signing allows only code in `Contents/Helpers`); `tor-gencert` is left
+  out.
 - **Tor windows:** private windows whose context is the Tor context. A normal window never shows a Tor
   page, and a Tor window never shows a non-Tor page; links between them open the other kind of window.
 - **`TorService`** (`src/browser/app/tor_service.cc`, protocol code in `src/core/tor/`):

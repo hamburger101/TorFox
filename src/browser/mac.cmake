@@ -62,20 +62,26 @@ COPY_MAC_FRAMEWORK("${CEF_TARGET}" "${CEF_BINARY_DIR}" "${CEF_APP}")
 
 # ----- Tor -------------------------------------------------------------------
 # The official Tor Expert Bundle for this architecture (OpenPGP-verified, then
-# pinned by SHA-256 in deps.lock.json), in Contents/Helpers/tor so the app's
-# signature covers it. tor-gencert is a relay tool: left out.
+# pinned by SHA-256 in deps.lock.json), inside the app so that its signature
+# covers it: the programs in Contents/Helpers/tor, everything else (GeoIP
+# files, pt_config.json, licences) in Contents/Resources/tor, since code
+# signing allows only code in Contents/Helpers. tor-gencert is a relay tool:
+# left out.
 if(PROJECT_ARCH STREQUAL "arm64")
   torfox_verified_dep(TORFOX_TOR_DIR tor macos-aarch64)
 else()
   torfox_verified_dep(TORFOX_TOR_DIR tor macos-x86_64)
 endif()
 set(_tor_out "${CEF_APP}/Contents/Helpers/tor")
+set(_tor_res "${CEF_APP}/Contents/Resources/tor")
 add_custom_command(TARGET ${CEF_TARGET} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${_tor_out}/data" "${_tor_out}/docs"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${_tor_out}" "${_tor_res}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_tor_res}/data" "${_tor_res}/docs"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/tor" "${_tor_out}"
   COMMAND ${CMAKE_COMMAND} -E rm -f "${_tor_out}/tor-gencert"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORFOX_TOR_DIR}/data/geoip" "${TORFOX_TOR_DIR}/data/geoip6" "${_tor_out}/data"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/docs" "${_tor_out}/docs"
+  COMMAND sh "${CMAKE_SOURCE_DIR}/packaging/macos/split_tor.sh" "${_tor_out}" "${_tor_res}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORFOX_TOR_DIR}/data/geoip" "${TORFOX_TOR_DIR}/data/geoip6" "${_tor_res}/data"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TORFOX_TOR_DIR}/docs" "${_tor_res}/docs"
   VERBATIM)
 
 # ----- Helper app bundles ----------------------------------------------------
