@@ -489,15 +489,18 @@ std::vector<memory::Process> TorFoxProcesses(const std::filesystem::path& tor_di
 TorPaths BundledTorPaths() {
   TorPaths p;
   @autoreleasepool {
-    // Inside the app bundle: Contents/Helpers/tor (signed with the app).
+    // Inside the app bundle, signed with the app: the programs in
+    // Contents/Helpers/tor, their data in Contents/Resources/tor (code
+    // signing allows only code in Contents/Helpers; src/browser/mac.cmake).
     std::filesystem::path bundle([[[NSBundle mainBundle] bundlePath] fileSystemRepresentation]);
     p.dir = bundle / "Contents" / "Helpers" / "tor";
+    const std::filesystem::path data = bundle / "Contents" / "Resources" / "tor";
+    p.geoip = data / "data" / "geoip";
+    p.geoip6 = data / "data" / "geoip6";
+    p.pt_config = data / "pluggable_transports" / "pt_config.json";
   }
   p.exe = p.dir / "tor";
   p.pt_client = "pluggable_transports/lyrebird";
-  p.geoip = p.dir / "data" / "geoip";
-  p.geoip6 = p.dir / "data" / "geoip6";
-  p.pt_config = p.dir / "pluggable_transports" / "pt_config.json";
   return p;
 }
 

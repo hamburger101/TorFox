@@ -68,11 +68,16 @@ jobs:
         run: npm --prefix ui ci
       - name: Configure and build (release)
         run: |
-          $line = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property catalog_productLineVersion
-          switch ("$line") {
-            '2026' { $gen = 'Visual Studio 18 2026' }
-            '2022' { $gen = 'Visual Studio 17 2022' }
-            default { throw "Unsupported or missing Visual Studio: '$line'" }
+          # As in ci.yml: by the installed version's major number (the runner
+          # reports its product line as "18", not "2026").
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $line = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productLineVersion
+          $ver = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+          Write-Host "Visual Studio product line: $line ($ver); CMake: $(cmake --version | Select-Object -First 1)"
+          switch ("$ver".Split('.')[0]) {
+            '18' { $gen = 'Visual Studio 18 2026' }
+            '17' { $gen = 'Visual Studio 17 2022' }
+            default { throw "Unsupported or missing Visual Studio: '$line' ($ver)" }
           }
           cmake -S . -B out/dev -G $gen -A x64 -DTORFOX_CEF_FLAVOR=minimal
           cmake --build out/dev --config Release --parallel

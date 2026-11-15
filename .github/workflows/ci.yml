@@ -184,8 +184,10 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
           test -x "$app/Contents/Helpers/tor/tor"
           test -x "$app/Contents/Helpers/tor/pluggable_transports/lyrebird"
-          test -f "$app/Contents/Helpers/tor/pluggable_transports/pt_config.json"
-          test -f "$app/Contents/Helpers/tor/data/geoip"
+          test -f "$app/Contents/Resources/tor/pluggable_transports/pt_config.json"
+          test -f "$app/Contents/Resources/tor/data/geoip"
+          # Code signing allows only code in Contents/Helpers.
+          test -z "$(find "$app/Contents/Helpers" -type f ! -perm -u+x ! -name '*.dylib')"
 
       - name: DMG (made, mounted, copied out and run)
         run: |
